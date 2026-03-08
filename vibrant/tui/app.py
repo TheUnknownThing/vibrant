@@ -183,6 +183,7 @@ class VibrantApp(App):
         Binding("ctrl+n", "new_thread", "New Thread", show=True),
         Binding("ctrl+t", "cycle_thread", "Next Thread", show=True),
         Binding("ctrl+s", "open_settings", "Settings", show=True),
+        Binding("f5", "cycle_agent_output", "Next Agent", show=True),
         Binding("f6", "run_next_task", "Run Task", show=True),
         Binding("ctrl+d", "delete_thread", "Delete Thread", show=False),
         Binding("ctrl+q", "quit_app", "Quit", show=True),
@@ -285,6 +286,10 @@ class VibrantApp(App):
             self._initialize_project_lifecycle()
             self._refresh_project_views()
             self._set_status("Settings updated")
+
+
+    def action_cycle_agent_output(self) -> None:
+        self.query_one(AgentOutput).action_cycle_agent()
 
     async def action_run_next_task(self) -> None:
         if self._lifecycle is None:
@@ -455,6 +460,11 @@ class VibrantApp(App):
                 )
 
     async def _on_lifecycle_canonical_event(self, event: dict[str, Any]) -> None:
+        try:
+            self.query_one(AgentOutput).ingest_canonical_event(event)
+        except Exception:
+            logger.exception("Failed to update agent output panel")
+
         event_type = str(event.get("type") or "")
         if event_type in {"turn.started", "turn.completed", "runtime.error", "task.progress"}:
             self._refresh_project_views()
@@ -482,9 +492,13 @@ class VibrantApp(App):
 
     def _refresh_project_views(self) -> None:
         plan_tree = self.query_one(PlanTree)
+        agent_output = self.query_one(AgentOutput)
         if self._lifecycle is None:
             plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+            agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
             return
+
+        agent_output.sync_agents(self._lifecycle.engine.agents.values())
 
         try:
             roadmap = self._lifecycle.reload_from_disk()
