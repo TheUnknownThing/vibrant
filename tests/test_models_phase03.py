@@ -1,0 +1,166 @@
+"""Unit tests for Phase 0 Task 0.3 data models."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.consensus import (
+    ConsensusDecision,
+    ConsensusDocument,
+    ConsensusStatus,
+    DecisionAuthor,
+)
+from vibrant.models.state import (
+    GatekeeperStatus,
+    OrchestratorState,
+    OrchestratorStatus,
+    ProviderRuntimeState,
+)
+from vibrant.models.task import TaskInfo, TaskStatus
+
+
+class TestAgentRecord:
+    def test_round_trip_serialize_deserialize(self):
+        record = AgentRecord(
+            agent_id="agent-task-001",
+            task_id="task-001",
+            type=AgentType.CODE,
+            status=AgentStatus.RUNNING,
+            pid=12345,
+            branch="vibrant/task-001",
+            worktree_path="/tmp/vibrant-worktrees/task-001",
+            started_at=datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc),
+            provider=AgentProviderMetadata(
+                runtime_mode="full-access",
+                provider_thread_id="thread_abc123",
+                resume_cursor={"threadId": "thread_abc123"},
+                native_event_log=".vibrant/logs/providers/native/agent-task-001.ndjson",
+                canonical_event_log=".vibrant/logs/providers/canonical/agent-task-001.ndjson",
+            ),
+            summary="summary",
+            prompt_used="prompt",
+            skills_loaded=["gui-design"],
+        )
+
+        restored = AgentRecord.model_validate_json(record.model_dump_json())
+
+        assert restored == record
+        assert restored.provider.resume_cursor == {"threadId": "thread_abc123"}
+
+    def test_status_transitions_are_validated(self):
+        record = AgentRecord(agent_id="agent-1", task_id="task-1", type=AgentType.CODE)
+
+        record.transition_to(AgentStatus.CONNECTING)
+        record.transition_to(AgentStatus.RUNNING)
+        record.transition_to(AgentStatus.AWAITING_INPUT)
+        record.transition_to(AgentStatus.RUNNING)
+        record.transition_to(AgentStatus.COMPLETED, exit_code=0)
+
+        assert record.status is AgentStatus.COMPLETED
+        assert record.exit_code == 0
+        assert record.finished_at is not None
+
+        with pytest.raises(ValueError, match="Invalid agent status transition"):
+            record.transition_to(AgentStatus.RUNNING)
+
+
+class TestOrchestratorState:
+    def test_round_trip_serialize_deserialize(self):
+        state = OrchestratorState(
+            session_id="session-123",
+            started_at=datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc),
+            status=OrchestratorStatus.RUNNING,
+            active_agents=["agent-task-001", "agent-task-003"],
+            gatekeeper_status=GatekeeperStatus.AWAITING_USER,
+            pending_questions=["Q1", "Q3"],
+            last_consensus_version=14,
+            concurrency_limit=4,
+            provider_runtime={
+                "agent-task-001": ProviderRuntimeState(
+                    status="ready",
+                    provider_thread_id="thread_abc123",
+                )
+            },
+            completed_tasks=["task-001", "task-002"],
+            failed_tasks=[],
+            total_agent_spawns=7,
+        )
+
+        restored = OrchestratorState.model_validate_json(state.model_dump_json())
+
+        assert restored == state
+
+
+class TestTaskInfo:
+    def test_round_trip_serialize_deserialize(self):
+        task = TaskInfo(
+            id="task-001",
+            title="Implement config loader",
+            acceptance_criteria=["Loads vibrant.toml", "Applies defaults"],
+            branch="vibrant/task-001",
+            prompt="Build the loader",
+            skills=["testing-strategy"],
+            dependencies=["task-000"],
+            priority=1,
+        )
+
+        restored = TaskInfo.model_validate_json(task.model_dump_json())
+
+        assert restored == task
+
+    def test_lifecycle_state_machine(self):
+        task = TaskInfo(id="task-001", title="Implement models")
+
+        task.transition_to(TaskStatus.QUEUED)
+        task.transition_to(TaskStatus.IN_PROGRESS)
+        task.transition_to(TaskStatus.COMPLETED)
+
+        assert task.status is TaskStatus.COMPLETED
+
+    def test_failure_retry_and_escalation_paths(self):
+        task = TaskInfo(id="task-001", title="Implement models", max_retries=1)
+
+        task.transition_to(TaskStatus.QUEUED)
+        task.transition_to(TaskStatus.IN_PROGRESS)
+        task.transition_to(TaskStatus.FAILED, failure_reason="timeout")
+        assert task.failure_reason == "timeout"
+
+        task.transition_to(TaskStatus.QUEUED)
+        assert task.retry_count == 1
+        assert task.failure_reason is None
+
+        task.transition_to(TaskStatus.IN_PROGRESS)
+        task.transition_to(TaskStatus.FAILED, failure_reason="still broken")
+        task.transition_to(TaskStatus.ESCALATED)
+
+        assert task.status is TaskStatus.ESCALATED
+
+
+class TestConsensusDocument:
+    def test_round_trip_serialize_deserialize(self):
+        document = ConsensusDocument(
+            project="Project Vibrant",
+            created_at=datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 3, 7, 23, 15, tzinfo=timezone.utc),
+            version=14,
+            status=ConsensusStatus.EXECUTING,
+            objectives="Build the orchestration control plane.",
+            decisions=[
+                ConsensusDecision(
+                    title="Use structured consensus sections",
+                    date=datetime(2026, 3, 7, 22, 30, tzinfo=timezone.utc),
+                    made_by=DecisionAuthor.GATEKEEPER,
+                    context="Agents need parseable shared state.",
+                    resolution="Use HTML comment delimiters.",
+                    impact="Consensus parsing and writing depend on it.",
+                )
+            ],
+            getting_started="Read docs/spec.md, then inspect .vibrant/consensus.md.",
+        )
+
+        restored = ConsensusDocument.model_validate_json(document.model_dump_json())
+
+        assert restored == document

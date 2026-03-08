@@ -9,10 +9,16 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .agent import AgentRecord, AgentStatus, AgentType
-from .consensus import ConsensusPool
+from .agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from .consensus import (
+    ConsensusDecision,
+    ConsensusDocument,
+    ConsensusPool,
+    ConsensusStatus,
+    DecisionAuthor,
+)
 from .settings import AppSettings, ApprovalMode, SessionConfig
-from .state import OrchestratorState
+from .state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, ProviderRuntimeState
 from .task import TaskInfo, TaskLifecycle, TaskStatus
 from .wire import JsonRpcNotification, JsonRpcRequest, JsonRpcResponse
 
@@ -105,18 +111,26 @@ class ThreadInfo(BaseModel):
 
 
 __all__ = [
+    "AgentProviderMetadata",
     "AgentRecord",
     "AgentStatus",
     "AgentType",
     "AppSettings",
     "ApprovalMode",
+    "ConsensusDecision",
+    "ConsensusDocument",
     "ConsensusPool",
+    "ConsensusStatus",
+    "DecisionAuthor",
+    "GatekeeperStatus",
     "ItemInfo",
     "ItemType",
     "JsonRpcNotification",
     "JsonRpcRequest",
     "JsonRpcResponse",
     "OrchestratorState",
+    "OrchestratorStatus",
+    "ProviderRuntimeState",
     "SessionConfig",
     "TaskInfo",
     "TaskLifecycle",
@@ -127,4 +141,3 @@ __all__ = [
     "TurnRole",
     "TurnStatus",
 ]
-
