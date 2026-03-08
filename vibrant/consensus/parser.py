@@ -20,15 +20,28 @@ class ConsensusParser:
         r"<!-- DECISIONS:START -->\n(?P<body>.*?)\n<!-- DECISIONS:END -->",
         re.DOTALL,
     )
-    GETTING_STARTED_PATTERN = re.compile(r"## Getting Started\n(?P<body>.*)\Z", re.DOTALL)
+    GETTING_STARTED_PATTERN = re.compile(
+        r"## Getting Started\n(?P<body>.*?)(?=^## Questions\n|\Z)",
+        re.DOTALL | re.MULTILINE,
+    )
+    QUESTIONS_PATTERN = re.compile(
+        r"^## Questions\n(?P<body>.*)\Z",
+        re.DOTALL | re.MULTILINE,
+    )
     BULLET_PATTERN = re.compile(r"- \*\*(?P<key>[^*]+)\*\*: (?P<value>.*)")
     DECISION_TITLE_PATTERN = re.compile(r"### Decision \d+: (?P<title>.+)")
+    BLOCKING_QUESTION_PATTERN = re.compile(r"^-\s*(?:\[blocking\]\s*)?(?P<question>.+)$", re.IGNORECASE)
+    PRIORITY_QUESTION_PATTERN = re.compile(
+        r"^-\s*\*\*Priority\*\*:\s*blocking\s*\|\s*\*\*Question\*\*:\s*(?P<question>.+)$",
+        re.IGNORECASE,
+    )
 
     def parse(self, markdown_text: str) -> ConsensusPool:
         meta = self._parse_meta(markdown_text)
         objectives = self._extract_section(self.OBJECTIVES_PATTERN, markdown_text)
         decisions = self._parse_decisions(markdown_text)
         getting_started = self._extract_section(self.GETTING_STARTED_PATTERN, markdown_text)
+        questions = self._parse_questions(markdown_text)
 
         return ConsensusPool(
             project=meta.get("Project", "Vibrant"),
@@ -39,6 +52,7 @@ class ConsensusParser:
             objectives=objectives.strip(),
             decisions=decisions,
             getting_started=getting_started.strip(),
+            questions=questions,
         )
 
     def parse_file(self, path: str | Path) -> ConsensusDocument:
@@ -96,6 +110,26 @@ class ConsensusParser:
             resolution=data.get("Resolution", ""),
             impact=data.get("Impact", ""),
         )
+
+    def _parse_questions(self, markdown_text: str) -> list[str]:
+        section = self._extract_section(self.QUESTIONS_PATTERN, markdown_text)
+        if not section.strip():
+            return []
+
+        questions: list[str] = []
+        for raw_line in section.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            priority_match = self.PRIORITY_QUESTION_PATTERN.match(line)
+            if priority_match is not None:
+                questions.append(priority_match.group("question").strip())
+                continue
+            blocking_match = self.BLOCKING_QUESTION_PATTERN.match(line)
+            if blocking_match is not None and "blocking" in line.lower():
+                question = re.sub(r"^\[blocking\]\s*", "", blocking_match.group("question").strip(), flags=re.IGNORECASE)
+                questions.append(question)
+        return questions
 
     @staticmethod
     def _extract_section(pattern: re.Pattern[str], markdown_text: str) -> str:

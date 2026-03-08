@@ -48,6 +48,7 @@ class ConsensusDocument(BaseModel):
     objectives: str = ""
     decisions: list[ConsensusDecision] = Field(default_factory=list)
     getting_started: str = ""
+    questions: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_document(self) -> ConsensusDocument:

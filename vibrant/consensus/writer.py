@@ -77,7 +77,13 @@ class ConsensusWriter:
                 "",
             ]
         )
-        return "\n".join(lines)
+
+        if document.questions:
+            lines.append("## Questions")
+            lines.extend(f"- [blocking] {question}" for question in document.questions)
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
 
     def write(
         self,
@@ -134,6 +140,7 @@ class ConsensusWriter:
             objectives=document.objectives,
             decisions=[decision.model_copy(deep=True) for decision in document.decisions],
             getting_started=document.getting_started,
+            questions=list(document.questions),
         )
 
     def _snapshot_previous(self, destination: Path, previous_text: str) -> Path:
@@ -181,6 +188,7 @@ class ConsensusWriter:
         return _LockContext(lock_path, deadline)
 
 
+
 def _atomic_write_text(path: Path, content: str) -> None:
     descriptor, temp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
@@ -195,12 +203,14 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
+
 def _format_timestamp(value: datetime | None) -> str:
     if value is None:
         value = datetime.now(timezone.utc)
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
 
 
 def _format_snapshot_timestamp(value: datetime) -> str:
