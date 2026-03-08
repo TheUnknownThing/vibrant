@@ -36,6 +36,8 @@ class AgentProviderMetadata(BaseModel):
     runtime_mode: str = "workspace-write"
     provider_thread_id: str | None = None
     resume_cursor: dict[str, Any] | None = None
+    thread_path: str | None = None
+    rollout_path: str | None = None
     native_event_log: str | None = None
     canonical_event_log: str | None = None
 
