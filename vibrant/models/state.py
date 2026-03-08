@@ -5,11 +5,14 @@ from __future__ import annotations
 import enum
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class OrchestratorStatus(str, enum.Enum):
-    RUNNING = "running"
+    INIT = "init"
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    VALIDATING = "validating"
     PAUSED = "paused"
     COMPLETED = "completed"
 
@@ -36,7 +39,7 @@ class OrchestratorState(BaseModel):
 
     session_id: str
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    status: OrchestratorStatus = OrchestratorStatus.RUNNING
+    status: OrchestratorStatus = OrchestratorStatus.INIT
     active_agents: list[str] = Field(default_factory=list)
     gatekeeper_status: GatekeeperStatus = GatekeeperStatus.IDLE
     pending_questions: list[str] = Field(default_factory=list)
@@ -46,6 +49,18 @@ class OrchestratorState(BaseModel):
     completed_tasks: list[str] = Field(default_factory=list)
     failed_tasks: list[str] = Field(default_factory=list)
     total_agent_spawns: int = 0
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: object) -> object:
+        if isinstance(value, OrchestratorStatus):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized == "running":
+                return OrchestratorStatus.EXECUTING.value
+            return normalized
+        return value
 
     @model_validator(mode="after")
     def validate_state(self) -> OrchestratorState:

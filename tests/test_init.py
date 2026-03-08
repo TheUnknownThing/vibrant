@@ -88,7 +88,7 @@ class TestVibrantInit:
         assert config.codex_binary == "codex"
 
         state = OrchestratorState.model_validate_json((tmp_path / ".vibrant/state.json").read_text(encoding="utf-8"))
-        assert state.status is OrchestratorStatus.PAUSED
+        assert state.status is OrchestratorStatus.INIT
         assert state.last_consensus_version == 0
 
         consensus = _parse_consensus_meta(tmp_path / ".vibrant/consensus.md")

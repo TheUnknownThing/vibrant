@@ -108,7 +108,7 @@ def _render_default_config() -> str:
 def _render_initial_state() -> str:
     state = OrchestratorState(
         session_id=str(uuid4()),
-        status=OrchestratorStatus.PAUSED,
+        status=OrchestratorStatus.INIT,
         last_consensus_version=0,
     )
     return state.model_dump_json(indent=2) + "\n"

@@ -72,7 +72,7 @@ class TestOrchestratorState:
         state = OrchestratorState(
             session_id="session-123",
             started_at=datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc),
-            status=OrchestratorStatus.RUNNING,
+            status=OrchestratorStatus.EXECUTING,
             active_agents=["agent-task-001", "agent-task-003"],
             gatekeeper_status=GatekeeperStatus.AWAITING_USER,
             pending_questions=["Q1", "Q3"],
@@ -92,6 +92,16 @@ class TestOrchestratorState:
         restored = OrchestratorState.model_validate_json(state.model_dump_json())
 
         assert restored == state
+
+    def test_legacy_running_status_is_normalized(self):
+        state = OrchestratorState.model_validate(
+            {
+                "session_id": "session-123",
+                "status": "running",
+            }
+        )
+
+        assert state.status is OrchestratorStatus.EXECUTING
 
 
 class TestTaskInfo:
