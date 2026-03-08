@@ -163,11 +163,11 @@ Create `vibrant init` CLI subcommand:
 
 ---
 
-## Phase 1 — Orchestrator Core & State Machine
+## Phase 1 [x] — Orchestrator Core & State Machine
 
 > **Goal**: Implement the Orchestrator engine that manages lifecycle, state persistence, and task dispatch.
 
-### Task 1.1 — Orchestrator State Machine
+### Task 1.1 [x] — Orchestrator State Machine
 
 **Depends**: 0.3, 0.4  
 **[Spec §5.2]**
@@ -186,7 +186,7 @@ Implement `vibrant/orchestrator/engine.py`:
 
 ---
 
-### Task 1.2 — Task Dispatch Engine
+### Task 1.2 [x] — Task Dispatch Engine
 
 **Depends**: 1.1  
 **[Spec §5.3, §6.1]**
@@ -206,7 +206,7 @@ Implement `vibrant/orchestrator/task_dispatch.py`:
 
 ---
 
-### Task 1.3 — Git Worktree Manager
+### Task 1.3 [x] — Git Worktree Manager
 
 **Depends**: 0.2  
 **[Spec §12.1, §12.2, §12.3]**
