@@ -6,8 +6,8 @@ import asyncio
 import json
 import pytest
 
-from codex_tui.codex_client import CodexClient, CodexClientError
-from codex_tui.models import JsonRpcRequest, JsonRpcNotification
+from vibrant.providers.codex.client import CodexClient, CodexClientError
+from vibrant.models.wire import JsonRpcRequest, JsonRpcNotification
 
 
 # ---------------------------------------------------------------------------
