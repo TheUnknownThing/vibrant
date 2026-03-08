@@ -3,6 +3,7 @@
 Usage::
 
     python -m vibrant [--cwd DIR] [--model MODEL]
+    python -m vibrant init [PATH]
 """
 
 from __future__ import annotations
@@ -13,8 +14,7 @@ import shutil
 import sys
 from collections.abc import Sequence
 
-from .models.settings import AppSettings
-from .tui.app import VibrantApp
+from .project_init import initialize_project
 
 
 def _check_codex() -> str | None:
@@ -22,7 +22,7 @@ def _check_codex() -> str | None:
     return shutil.which("codex")
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vibrant",
         description="Terminal UI for orchestrating Codex agent workflows",
@@ -40,7 +40,26 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Enable debug logging to ~/.vibrant/debug.log",
     )
+
+    subparsers = parser.add_subparsers(dest="command")
+    init_parser = subparsers.add_parser("init", help="Initialize the .vibrant project directory")
+    init_parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Project directory to initialize (default: current dir)",
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = _build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "init":
+        vibrant_dir = initialize_project(args.path)
+        print(f"Initialized Vibrant project in {vibrant_dir}")
+        return
 
     codex_path = _check_codex()
     if not codex_path:
@@ -65,6 +84,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     else:
         logging.basicConfig(level=logging.WARNING)
 
+    from .models.settings import AppSettings
+    from .tui.app import VibrantApp
+
     settings = AppSettings(codex_binary=codex_path)
     if args.model:
         settings.default_model = args.model
@@ -77,4 +99,3 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-
