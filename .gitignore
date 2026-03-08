@@ -33,3 +33,6 @@ history/
 
 # Submodules/Reference code
 .ref/
+
+# Temporary files
+.vibrant/

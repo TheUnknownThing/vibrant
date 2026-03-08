@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from vibrant.logging.ndjson_logger import CanonicalLogger, NativeLogger, NdjsonLogger
+from vibrant.runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger, NdjsonLogger
 
 
 def _read_lines(path):

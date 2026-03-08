@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import logging
 import os
+from pathlib import Path
+from typing import Any, Callable
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.events import Ready
-from textual import work
+from textual.containers import Grid, Vertical
 from textual.widgets import Footer, Header, Static
 
+from ..config import DEFAULT_CONFIG_DIR, find_project_root
 from ..history import HistoryStore
 from ..models import AppSettings, ThreadInfo, ThreadStatus
+from ..orchestrator import CodeAgentLifecycle, CodeAgentLifecycleResult
 from ..session_manager import (
     ApprovalRequested,
     ItemAdded,
@@ -24,53 +27,50 @@ from ..session_manager import (
     ThreadCreated,
     ThreadStatusChanged,
     TurnCompleted,
-    TurnStarted,
 )
-from .widgets.conversation_view import ConversationView
+from .widgets.agent_output import AgentOutput
+from .widgets.chat_panel import ChatPanel
+from .widgets.consensus_view import ConsensusView
 from .widgets.input_bar import InputBar
+from .widgets.plan_tree import PlanTree
 from .widgets.settings_panel import SettingsPanel
 from .widgets.thread_list import ThreadList
 
 logger = logging.getLogger(__name__)
+LifecycleFactory = Callable[..., CodeAgentLifecycle]
 
 
 class VibrantApp(App):
-    """Terminal UI for managing multiple OpenAI Codex agent threads."""
+    """Terminal UI for managing roadmap execution and Codex conversations."""
 
     TITLE = "Vibrant"
     SUB_TITLE = "Multi-agent orchestration control plane"
 
     CSS = """
-    /* ── Layout ── */
-    #main-layout {
-        layout: horizontal;
+    #workspace-grid {
+        layout: grid;
+        grid-size: 2 2;
+        grid-columns: 34 1fr;
+        grid-rows: 1fr 1fr;
         height: 1fr;
     }
 
-    #sidebar {
-        width: 30;
-        min-width: 24;
-        max-width: 40;
-        height: 100%;
-        border-right: tall $primary-background;
+    #plan-panel,
+    #agent-output-panel,
+    #consensus-panel,
+    #chat-panel-container {
+        min-height: 10;
+    }
+
+    #chat-panel-container {
+        border: round $primary-background;
         background: $surface;
+        padding: 0;
     }
 
-    #thread-list-header {
-        height: 3;
-        padding: 1;
-        background: $primary-background;
-        color: $text;
-        text-align: center;
-    }
-
-    #thread-listview {
-        height: 1fr;
-    }
-
-    #content-area {
-        width: 1fr;
-        height: 100%;
+    #thread-panel {
+        height: 11;
+        border-bottom: solid $primary-background;
     }
 
     #conversation-panel {
@@ -89,7 +89,6 @@ class VibrantApp(App):
         padding: 0 1;
     }
 
-    /* ── Messages ── */
     MessageBubble {
         margin: 1 0;
         padding: 0 1;
@@ -148,12 +147,10 @@ class VibrantApp(App):
         padding: 0 1;
     }
 
-    /* ── Input Bar ── */
     #input-panel {
         height: auto;
         max-height: 8;
-        dock: bottom;
-        border-top: tall $primary-background;
+        border-top: solid $primary-background;
         padding: 0 1;
         background: $surface;
     }
@@ -167,26 +164,12 @@ class VibrantApp(App):
         margin: 0 0 1 0;
     }
 
-    /* ── Collapsible ── */
-    .command-collapsible {
-        margin: 0;
-        padding: 0;
-    }
-
+    .command-collapsible,
     .reasoning-collapsible {
         margin: 0;
         padding: 0;
     }
 
-    .msg-command-output {
-        background: $surface;
-        padding: 0 1;
-        color: $text-muted;
-        max-height: 30;
-        overflow-y: auto;
-    }
-
-    /* ── Status Bar ── */
     #status-bar {
         dock: bottom;
         height: 1;
@@ -200,47 +183,51 @@ class VibrantApp(App):
         Binding("ctrl+n", "new_thread", "New Thread", show=True),
         Binding("ctrl+t", "cycle_thread", "Next Thread", show=True),
         Binding("ctrl+s", "open_settings", "Settings", show=True),
-        Binding("ctrl+q", "quit_app", "Quit", show=True),
+        Binding("f6", "run_next_task", "Run Task", show=True),
         Binding("ctrl+d", "delete_thread", "Delete Thread", show=False),
+        Binding("ctrl+q", "quit_app", "Quit", show=True),
     ]
 
     def __init__(
         self,
         settings: AppSettings | None = None,
         cwd: str | None = None,
-        **kwargs,
+        *,
+        session_manager: SessionManager | None = None,
+        lifecycle_factory: LifecycleFactory | None = None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._settings = settings or AppSettings()
         if cwd:
             self._settings.default_cwd = cwd
-        self._session_manager = SessionManager()
+        self._session_manager = session_manager or SessionManager()
         self._history = HistoryStore(self._settings.history_dir)
         self._active_thread_id: str | None = None
-
-    # ------------------------------------------------------------------
-    # Compose
-    # ------------------------------------------------------------------
+        self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        self._lifecycle_factory = lifecycle_factory or CodeAgentLifecycle
+        self._lifecycle: CodeAgentLifecycle | None = None
+        self._task_execution_in_progress = False
+        self._task_refresh_loop: asyncio.Task[None] | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
-        with Horizontal(id="main-layout"):
-            yield ThreadList(id="sidebar")
-            with Vertical(id="content-area"):
-                yield ConversationView(id="conversation-panel")
+        with Grid(id="workspace-grid"):
+            yield PlanTree(id="plan-panel")
+            yield AgentOutput(id="agent-output-panel")
+            yield ConsensusView(id="consensus-panel")
+            with Vertical(id="chat-panel-container"):
+                yield ThreadList(id="thread-panel")
+                yield ChatPanel(id="conversation-panel")
                 yield InputBar(id="input-panel")
-        yield Static("Ready · Ctrl+N new thread · Ctrl+Q quit", id="status-bar")
+        yield Static("Ready · F6 run next task · Enter inspect task · Ctrl+Q quit", id="status-bar")
         yield Footer()
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     async def on_mount(self) -> None:
-        """Wire up event listeners and load history."""
+        """Wire up event listeners and load persisted project/thread state."""
+
         self._session_manager.add_listener(self._on_session_event)
 
-        # Load saved threads from disk into the sidebar
         saved_threads = self._history.list_threads()
         if saved_threads:
             for thread in saved_threads:
@@ -248,19 +235,18 @@ class VibrantApp(App):
             self._set_status(f"Loaded {len(saved_threads)} saved thread(s)")
 
         self._refresh_thread_list()
-        input_bar = self.query_one(InputBar)
-        input_bar.focus_input()
+        self._initialize_project_lifecycle()
+        self._refresh_project_views()
+        self.query_one(InputBar).focus_input()
 
     async def on_unmount(self) -> None:
-        """Clean up sessions on exit."""
+        if self._task_refresh_loop is not None:
+            self._task_refresh_loop.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task_refresh_loop
         await self._session_manager.stop_all()
 
-    # ------------------------------------------------------------------
-    # Actions
-    # ------------------------------------------------------------------
-
     async def action_new_thread(self) -> None:
-        """Create a new Codex thread."""
         self._set_status("Creating new thread…")
         try:
             config = self._settings.to_session_config()
@@ -269,22 +255,21 @@ class VibrantApp(App):
             self._refresh_thread_list()
             self._show_thread(thread)
             self._set_status(f"Thread created · {thread.model or 'default'}")
-        except Exception as e:
-            self._set_status(f"Error: {e}")
-            self.notify(f"Failed to create thread: {e}", severity="error")
+        except Exception as exc:
+            self._set_status(f"Error: {exc}")
+            self.notify(f"Failed to create thread: {exc}", severity="error")
 
     async def action_cycle_thread(self) -> None:
-        """Cycle to the next thread."""
         threads = self._session_manager.list_threads()
         if not threads:
             return
         if self._active_thread_id is None:
             self._active_thread_id = threads[0].id
         else:
-            ids = [t.id for t in threads]
+            ids = [thread.id for thread in threads]
             try:
-                idx = ids.index(self._active_thread_id)
-                self._active_thread_id = ids[(idx + 1) % len(ids)]
+                index = ids.index(self._active_thread_id)
+                self._active_thread_id = ids[(index + 1) % len(ids)]
             except ValueError:
                 self._active_thread_id = ids[0]
         thread = self._session_manager.get_thread(self._active_thread_id)
@@ -292,44 +277,66 @@ class VibrantApp(App):
             self._show_thread(thread)
             self._refresh_thread_list()
 
-    @work
     async def action_open_settings(self) -> None:
-        """Open the settings modal."""
         result = await self.push_screen_wait(SettingsPanel(self._settings))
         if result:
             self._settings = result
+            self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+            self._initialize_project_lifecycle()
+            self._refresh_project_views()
             self._set_status("Settings updated")
 
+    async def action_run_next_task(self) -> None:
+        if self._lifecycle is None:
+            self.notify(
+                f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
+                severity="warning",
+            )
+            return
+        if self._task_execution_in_progress:
+            self.notify("A roadmap task is already running.", severity="warning")
+            return
+
+        self._task_execution_in_progress = True
+        self._set_status("Running next roadmap task…")
+        self._start_project_refresh_loop()
+        self._refresh_project_views()
+
+        try:
+            result = await self._lifecycle.execute_next_task()
+        except Exception as exc:
+            logger.exception("Roadmap task execution failed")
+            self.notify(f"Task execution failed: {exc}", severity="error")
+            self._set_status(f"Task execution failed: {exc}")
+        else:
+            self._handle_task_result(result)
+        finally:
+            self._task_execution_in_progress = False
+            await self._stop_project_refresh_loop()
+            self._refresh_project_views()
+
     async def action_delete_thread(self) -> None:
-        """Delete the active thread."""
         if not self._active_thread_id:
             return
         thread_id = self._active_thread_id
         await self._session_manager.stop_session(thread_id)
         self._history.delete_thread(thread_id)
-        # Switch to next thread
         threads = self._session_manager.list_threads()
-        remaining = [t for t in threads if t.id != thread_id]
+        remaining = [thread for thread in threads if thread.id != thread_id]
         if remaining:
             self._active_thread_id = remaining[0].id
             self._show_thread(remaining[0])
         else:
             self._active_thread_id = None
-            self.query_one(ConversationView).clear()
+            self.query_one(ChatPanel).clear()
         self._refresh_thread_list()
         self._set_status("Thread deleted")
 
     async def action_quit_app(self) -> None:
-        """Save state and quit."""
-        # Persist all threads
         for thread in self._session_manager.list_threads():
             self._history.save_thread(thread)
         await self._session_manager.stop_all()
         self.exit()
-
-    # ------------------------------------------------------------------
-    # Message handlers from widgets
-    # ------------------------------------------------------------------
 
     async def on_thread_list_thread_selected(self, event: ThreadList.ThreadSelected) -> None:
         self._active_thread_id = event.thread_id
@@ -345,7 +352,6 @@ class VibrantApp(App):
         await self.action_delete_thread()
 
     async def on_input_bar_message_submitted(self, event: InputBar.MessageSubmitted) -> None:
-        """Send a message to the active thread."""
         if not self._active_thread_id:
             self.notify("Create a thread first (Ctrl+N)", severity="warning")
             return
@@ -361,12 +367,11 @@ class VibrantApp(App):
 
         try:
             await self._session_manager.send_message(self._active_thread_id, event.text)
-        except Exception as e:
-            self.notify(f"Error: {e}", severity="error")
+        except Exception as exc:
+            self.notify(f"Error: {exc}", severity="error")
             input_bar.set_enabled(True)
 
     async def on_input_bar_slash_command(self, event: InputBar.SlashCommand) -> None:
-        """Handle slash commands."""
         cmd = event.command.lower()
         if cmd == "model":
             if event.args:
@@ -376,22 +381,28 @@ class VibrantApp(App):
                 self.notify(f"Current model: {self._settings.default_model}")
         elif cmd == "settings":
             await self.action_open_settings()
+        elif cmd in {"run", "next", "task"}:
+            await self.action_run_next_task()
+        elif cmd == "refresh":
+            self._refresh_project_views()
+            self._refresh_thread_list()
+            self._set_status("Refreshed project and thread views")
         elif cmd == "history":
-            await self.action_open_history()
+            self.notify("History stays visible in the thread switcher panel.")
         elif cmd == "logs":
             if not self._active_thread_id:
                 self.notify("Create a thread first (Ctrl+N)", severity="warning")
                 return
             native_log, canonical_log = self._session_manager.get_provider_log_paths(self._active_thread_id)
             if native_log or canonical_log:
-                self.notify(
-                    f"Native log: {native_log or 'n/a'}\nCanonical log: {canonical_log or 'n/a'}"
-                )
+                self.notify(f"Native log: {native_log or 'n/a'}\nCanonical log: {canonical_log or 'n/a'}")
             else:
                 self.notify("No provider logs available for this thread", severity="warning")
         elif cmd == "help":
             self.notify(
                 "/model <name> - Set model\n"
+                "/run - Execute the next roadmap task\n"
+                "/refresh - Reload project state\n"
                 "/settings - Open settings\n"
                 "/logs - Show provider log paths\n"
                 "/help - Show this help"
@@ -399,12 +410,7 @@ class VibrantApp(App):
         else:
             self.notify(f"Unknown command: /{cmd}", severity="warning")
 
-    # ------------------------------------------------------------------
-    # Session event handler
-    # ------------------------------------------------------------------
-
     async def _on_session_event(self, event: SessionEvent) -> None:
-        """Handle domain events from the session manager."""
         thread = self._session_manager.get_thread(event.thread_id)
 
         if isinstance(event, ThreadCreated):
@@ -425,43 +431,116 @@ class VibrantApp(App):
                     input_bar.set_context(thread.model if thread else None, "running…")
 
         elif isinstance(event, StreamingDelta):
-            # Live streaming update — update the streaming text in the conversation
             if event.thread_id == self._active_thread_id:
-                conv = self.query_one(ConversationView)
-                conv.update_streaming_text(event.accumulated_text)
+                self.query_one(ChatPanel).update_streaming_text(event.accumulated_text)
                 self._set_status("Receiving…")
 
         elif isinstance(event, ItemAdded):
             if event.thread_id == self._active_thread_id and thread:
-                conv = self.query_one(ConversationView)
-                conv.show_thread(thread)
+                self.query_one(ChatPanel).show_thread(thread)
 
         elif isinstance(event, TurnCompleted):
             if event.thread_id == self._active_thread_id and thread:
-                conv = self.query_one(ConversationView)
-                conv.show_thread(thread)
-                # Auto-save
+                self.query_one(ChatPanel).show_thread(thread)
                 self._history.save_thread(thread)
                 self._set_status("Turn completed")
 
         elif isinstance(event, ApprovalRequested):
-            # For now, auto-approve in full-auto mode
             if self._settings.default_approval_mode.value == "full-auto":
-                await self._session_manager.approve_request(
-                    event.thread_id, event.jsonrpc_id, approved=True,
-                )
+                await self._session_manager.approve_request(event.thread_id, event.jsonrpc_id, approved=True)
             else:
                 self.notify(
                     f"Approval requested: {event.method}\nUse /approve or /reject",
                     severity="warning",
                 )
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    async def _on_lifecycle_canonical_event(self, event: dict[str, Any]) -> None:
+        event_type = str(event.get("type") or "")
+        if event_type in {"turn.started", "turn.completed", "runtime.error", "task.progress"}:
+            self._refresh_project_views()
+        if event_type == "turn.started":
+            self._set_status(f"Running {event.get('task_id', 'task')}…")
+        elif event_type == "turn.completed":
+            self._set_status(f"Completed {event.get('task_id', 'task')}")
+        elif event_type == "runtime.error":
+            self._set_status(str(event.get("error") or "Task failed"))
+
+    def _initialize_project_lifecycle(self) -> None:
+        project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        self._project_root = project_root
+        vibrant_dir = project_root / DEFAULT_CONFIG_DIR
+        if not vibrant_dir.exists():
+            self._lifecycle = None
+            return
+
+        try:
+            self._lifecycle = self._lifecycle_factory(project_root, on_canonical_event=self._on_lifecycle_canonical_event)
+        except Exception as exc:
+            logger.exception("Failed to initialize project lifecycle")
+            self._lifecycle = None
+            self.notify(f"Failed to load project state: {exc}", severity="error")
+
+    def _refresh_project_views(self) -> None:
+        plan_tree = self.query_one(PlanTree)
+        if self._lifecycle is None:
+            plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+            return
+
+        try:
+            roadmap = self._lifecycle.reload_from_disk()
+        except Exception as exc:
+            logger.exception("Failed to refresh roadmap view")
+            plan_tree.clear_tasks(f"Failed to load roadmap: {exc}")
+            return
+
+        plan_tree.update_tasks(roadmap.tasks, agent_summaries=self._collect_task_summaries())
+
+    def _collect_task_summaries(self) -> dict[str, str]:
+        if self._lifecycle is None:
+            return {}
+
+        by_task: dict[str, tuple[float, str]] = {}
+        for record in self._lifecycle.engine.agents.values():
+            if not record.summary:
+                continue
+            sort_key = 0.0
+            if record.started_at is not None:
+                sort_key = record.started_at.timestamp()
+            elif record.finished_at is not None:
+                sort_key = record.finished_at.timestamp()
+            previous = by_task.get(record.task_id)
+            if previous is None or sort_key >= previous[0]:
+                by_task[record.task_id] = (sort_key, record.summary)
+        return {task_id: summary for task_id, (_, summary) in by_task.items()}
+
+    def _handle_task_result(self, result: CodeAgentLifecycleResult | None) -> None:
+        if result is None:
+            if self._lifecycle and self._lifecycle.engine.state.pending_questions:
+                self.notify(self._lifecycle.engine.USER_INPUT_BANNER, severity="warning")
+                self._set_status(self._lifecycle.engine.USER_INPUT_BANNER)
+            else:
+                self._notify_no_ready_task()
+            return
+
+        if result.outcome == "accepted":
+            self.notify(f"Task {result.task_id} accepted and merged.")
+            self._set_status(f"Task {result.task_id} accepted and merged")
+        elif result.outcome == "retried":
+            self.notify(f"Task {result.task_id} queued for retry.", severity="warning")
+            self._set_status(f"Task {result.task_id} queued for retry")
+        elif result.outcome == "escalated":
+            self.notify(f"Task {result.task_id} escalated to the user.", severity="warning")
+            self._set_status(f"Task {result.task_id} escalated to the user")
+        elif result.outcome == "awaiting_user":
+            self.notify(self._lifecycle.engine.USER_INPUT_BANNER if self._lifecycle else "User input required.", severity="warning")
+        else:
+            self._set_status(f"Task result: {result.outcome}")
+
+    def _notify_no_ready_task(self) -> None:
+        self.notify("No ready roadmap task found.", severity="information")
+        self._set_status("No ready roadmap task found")
 
     def _refresh_thread_list(self) -> None:
-        """Refresh the sidebar thread list."""
         sidebar = self.query_one(ThreadList)
         threads = self._session_manager.list_threads()
         sidebar.update_threads(threads)
@@ -469,8 +548,7 @@ class VibrantApp(App):
             sidebar.selected_thread_id = self._active_thread_id
 
     def _show_thread(self, thread: ThreadInfo) -> None:
-        """Display a thread in the conversation view."""
-        conv = self.query_one(ConversationView)
+        conv = self.query_one(ChatPanel)
         conv.show_thread(thread)
         input_bar = self.query_one(InputBar)
         input_bar.set_context(thread.model, thread.status.value)
@@ -478,9 +556,28 @@ class VibrantApp(App):
         input_bar.focus_input()
 
     def _set_status(self, text: str) -> None:
-        """Update the status bar."""
         try:
-            status = self.query_one("#status-bar", Static)
-            status.update(text)
+            self.query_one("#status-bar", Static).update(text)
         except Exception:
-            pass
+            return
+
+    def _start_project_refresh_loop(self) -> None:
+        if self._task_refresh_loop is not None and not self._task_refresh_loop.done():
+            return
+        self._task_refresh_loop = asyncio.create_task(self._project_refresh_loop(), name="vibrant-project-refresh")
+
+    async def _stop_project_refresh_loop(self) -> None:
+        if self._task_refresh_loop is None:
+            return
+        self._task_refresh_loop.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._task_refresh_loop
+        self._task_refresh_loop = None
+
+    async def _project_refresh_loop(self) -> None:
+        try:
+            while self._task_execution_in_progress:
+                self._refresh_project_views()
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            raise

@@ -8,7 +8,7 @@ import inspect
 from pathlib import Path
 from typing import Any, Callable
 
-from ...logging.ndjson_logger import CanonicalLogger, NativeLogger
+from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ...models.agent import AgentRecord
 from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
