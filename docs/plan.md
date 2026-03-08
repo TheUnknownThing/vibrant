@@ -291,11 +291,11 @@ Implement `vibrant/logging/ndjson_logger.py`:
 
 ---
 
-## Phase 3 — Consensus Pool & Roadmap
+## [x] Phase 3 — Consensus Pool & Roadmap
 
 > **Goal**: Implement the machine-parseable Consensus Pool and Roadmap system.
 
-### Task 3.1 — Consensus Pool Parser & Writer
+### [x] Task 3.1 — Consensus Pool Parser & Writer
 
 **Depends**: 0.3  
 **[Spec §4.2, §10.1, §10.2]**
@@ -314,7 +314,7 @@ Implement `vibrant/consensus/parser.py` and `writer.py`:
 
 ---
 
-### Task 3.2 — Roadmap Parser
+### [x] Task 3.2 — Roadmap Parser
 
 **Depends**: 0.3  
 **[Spec §2.5, §5.1]**

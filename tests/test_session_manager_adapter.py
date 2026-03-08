@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from vibrant.models import SessionConfig
+from vibrant.models import AgentRecord, AgentStatus, SessionConfig
 from vibrant.providers.base import RuntimeMode
 from vibrant.session_manager import SessionManager
 
@@ -89,5 +90,14 @@ class TestSessionManagerAdapterIntegration:
         assert adapter.start_turn_calls[0]["input_items"][0]["text"] == "hello adapter"
         assert thread.id in manager.get_active_thread_ids()
 
+        agent_record_path = Path(tmp_path) / '.vibrant' / 'agents' / f'{thread.id}.json'
+        persisted = AgentRecord.model_validate_json(agent_record_path.read_text(encoding='utf-8'))
+        assert persisted.provider.provider_thread_id == 'thread-fake-123'
+        assert persisted.status is AgentStatus.RUNNING
+
         await manager.stop_session(thread.id)
         assert adapter.stop_calls == 1
+
+        persisted = AgentRecord.model_validate_json(agent_record_path.read_text(encoding='utf-8'))
+        assert persisted.status is AgentStatus.KILLED
+        assert persisted.finished_at is not None

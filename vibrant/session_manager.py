@@ -10,13 +10,16 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 
+from .config import DEFAULT_CONFIG_DIR, find_project_root
 from .models import (
     AgentProviderMetadata,
     AgentRecord,
+    AgentStatus,
     AgentType,
     ApprovalMode,
     ItemInfo,
@@ -145,6 +148,87 @@ class SessionManager:
         self._streaming_items: dict[str, _StreamingItem] = {}
         self._listeners: list[EventListener] = []
 
+    def _agent_record_path(self, agent_record: AgentRecord) -> Path:
+        project_root = find_project_root(agent_record.worktree_path or os.getcwd())
+        return project_root / DEFAULT_CONFIG_DIR / 'agents' / f'{agent_record.agent_id}.json'
+
+    def _persist_agent_record(self, thread_id: str) -> None:
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return
+        destination = self._agent_record_path(agent_record)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(destination, agent_record.model_dump_json(indent=2) + '\n')
+
+    def _sync_provider_thread_id(self, thread_id: str, provider_thread_id: str | None) -> None:
+        if not provider_thread_id:
+            return
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return
+        agent_record.provider.provider_thread_id = provider_thread_id
+        resume_cursor = dict(agent_record.provider.resume_cursor or {})
+        resume_cursor['threadId'] = provider_thread_id
+        agent_record.provider.resume_cursor = resume_cursor
+        self._persist_agent_record(thread_id)
+
+    def _mark_agent_connecting(self, thread_id: str) -> None:
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return
+        if agent_record.status is AgentStatus.SPAWNING:
+            agent_record.transition_to(AgentStatus.CONNECTING)
+        agent_record.error = None
+        self._persist_agent_record(thread_id)
+
+    def _mark_agent_running(self, thread_id: str) -> None:
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return
+        if agent_record.status is AgentStatus.SPAWNING:
+            agent_record.transition_to(AgentStatus.CONNECTING)
+        if agent_record.status is AgentStatus.CONNECTING:
+            agent_record.transition_to(AgentStatus.RUNNING)
+        elif agent_record.status is AgentStatus.AWAITING_INPUT:
+            agent_record.transition_to(AgentStatus.RUNNING)
+        agent_record.error = None
+        self._persist_agent_record(thread_id)
+
+    def _mark_agent_ready_for_input(self, thread_id: str, *, error: str | None = None) -> None:
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return
+        if agent_record.status is AgentStatus.SPAWNING:
+            agent_record.transition_to(AgentStatus.CONNECTING)
+        if agent_record.status is AgentStatus.CONNECTING:
+            agent_record.transition_to(AgentStatus.RUNNING)
+        if agent_record.status is AgentStatus.RUNNING:
+            agent_record.transition_to(AgentStatus.AWAITING_INPUT)
+        agent_record.error = error
+        self._persist_agent_record(thread_id)
+
+    def _mark_agent_failed(self, thread_id: str, error: str) -> None:
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return
+        if agent_record.can_transition_to(AgentStatus.FAILED):
+            agent_record.transition_to(
+                AgentStatus.FAILED,
+                finished_at=datetime.now(timezone.utc),
+                error=error,
+            )
+        else:
+            agent_record.error = error
+        self._persist_agent_record(thread_id)
+
+    def _mark_agent_killed(self, thread_id: str) -> None:
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return
+        if agent_record.can_transition_to(AgentStatus.KILLED):
+            agent_record.transition_to(AgentStatus.KILLED, finished_at=datetime.now(timezone.utc))
+        self._persist_agent_record(thread_id)
+
     # ------------------------------------------------------------------
     # Event system
     # ------------------------------------------------------------------
@@ -180,6 +264,7 @@ class SessionManager:
 
         agent_record = self._build_agent_record(thread_id, config)
         self._agent_records[thread_id] = agent_record
+        self._persist_agent_record(thread_id)
 
         adapter = self._adapter_factory(
             cwd=config.cwd,
@@ -190,6 +275,7 @@ class SessionManager:
         )
 
         try:
+            self._mark_agent_connecting(thread_id)
             await adapter.start_session(cwd=config.cwd)
             self._adapters[thread_id] = adapter
             if adapter.client is not None:
@@ -211,8 +297,10 @@ class SessionManager:
                 if codex_tid:
                     thread.codex_thread_id = str(codex_tid)
 
+            self._sync_provider_thread_id(thread_id, thread.codex_thread_id)
             thread.status = ThreadStatus.IDLE
             thread.updated_at = datetime.now(timezone.utc)
+            self._mark_agent_ready_for_input(thread_id)
             await self._emit(ThreadCreated(thread_id, thread))
             await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.IDLE))
             logger.info('Session created: %s (codex_thread=%s)', thread_id[:8], thread.codex_thread_id)
@@ -221,6 +309,7 @@ class SessionManager:
         except Exception as exc:
             thread.status = ThreadStatus.ERROR
             thread.error_message = str(exc)
+            self._mark_agent_failed(thread_id, str(exc))
             await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(exc)))
             try:
                 await adapter.stop_session()
@@ -246,6 +335,7 @@ class SessionManager:
 
         agent_record = self._agent_records.get(thread_id) or self._build_agent_record(thread_id, config)
         self._agent_records[thread_id] = agent_record
+        self._persist_agent_record(thread_id)
 
         adapter = self._adapter_factory(
             cwd=config.cwd,
@@ -256,6 +346,7 @@ class SessionManager:
         )
 
         try:
+            self._mark_agent_connecting(thread_id)
             await adapter.start_session(cwd=config.cwd)
             self._adapters[thread_id] = adapter
             if adapter.client is not None:
@@ -269,14 +360,17 @@ class SessionManager:
             )
 
             thread.codex_thread_id = adapter.provider_thread_id or codex_thread_id
+            self._sync_provider_thread_id(thread_id, thread.codex_thread_id)
             thread.status = ThreadStatus.IDLE
             thread.updated_at = datetime.now(timezone.utc)
+            self._mark_agent_ready_for_input(thread_id)
             await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.IDLE))
             return thread
 
         except Exception as exc:
             thread.status = ThreadStatus.ERROR
             thread.error_message = str(exc)
+            self._mark_agent_failed(thread_id, str(exc))
             await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(exc)))
             try:
                 await adapter.stop_session()
@@ -312,6 +406,7 @@ class SessionManager:
         thread.turns.append(assistant_turn)
         self._current_turns[thread_id] = assistant_turn.id
         thread.status = ThreadStatus.RUNNING
+        self._mark_agent_running(thread_id)
         thread.updated_at = datetime.now(timezone.utc)
 
         await self._emit(ItemAdded(thread_id, user_turn.id, user_turn.items[0]))
@@ -331,6 +426,10 @@ class SessionManager:
             assistant_turn.status = TurnStatus.ERROR
             thread.status = ThreadStatus.ERROR
             thread.error_message = str(exc)
+            if adapter.is_running:
+                self._mark_agent_ready_for_input(thread_id, error=str(exc))
+            else:
+                self._mark_agent_failed(thread_id, str(exc))
             await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(exc)))
 
     async def approve_request(self, thread_id: str, jsonrpc_id: int | str, approved: bool) -> None:
@@ -346,6 +445,7 @@ class SessionManager:
         self._clients.pop(thread_id, None)
         if adapter:
             await adapter.stop_session()
+        self._mark_agent_killed(thread_id)
         thread = self._threads.get(thread_id)
         if thread:
             thread.status = ThreadStatus.STOPPED
@@ -377,8 +477,9 @@ class SessionManager:
 
     def _build_agent_record(self, thread_id: str, config: SessionConfig) -> AgentRecord:
         cwd = Path(config.cwd or os.getcwd()).expanduser().resolve()
-        native_log = cwd / '.vibrant' / 'logs' / 'providers' / 'native' / f'{thread_id}.ndjson'
-        canonical_log = cwd / '.vibrant' / 'logs' / 'providers' / 'canonical' / f'{thread_id}.ndjson'
+        project_root = find_project_root(cwd)
+        native_log = project_root / '.vibrant' / 'logs' / 'providers' / 'native' / f'{thread_id}.ndjson'
+        canonical_log = project_root / '.vibrant' / 'logs' / 'providers' / 'canonical' / f'{thread_id}.ndjson'
         return AgentRecord(
             agent_id=thread_id,
             task_id=thread_id,
@@ -443,6 +544,7 @@ class SessionManager:
 
         if method == "turn/completed":
             current_turn_id = self._current_turns.pop(thread_id, None)
+            self._mark_agent_ready_for_input(thread_id)
             if current_turn_id:
                 for turn in thread.turns:
                     if turn.id == current_turn_id:
@@ -458,6 +560,7 @@ class SessionManager:
         if method == "turn/error":
             current_turn_id = self._current_turns.pop(thread_id, None)
             error_msg = params.get("error", {}).get("message", "Turn failed")
+            self._mark_agent_ready_for_input(thread_id, error=error_msg)
             if current_turn_id:
                 for turn in thread.turns:
                     if turn.id == current_turn_id:
@@ -630,3 +733,18 @@ class SessionManager:
         # Fallback: append to last turn
         if thread.turns:
             thread.turns[-1].items.append(item)
+
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    descriptor, temp_path = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise

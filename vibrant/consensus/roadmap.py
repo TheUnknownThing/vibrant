@@ -60,6 +60,7 @@ class RoadmapParser:
     def render(self, document: RoadmapDocument) -> str:
         lines = [f"# Roadmap — Project {document.project}", ""]
         for task in document.tasks:
+            prompt_lines = self._render_prompt_lines(task.prompt)
             lines.extend(
                 [
                     f"### Task {task.id} — {task.title}",
@@ -68,11 +69,10 @@ class RoadmapParser:
                     f"- **Dependencies**: {', '.join(task.dependencies) if task.dependencies else 'none'}",
                     f"- **Skills**: {', '.join(task.skills) if task.skills else 'none'}",
                     f"- **Branch**: {task.branch or ''}",
-                    f"- **Prompt**: {task.prompt or ''}",
-                    "",
-                    "**Acceptance Criteria**:",
                 ]
             )
+            lines.extend(prompt_lines)
+            lines.extend(["", "**Acceptance Criteria**:"])
             if task.acceptance_criteria:
                 lines.extend(f"- [ ] {criterion}" for criterion in task.acceptance_criteria)
             else:
@@ -89,7 +89,8 @@ class RoadmapParser:
         document = self.parse_file(path)
         for task in document.tasks:
             if task.id == task_id:
-                task.status = status
+                if task.status is not status:
+                    task.transition_to(status)
                 self.write(path, document)
                 return document
         raise KeyError(f"Task not found in roadmap: {task_id}")
@@ -192,12 +193,15 @@ class RoadmapParser:
         acceptance_criteria: list[str] = []
         prompt_lines: list[str] = []
         section: str | None = None
+        inline_prompt_open = False
 
         for raw_line in block.splitlines():
             line = raw_line.rstrip()
             stripped = line.strip()
             if not stripped:
                 if section == "prompt" and prompt_lines and prompt_lines[-1] != "":
+                    prompt_lines.append("")
+                elif inline_prompt_open and prompt_lines and prompt_lines[-1] != "":
                     prompt_lines.append("")
                 continue
 
@@ -206,22 +210,32 @@ class RoadmapParser:
 
             if stripped in {"**Acceptance Criteria**:", "#### Acceptance Criteria"}:
                 section = "acceptance"
+                inline_prompt_open = False
                 continue
             if stripped in {"**Prompt**:", "#### Prompt"}:
                 section = "prompt"
+                inline_prompt_open = False
                 continue
             if bullet_match is not None and section is None:
-                metadata[bullet_match.group("key").strip()] = bullet_match.group("value").strip()
+                key = bullet_match.group("key").strip()
+                value = bullet_match.group("value").strip()
+                metadata[key] = value
+                inline_prompt_open = key == "Prompt"
                 continue
             if checklist_match is not None and section == "acceptance":
                 acceptance_criteria.append(checklist_match.group("value").strip())
                 continue
             if section == "prompt":
                 prompt_lines.append(stripped)
+                continue
+            if inline_prompt_open:
+                prompt_lines.append(stripped)
 
         prompt_value = metadata.get("Prompt", "")
         if prompt_lines:
-            prompt_value = "\n".join(prompt_lines).strip()
+            prompt_parts = [prompt_value] if prompt_value else []
+            prompt_parts.extend(prompt_lines)
+            prompt_value = "\n".join(prompt_parts).strip()
 
         task = TaskInfo(
             id=task_id,
@@ -263,6 +277,16 @@ class RoadmapParser:
         if value is None:
             return "none"
         return VALUE_TO_PRIORITY_NAME.get(value, str(value))
+
+    def _render_prompt_lines(self, prompt: str | None) -> list[str]:
+        if not prompt:
+            return ["- **Prompt**: "]
+
+        normalized = prompt.rstrip("\n")
+        if "\n" not in normalized:
+            return [f"- **Prompt**: {normalized}"]
+
+        return ["**Prompt**:", *normalized.splitlines()]
 
 
 

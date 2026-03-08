@@ -8,7 +8,7 @@ import pytest
 
 from vibrant.consensus.roadmap import RoadmapParser
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
-from vibrant.models.task import TaskStatus
+from vibrant.models.task import TaskInfo, TaskStatus
 
 
 SAMPLE_ROADMAP = """# Roadmap — Project Vibrant
@@ -125,9 +125,49 @@ class TestRoadmapParser:
         roadmap_path.write_text(SAMPLE_ROADMAP, encoding="utf-8")
 
         parser = RoadmapParser()
-        updated = parser.update_task_status(roadmap_path, "task-001", TaskStatus.IN_PROGRESS)
+        updated = parser.update_task_status(roadmap_path, "task-001", TaskStatus.QUEUED)
         reparsed = parser.parse_file(roadmap_path)
 
-        assert updated.tasks[0].status is TaskStatus.IN_PROGRESS
-        assert reparsed.tasks[0].status is TaskStatus.IN_PROGRESS
-        assert "- **Status**: in-progress" in roadmap_path.read_text(encoding="utf-8")
+        assert updated.tasks[0].status is TaskStatus.QUEUED
+        assert reparsed.tasks[0].status is TaskStatus.QUEUED
+        assert "- **Status**: queued" in roadmap_path.read_text(encoding="utf-8")
+
+    def test_update_task_status_rejects_invalid_lifecycle_jump(self, tmp_path):
+        roadmap_path = tmp_path / ".vibrant" / "roadmap.md"
+        roadmap_path.parent.mkdir(parents=True)
+        roadmap_path.write_text(SAMPLE_ROADMAP, encoding="utf-8")
+
+        with pytest.raises(ValueError, match="Invalid task status transition"):
+            RoadmapParser().update_task_status(roadmap_path, "task-001", TaskStatus.ACCEPTED)
+
+    def test_multiline_prompt_round_trips_through_write_and_status_update(self, tmp_path):
+        roadmap_path = tmp_path / ".vibrant" / "roadmap.md"
+        roadmap_path.parent.mkdir(parents=True)
+        parser = RoadmapParser()
+        parser.write(
+            roadmap_path,
+            parser.parse(
+                """# Roadmap — Project Vibrant
+
+### Task task-001 — Build configuration loader
+- **Status**: pending
+- **Priority**: high
+- **Dependencies**: none
+- **Skills**: config
+- **Branch**: vibrant/task-001
+- **Prompt**: First line
+Second line
+
+**Acceptance Criteria**:
+- [ ] Keep both lines
+"""
+            )
+        )
+
+        reparsed = parser.parse_file(roadmap_path)
+        assert reparsed.tasks[0].prompt == "First line\nSecond line"
+
+        updated = parser.update_task_status(roadmap_path, "task-001", TaskStatus.QUEUED)
+        assert updated.tasks[0].prompt == "First line\nSecond line"
+        assert parser.parse_file(roadmap_path).tasks[0].prompt == "First line\nSecond line"
+        assert "**Prompt**:\nFirst line\nSecond line" in roadmap_path.read_text(encoding="utf-8")
