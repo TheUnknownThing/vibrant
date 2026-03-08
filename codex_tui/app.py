@@ -382,7 +382,6 @@ class CodexTuiApp(App):
             self.notify(
                 "/model <name> - Set model\n"
                 "/settings - Open settings\n"
-                "/history - Browse history\n"
                 "/help - Show this help"
             )
         else:
