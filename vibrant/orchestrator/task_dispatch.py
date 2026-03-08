@@ -75,10 +75,24 @@ class TaskDispatcher:
     def dispatch_ready_tasks(self) -> list[TaskInfo]:
         """Dispatch queued tasks up to the concurrency limit."""
 
-        self._schedule_ready_tasks()
         dispatched: list[TaskInfo] = []
 
-        while self._queue and self.active_count < self.concurrency_limit:
+        while True:
+            task = self.dispatch_next_task()
+            if task is None:
+                break
+            dispatched.append(task)
+
+        return dispatched
+
+    def dispatch_next_task(self) -> TaskInfo | None:
+        """Dispatch the next eligible queued task, if one is available."""
+
+        self._schedule_ready_tasks()
+        if self.active_count >= self.concurrency_limit:
+            return None
+
+        while self._queue:
             task_id = self._queue.pop(0)
             task = self.get_task(task_id)
             if task.status is not TaskStatus.QUEUED:
@@ -88,9 +102,9 @@ class TaskDispatcher:
 
             task.transition_to(TaskStatus.IN_PROGRESS)
             self._active.add(task_id)
-            dispatched.append(task)
+            return task
 
-        return dispatched
+        return None
 
     def mark_completed(self, task_id: str) -> TaskInfo:
         """Mark an in-progress task as completed."""

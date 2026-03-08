@@ -332,11 +332,11 @@ Implement roadmap parsing in `vibrant/consensus/`:
 
 ---
 
-## Phase 4 — Gatekeeper Agent
+## [x] Phase 4 — Gatekeeper Agent
 
 > **Goal**: Implement the Gatekeeper as a Codex CLI agent that manages planning, evaluation, and user escalation.
 
-### Task 4.1 — Gatekeeper Spawn & Prompt System
+### [x] Task 4.1 — Gatekeeper Spawn & Prompt System
 
 **Depends**: 2.2, 3.1, 3.2  
 **[Spec §9.1, §9.2, §9.3]**
@@ -355,7 +355,7 @@ Implement `vibrant/gatekeeper/gatekeeper.py`:
 
 ---
 
-### Task 4.2 — User Escalation Flow
+### [x] Task 4.2 — User Escalation Flow
 
 **Depends**: 4.1  
 **[Spec §9.2, §7.4]**

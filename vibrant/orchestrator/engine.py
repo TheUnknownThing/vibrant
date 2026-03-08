@@ -156,12 +156,30 @@ class OrchestratorEngine:
         payload = self.state.model_dump_json(indent=2) + "\n"
         _atomic_write_text(self.state_path, payload)
 
-    def register_agent(self, record: AgentRecord) -> None:
-        """Track an agent record in memory and refresh derived state."""
+    def upsert_agent_record(
+        self,
+        record: AgentRecord,
+        *,
+        increment_spawn: bool = False,
+    ) -> Path:
+        """Persist one agent record and refresh derived orchestrator state."""
+
+        if increment_spawn and record.agent_id not in self.agents:
+            self.state.total_agent_spawns += 1
+
+        self.agents_dir.mkdir(parents=True, exist_ok=True)
+        path = self.agents_dir / f"{record.agent_id}.json"
+        _atomic_write_text(path, record.model_dump_json(indent=2) + "\n")
 
         self.agents[record.agent_id] = record
         self._reconstruct_state()
         self.persist_state()
+        return path
+
+    def register_agent(self, record: AgentRecord) -> None:
+        """Track an agent record in memory and refresh derived state."""
+
+        self.upsert_agent_record(record)
 
     def refresh_from_disk(self) -> None:
         """Reload agent records and consensus metadata from disk."""
@@ -175,7 +193,10 @@ class OrchestratorEngine:
         """Persist Gatekeeper outputs into durable orchestrator state."""
 
         if result.agent_record is not None:
-            self.agents[result.agent_record.agent_id] = result.agent_record
+            self.upsert_agent_record(
+                result.agent_record,
+                increment_spawn=result.agent_record.agent_id not in self.agents,
+            )
         if result.consensus_document is not None:
             self.consensus = result.consensus_document
 

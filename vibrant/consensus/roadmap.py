@@ -69,6 +69,8 @@ class RoadmapParser:
                     f"- **Dependencies**: {', '.join(task.dependencies) if task.dependencies else 'none'}",
                     f"- **Skills**: {', '.join(task.skills) if task.skills else 'none'}",
                     f"- **Branch**: {task.branch or ''}",
+                    f"- **Retry Count**: {task.retry_count}",
+                    f"- **Max Retries**: {task.max_retries}",
                 ]
             )
             lines.extend(prompt_lines)
@@ -245,6 +247,8 @@ class RoadmapParser:
             dependencies=self._parse_csv_list(metadata.get("Dependencies", "")),
             skills=self._parse_csv_list(metadata.get("Skills", "")),
             branch=metadata.get("Branch") or None,
+            retry_count=self._parse_int(metadata.get("Retry Count"), default=0),
+            max_retries=self._parse_int(metadata.get("Max Retries"), default=3),
             prompt=prompt_value or None,
             acceptance_criteria=acceptance_criteria,
         )
@@ -272,6 +276,14 @@ class RoadmapParser:
         if not normalized or normalized.lower() == "none":
             return []
         return [item.strip() for item in normalized.split(",") if item.strip()]
+
+    def _parse_int(self, value: str | None, *, default: int) -> int:
+        if value is None:
+            return default
+        normalized = value.strip()
+        if not normalized:
+            return default
+        return int(normalized)
 
     def _format_priority(self, value: int | None) -> str:
         if value is None:
