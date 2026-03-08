@@ -1,8 +1,7 @@
 """High-level session orchestration for Codex threads.
 
-Manages multiple :class:`CodexClient` instances — one per thread — and
-translates low-level JSON-RPC events into domain events that the TUI
-can subscribe to.
+Manages multiple provider-backed sessions and translates low-level
+notifications into domain events that the TUI can subscribe to.
 """
 
 from __future__ import annotations
@@ -10,12 +9,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 
-from .providers.codex.client import CodexClient, CodexClientError
 from .models import (
+    AgentProviderMetadata,
+    AgentRecord,
+    AgentType,
     ApprovalMode,
     ItemInfo,
     ItemType,
@@ -27,6 +29,9 @@ from .models import (
     TurnRole,
     TurnStatus,
 )
+from .providers.base import RuntimeMode
+from .providers.codex.adapter import CodexProviderAdapter
+from .providers.codex.client import CodexClientError
 
 logger = logging.getLogger(__name__)
 
@@ -94,18 +99,14 @@ class ApprovalRequested(SessionEvent):
         self.params = params
 
 
-# Type alias for event listeners
 EventListener = Callable[[SessionEvent], Coroutine[Any, Any, None]]
 
 
-def _map_approval_mode(mode: ApprovalMode) -> dict[str, str]:
-    """Convert our ApprovalMode to Codex app-server params."""
-    if mode == ApprovalMode.SUGGEST:
-        return {"approvalPolicy": "on-request", "sandbox": "workspace-write"}
-    elif mode == ApprovalMode.AUTO_EDIT:
-        return {"approvalPolicy": "on-request", "sandbox": "workspace-write"}
-    else:  # FULL_AUTO
-        return {"approvalPolicy": "never", "sandbox": "danger-full-access"}
+def _map_approval_mode(mode: ApprovalMode) -> tuple[RuntimeMode, str]:
+    """Convert app approval settings into provider runtime settings."""
+    if mode in {ApprovalMode.SUGGEST, ApprovalMode.AUTO_EDIT}:
+        return RuntimeMode.WORKSPACE_WRITE, 'on-request'
+    return RuntimeMode.FULL_ACCESS, 'never'
 
 
 # ---------------------------------------------------------------------------
@@ -114,39 +115,34 @@ def _map_approval_mode(mode: ApprovalMode) -> dict[str, str]:
 
 class _StreamingItem:
     """Tracks an in-progress item being streamed from the server."""
-    __slots__ = ("item_id", "item_type", "text_parts", "metadata")
+    __slots__ = ('item_id', 'item_type', 'text_parts', 'metadata')
 
     def __init__(self, item_id: str, item_type: str) -> None:
         self.item_id = item_id
-        self.item_type = item_type       # "agentMessage", "reasoning", etc.
+        self.item_type = item_type
         self.text_parts: list[str] = []
         self.metadata: dict[str, Any] = {}
 
     @property
     def accumulated_text(self) -> str:
-        return "".join(self.text_parts)
+        return ''.join(self.text_parts)
 
     def append_delta(self, delta: str) -> None:
         self.text_parts.append(delta)
 
 
 class SessionManager:
-    """Orchestrates multiple Codex sessions (one per thread).
+    """Orchestrates multiple provider-backed sessions (one per thread)."""
 
-    Usage::
-
-        mgr = SessionManager()
-        mgr.add_listener(my_handler)
-        thread = await mgr.create_session(config)
-        await mgr.send_message(thread.id, "Fix the failing tests")
-        await mgr.stop_session(thread.id)
-    """
-
-    def __init__(self) -> None:
-        self._clients: dict[str, CodexClient] = {}
+    def __init__(self, adapter_factory: Callable[..., CodexProviderAdapter] | None = None) -> None:
+        self._adapter_factory = adapter_factory or CodexProviderAdapter
+        self._adapters: dict[str, CodexProviderAdapter] = {}
+        self._clients: dict[str, Any] = {}
+        self._configs: dict[str, SessionConfig] = {}
+        self._agent_records: dict[str, AgentRecord] = {}
         self._threads: dict[str, ThreadInfo] = {}
-        self._current_turns: dict[str, str] = {}  # thread_id → current turn_id
-        self._streaming_items: dict[str, _StreamingItem] = {}  # item_id → accumulator
+        self._current_turns: dict[str, str] = {}
+        self._streaming_items: dict[str, _StreamingItem] = {}
         self._listeners: list[EventListener] = []
 
     # ------------------------------------------------------------------
@@ -164,14 +160,14 @@ class SessionManager:
             try:
                 await listener(event)
             except Exception:
-                logger.exception("Error in session event listener")
+                logger.exception('Error in session event listener')
 
     # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
 
     async def create_session(self, config: SessionConfig) -> ThreadInfo:
-        """Create a new thread, spawn a codex app-server, initialize it."""
+        """Create a new thread and initialize a provider-backed session."""
         thread_id = str(uuid.uuid4())
         thread = ThreadInfo(
             id=thread_id,
@@ -180,43 +176,38 @@ class SessionManager:
             cwd=config.cwd or os.getcwd(),
         )
         self._threads[thread_id] = thread
+        self._configs[thread_id] = config
 
-        client = CodexClient(
+        agent_record = self._build_agent_record(thread_id, config)
+        self._agent_records[thread_id] = agent_record
+
+        adapter = self._adapter_factory(
             cwd=config.cwd,
             codex_binary=config.codex_binary,
-            on_notification=lambda n: self._on_notification(thread_id, n),
-            on_stderr=lambda line: logger.debug("[%s] stderr: %s", thread_id[:8], line),
+            agent_record=agent_record,
+            on_raw_notification=lambda n: self._on_notification(thread_id, n),
+            on_stderr_line=lambda line: logger.debug('[%s] stderr: %s', thread_id[:8], line),
         )
 
         try:
-            await client.start()
-            self._clients[thread_id] = client
+            await adapter.start_session(cwd=config.cwd)
+            self._adapters[thread_id] = adapter
+            if adapter.client is not None:
+                self._clients[thread_id] = adapter.client
 
-            # JSON-RPC initialize handshake
-            await client.send_request("initialize", {
-                "clientInfo": {
-                    "name": "vibrant",
-                    "title": "Codex TUI",
-                    "version": "0.1.0",
-                },
-                "capabilities": {
-                    "experimentalApi": True,
-                },
-            })
-            client.send_notification("initialized")
+            runtime_mode, approval_policy = _map_approval_mode(config.approval_mode)
+            result = await adapter.start_thread(
+                model=config.model,
+                cwd=config.cwd or os.getcwd(),
+                runtime_mode=runtime_mode,
+                approval_policy=approval_policy,
+            )
 
-            # Start a new thread
-            runtime = _map_approval_mode(config.approval_mode)
-            result = await client.send_request("thread/start", {
-                "model": config.model,
-                "cwd": config.cwd or os.getcwd(),
-                **runtime,
-            })
-
-            # Extract the codex thread ID
-            if isinstance(result, dict):
-                thread_obj = result.get("thread", result)
-                codex_tid = thread_obj.get("id") or result.get("threadId")
+            if adapter.provider_thread_id:
+                thread.codex_thread_id = adapter.provider_thread_id
+            elif isinstance(result, dict):
+                thread_obj = result.get('thread', result)
+                codex_tid = thread_obj.get('id') or result.get('threadId')
                 if codex_tid:
                     thread.codex_thread_id = str(codex_tid)
 
@@ -224,20 +215,23 @@ class SessionManager:
             thread.updated_at = datetime.now(timezone.utc)
             await self._emit(ThreadCreated(thread_id, thread))
             await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.IDLE))
-            logger.info("Session created: %s (codex_thread=%s)", thread_id[:8], thread.codex_thread_id)
+            logger.info('Session created: %s (codex_thread=%s)', thread_id[:8], thread.codex_thread_id)
             return thread
 
-        except Exception as e:
+        except Exception as exc:
             thread.status = ThreadStatus.ERROR
-            thread.error_message = str(e)
-            await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(e)))
-            if thread_id in self._clients:
-                await self._clients[thread_id].stop()
-                del self._clients[thread_id]
+            thread.error_message = str(exc)
+            await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(exc)))
+            try:
+                await adapter.stop_session()
+            except Exception:
+                logger.exception('Failed to stop adapter after create_session error')
+            self._adapters.pop(thread_id, None)
+            self._clients.pop(thread_id, None)
             raise
 
     async def resume_session(self, thread_id: str, codex_thread_id: str, config: SessionConfig) -> ThreadInfo:
-        """Resume an existing Codex thread."""
+        """Resume an existing provider thread."""
         thread = self._threads.get(thread_id)
         if not thread:
             thread = ThreadInfo(
@@ -248,53 +242,59 @@ class SessionManager:
                 cwd=config.cwd or os.getcwd(),
             )
             self._threads[thread_id] = thread
+        self._configs[thread_id] = config
 
-        client = CodexClient(
+        agent_record = self._agent_records.get(thread_id) or self._build_agent_record(thread_id, config)
+        self._agent_records[thread_id] = agent_record
+
+        adapter = self._adapter_factory(
             cwd=config.cwd,
             codex_binary=config.codex_binary,
-            on_notification=lambda n: self._on_notification(thread_id, n),
+            agent_record=agent_record,
+            on_raw_notification=lambda n: self._on_notification(thread_id, n),
+            on_stderr_line=lambda line: logger.debug('[%s] stderr: %s', thread_id[:8], line),
         )
 
         try:
-            await client.start()
-            self._clients[thread_id] = client
+            await adapter.start_session(cwd=config.cwd)
+            self._adapters[thread_id] = adapter
+            if adapter.client is not None:
+                self._clients[thread_id] = adapter.client
 
-            await client.send_request("initialize", {
-                "clientInfo": {"name": "vibrant", "title": "Vibrant", "version": "0.1.0"},
-                "capabilities": {"experimentalApi": True},
-            })
-            client.send_notification("initialized")
+            runtime_mode, approval_policy = _map_approval_mode(config.approval_mode)
+            await adapter.resume_thread(
+                codex_thread_id,
+                runtime_mode=runtime_mode,
+                approval_policy=approval_policy,
+            )
 
-            runtime = _map_approval_mode(config.approval_mode)
-            await client.send_request("thread/resume", {
-                "threadId": codex_thread_id,
-                **runtime,
-            })
-
+            thread.codex_thread_id = adapter.provider_thread_id or codex_thread_id
             thread.status = ThreadStatus.IDLE
             thread.updated_at = datetime.now(timezone.utc)
             await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.IDLE))
             return thread
 
-        except Exception as e:
+        except Exception as exc:
             thread.status = ThreadStatus.ERROR
-            thread.error_message = str(e)
-            await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(e)))
-            if thread_id in self._clients:
-                await self._clients[thread_id].stop()
-                del self._clients[thread_id]
+            thread.error_message = str(exc)
+            await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(exc)))
+            try:
+                await adapter.stop_session()
+            except Exception:
+                logger.exception('Failed to stop adapter after resume_session error')
+            self._adapters.pop(thread_id, None)
+            self._clients.pop(thread_id, None)
             raise
 
     async def send_message(self, thread_id: str, text: str) -> None:
         """Send a user message (starts a new turn)."""
-        client = self._clients.get(thread_id)
+        adapter = self._adapters.get(thread_id)
         thread = self._threads.get(thread_id)
-        if not client or not thread:
-            raise CodexClientError(f"No active session for thread {thread_id}")
+        if not adapter or not thread:
+            raise CodexClientError(f'No active session for thread {thread_id}')
         if not thread.codex_thread_id:
-            raise CodexClientError("Thread has no codex thread ID")
+            raise CodexClientError('Thread has no codex thread ID')
 
-        # Create user turn
         user_turn = TurnInfo(
             role=TurnRole.USER,
             status=TurnStatus.COMPLETED,
@@ -304,7 +304,6 @@ class SessionManager:
         )
         thread.turns.append(user_turn)
 
-        # Create pending assistant turn
         assistant_turn = TurnInfo(
             role=TurnRole.ASSISTANT,
             status=TurnStatus.RUNNING,
@@ -319,35 +318,34 @@ class SessionManager:
         await self._emit(TurnStarted(thread_id, assistant_turn.id))
         await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.RUNNING))
 
-        # Send to codex
         try:
-            await client.send_request("turn/start", {
-                "threadId": thread.codex_thread_id,
-                "input": [{"type": "text", "text": text, "text_elements": []}],
-            })
-        except Exception as e:
+            config = self._configs.get(thread_id) or SessionConfig(model=thread.model or 'gpt-5.3-codex', cwd=thread.cwd)
+            runtime_mode, approval_policy = _map_approval_mode(config.approval_mode)
+            await adapter.start_turn(
+                threadId=thread.codex_thread_id,
+                input_items=[{'type': 'text', 'text': text, 'text_elements': []}],
+                runtime_mode=runtime_mode,
+                approval_policy=approval_policy,
+            )
+        except Exception as exc:
             assistant_turn.status = TurnStatus.ERROR
             thread.status = ThreadStatus.ERROR
-            thread.error_message = str(e)
-            await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(e)))
+            thread.error_message = str(exc)
+            await self._emit(ThreadStatusChanged(thread_id, ThreadStatus.ERROR, str(exc)))
 
-    async def approve_request(
-        self, thread_id: str, jsonrpc_id: int | str, approved: bool
-    ) -> None:
+    async def approve_request(self, thread_id: str, jsonrpc_id: int | str, approved: bool) -> None:
         """Respond to an approval request from the server."""
-        client = self._clients.get(thread_id)
-        if not client:
+        adapter = self._adapters.get(thread_id)
+        if not adapter:
             return
-        if approved:
-            client.respond_to_server_request(jsonrpc_id, result={"approved": True})
-        else:
-            client.respond_to_server_request(jsonrpc_id, result={"approved": False})
+        await adapter.respond_to_request(jsonrpc_id, result={'approved': approved})
 
     async def stop_session(self, thread_id: str) -> None:
         """Gracefully stop a session."""
-        client = self._clients.pop(thread_id, None)
-        if client:
-            await client.stop()
+        adapter = self._adapters.pop(thread_id, None)
+        self._clients.pop(thread_id, None)
+        if adapter:
+            await adapter.stop_session()
         thread = self._threads.get(thread_id)
         if thread:
             thread.status = ThreadStatus.STOPPED
@@ -356,7 +354,7 @@ class SessionManager:
 
     async def stop_all(self) -> None:
         """Stop all active sessions."""
-        thread_ids = list(self._clients.keys())
+        thread_ids = list(self._adapters.keys())
         await asyncio.gather(*(self.stop_session(tid) for tid in thread_ids))
 
     def get_thread(self, thread_id: str) -> ThreadInfo | None:
@@ -366,7 +364,33 @@ class SessionManager:
         return list(self._threads.values())
 
     def get_active_thread_ids(self) -> list[str]:
-        return [tid for tid, c in self._clients.items() if c.is_running]
+        return [tid for tid, adapter in self._adapters.items() if adapter.is_running]
+
+    def get_agent_record(self, thread_id: str) -> AgentRecord | None:
+        return self._agent_records.get(thread_id)
+
+    def get_provider_log_paths(self, thread_id: str) -> tuple[str | None, str | None]:
+        agent_record = self._agent_records.get(thread_id)
+        if agent_record is None:
+            return (None, None)
+        return (agent_record.provider.native_event_log, agent_record.provider.canonical_event_log)
+
+    def _build_agent_record(self, thread_id: str, config: SessionConfig) -> AgentRecord:
+        cwd = Path(config.cwd or os.getcwd()).expanduser().resolve()
+        native_log = cwd / '.vibrant' / 'logs' / 'providers' / 'native' / f'{thread_id}.ndjson'
+        canonical_log = cwd / '.vibrant' / 'logs' / 'providers' / 'canonical' / f'{thread_id}.ndjson'
+        return AgentRecord(
+            agent_id=thread_id,
+            task_id=thread_id,
+            type=AgentType.CODE,
+            branch=f'vibrant/{thread_id[:8]}',
+            worktree_path=str(cwd),
+            started_at=datetime.now(timezone.utc),
+            provider=AgentProviderMetadata(
+                native_event_log=str(native_log),
+                canonical_event_log=str(canonical_log),
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Notification handling

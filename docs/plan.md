@@ -37,11 +37,11 @@ The current codebase is a **simple Codex chat TUI**. Vibrant requires transformi
 
 ---
 
-## Phase 0 — Foundation & Project Restructure
+## [x] Phase 0 — Foundation & Project Restructure
 
 > **Goal**: Establish the `vibrant` package structure, configuration, and data layer that every later phase depends on.
 
-### Task 0.1 — Package Restructure & Entry Point
+### [x] Task 0.1 — Package Restructure & Entry Point
 
 **Depends**: None
 
@@ -108,7 +108,7 @@ Update `pyproject.toml`: rename to `vibrant`, add entry point `vibrant = "vibran
 
 ---
 
-### Task 0.2 — Configuration System (`vibrant.toml`)
+### [x] Task 0.2 — Configuration System (`vibrant.toml`)
 
 **Depends**: 0.1  
 **[Spec §4.1, §8.2]**
@@ -126,7 +126,7 @@ Create `vibrant/config.py`:
 
 ---
 
-### Task 0.3 — Data Models
+### [x] Task 0.3 — Data Models
 
 **Depends**: 0.1  
 **[Spec §4.2, §4.3, §4.4]**
@@ -144,7 +144,7 @@ Create Pydantic models for:
 
 ---
 
-### Task 0.4 — `.vibrant/` Directory Initialization
+### [x] Task 0.4 — `.vibrant/` Directory Initialization
 
 **Depends**: 0.2, 0.3  
 **[Spec §4.1]**
@@ -227,11 +227,11 @@ Implement `vibrant/orchestrator/git_manager.py`:
 
 ---
 
-## Phase 2 — Provider Abstraction & Codex Adapter
+## [x] Phase 2 — Provider Abstraction & Codex Adapter
 
 > **Goal**: Wrap the existing CodexClient behind a provider-neutral interface; add canonical event normalization and NDJSON logging.
 
-### Task 2.1 — Provider Adapter Interface
+### [x] Task 2.1 — Provider Adapter Interface
 
 **Depends**: 0.1, 0.3  
 **[Spec §3.2, §8.1]**
@@ -248,7 +248,7 @@ Create `vibrant/providers/base.py`:
 
 ---
 
-### Task 2.2 — Codex Provider Adapter
+### [x] Task 2.2 — Codex Provider Adapter
 
 **Depends**: 2.1  
 **[Spec §8.2, §8.3, §8.4, §8.5]**
@@ -271,7 +271,7 @@ Implement `vibrant/providers/codex/adapter.py`:
 
 ---
 
-### Task 2.3 — NDJSON Dual-Log System
+### [x] Task 2.3 — NDJSON Dual-Log System
 
 **Depends**: 2.2  
 **[Spec §8.6]**

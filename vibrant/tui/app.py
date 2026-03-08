@@ -378,10 +378,22 @@ class VibrantApp(App):
             await self.action_open_settings()
         elif cmd == "history":
             await self.action_open_history()
+        elif cmd == "logs":
+            if not self._active_thread_id:
+                self.notify("Create a thread first (Ctrl+N)", severity="warning")
+                return
+            native_log, canonical_log = self._session_manager.get_provider_log_paths(self._active_thread_id)
+            if native_log or canonical_log:
+                self.notify(
+                    f"Native log: {native_log or 'n/a'}\nCanonical log: {canonical_log or 'n/a'}"
+                )
+            else:
+                self.notify("No provider logs available for this thread", severity="warning")
         elif cmd == "help":
             self.notify(
                 "/model <name> - Set model\n"
                 "/settings - Open settings\n"
+                "/logs - Show provider log paths\n"
                 "/help - Show this help"
             )
         else:

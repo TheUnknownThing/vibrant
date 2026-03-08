@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import inspect
 from datetime import datetime, timezone
+import inspect
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from ...logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ...models.agent import AgentRecord
 from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 from .client import CodexClient
 
 DEFAULT_CLIENT_INFO = {"name": "vibrant", "title": "Vibrant", "version": "0.1.0"}
+NotificationHandler = Callable[[JsonRpcNotification], Any]
+StderrHandler = Callable[[str], Any]
 
 
 class CodexProviderAdapter(ProviderAdapter):
@@ -28,6 +31,10 @@ class CodexProviderAdapter(ProviderAdapter):
         codex_home: str | None = None,
         agent_record: AgentRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
+        on_raw_notification: NotificationHandler | None = None,
+        on_stderr_line: StderrHandler | None = None,
+        native_logger: NativeLogger | None = None,
+        canonical_logger: CanonicalLogger | None = None,
         client_factory: Any | None = None,
     ) -> None:
         super().__init__(on_canonical_event=on_canonical_event)
@@ -42,8 +49,17 @@ class CodexProviderAdapter(ProviderAdapter):
         self.current_turn_id: str | None = None
         self._session_started = False
         self._pending_requests: dict[int | str, dict[str, Any]] = {}
+        self._on_raw_notification = on_raw_notification
+        self._on_stderr_line = on_stderr_line
+        self._native_logger = native_logger
+        self._canonical_logger = canonical_logger
 
+        self._ensure_loggers()
         self._bind_client_callbacks()
+
+    @property
+    def is_running(self) -> bool:
+        return bool(self.client is not None and getattr(self.client, "is_running", False))
 
     def _bind_client_callbacks(self) -> None:
         if self.client is None:
@@ -52,8 +68,11 @@ class CodexProviderAdapter(ProviderAdapter):
             self.client._on_notification = self._handle_notification
         if hasattr(self.client, "_on_stderr"):
             self.client._on_stderr = self._handle_stderr
+        if hasattr(self.client, "_on_raw_event"):
+            self.client._on_raw_event = self._handle_native_event
 
     def _ensure_client(self, cwd: str | None = None) -> Any:
+        self._ensure_loggers(cwd)
         if self.client is None:
             resolved_cwd = cwd or self._cwd
             self.client = self._client_factory(
@@ -62,9 +81,33 @@ class CodexProviderAdapter(ProviderAdapter):
                 codex_home=self._codex_home,
                 on_notification=self._handle_notification,
                 on_stderr=self._handle_stderr,
+                on_raw_event=self._handle_native_event,
             )
         self._bind_client_callbacks()
         return self.client
+
+    def _ensure_loggers(self, cwd: str | None = None) -> None:
+        if self._native_logger is not None and self._canonical_logger is not None:
+            return
+
+        if self.agent_record is None:
+            return
+
+        base_cwd = Path(cwd or self._cwd or Path.cwd()).expanduser().resolve()
+        native_path = self.agent_record.provider.native_event_log or str(
+            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.agent_id}.ndjson"
+        )
+        canonical_path = self.agent_record.provider.canonical_event_log or str(
+            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.agent_id}.ndjson"
+        )
+
+        self.agent_record.provider.native_event_log = native_path
+        self.agent_record.provider.canonical_event_log = canonical_path
+
+        if self._native_logger is None:
+            self._native_logger = NativeLogger(native_path)
+        if self._canonical_logger is None:
+            self._canonical_logger = CanonicalLogger(canonical_path)
 
     async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
         client = self._ensure_client(cwd)
@@ -83,11 +126,7 @@ class CodexProviderAdapter(ProviderAdapter):
         result = await client.send_request("initialize", initialize_params)
         client.send_notification("initialized")
         self._session_started = True
-        await self._emit_canonical(
-            "session.started",
-            cwd=self._cwd,
-            initialize_result=result,
-        )
+        await self._emit_canonical("session.started", cwd=self._cwd, initialize_result=result)
         return result
 
     async def stop_session(self) -> None:
@@ -100,7 +139,12 @@ class CodexProviderAdapter(ProviderAdapter):
         client = self._ensure_client()
         payload, runtime_mode, approval_policy, agent_record = self._build_thread_payload(kwargs)
         result = await client.send_request("thread/start", payload)
-        self._persist_thread_metadata(result, runtime_mode=runtime_mode, approval_policy=approval_policy, agent_record=agent_record)
+        self._persist_thread_metadata(
+            result,
+            runtime_mode=runtime_mode,
+            approval_policy=approval_policy,
+            agent_record=agent_record,
+        )
         await self._emit_canonical(
             "thread.started",
             resumed=False,
@@ -136,6 +180,7 @@ class CodexProviderAdapter(ProviderAdapter):
         **kwargs: Any,
     ) -> Any:
         client = self._ensure_client()
+        runtime_mode = RuntimeMode(runtime_mode)
         payload = {
             "input": [dict(item) for item in input_items],
             "sandboxPolicy": runtime_mode.codex_turn_sandbox_policy,
@@ -166,7 +211,7 @@ class CodexProviderAdapter(ProviderAdapter):
         client.respond_to_server_request(request_id, result=result, error=dict(error) if error else None)
 
         pending = self._pending_requests.pop(request_id, None)
-        if pending:
+        if pending is not None:
             await self._emit_canonical(
                 "request.resolved",
                 request_id=request_id,
@@ -186,39 +231,36 @@ class CodexProviderAdapter(ProviderAdapter):
 
     async def on_canonical_event(self, event: CanonicalEvent) -> None:
         if self.canonical_event_handler is not None:
-            result = self.canonical_event_handler(dict(event))
-            if inspect.isawaitable(result):
-                await result
+            callback_result = self.canonical_event_handler(dict(event))
+            if inspect.isawaitable(callback_result):
+                await callback_result
 
     async def _handle_notification(self, notification: JsonRpcNotification) -> None:
         method = notification.method
-        params = dict(notification.params or {})
+        original_params = dict(notification.params or {})
+        params = dict(original_params)
 
         if method.startswith("codex/event/"):
+            await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
             return
 
         request_id = params.pop("_jsonrpc_id", None)
         if request_id is not None:
             await self._handle_server_request(method, request_id, params)
+            await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
             return
 
         if method == "sessionConfigured":
             await self._emit_canonical("session.state.changed", state=params.get("state"), payload=params)
-            return
-
-        if method == "thread/started":
+        elif method == "thread/started":
             thread_payload = params.get("thread", params)
             self._persist_thread_metadata({"thread": thread_payload}, fallback_thread_id=thread_payload.get("id"))
             await self._emit_canonical("thread.started", resumed=False, thread=thread_payload)
-            return
-
-        if method == "turn/started":
+        elif method == "turn/started":
             turn_payload = params.get("turn", params)
             self.current_turn_id = turn_payload.get("id") or self.current_turn_id
             await self._emit_canonical("turn.started", turn=turn_payload)
-            return
-
-        if method == "item/agentMessage/delta":
+        elif method == "item/agentMessage/delta":
             await self._emit_canonical(
                 "content.delta",
                 item_id=params.get("itemId") or params.get("item_id"),
@@ -226,35 +268,30 @@ class CodexProviderAdapter(ProviderAdapter):
                 delta=params.get("delta", ""),
                 raw=params,
             )
-            return
-
-        if method == "item/completed":
+        elif method == "item/completed":
             item_payload = params.get("item", params)
             await self._emit_canonical(
                 "task.progress",
                 item=item_payload,
                 item_type=item_payload.get("type"),
             )
-            return
-
-        if method == "turn/completed":
+        elif method == "turn/completed":
             turn_payload = params.get("turn", params)
             self.current_turn_id = turn_payload.get("id") or self.current_turn_id
             await self._emit_canonical("turn.completed", turn=turn_payload, raw=params)
             await self._emit_canonical("task.completed", turn=turn_payload, raw=params)
-            return
-
-        if method in {"error", "turn/error"}:
+        elif method in {"error", "turn/error"}:
             await self._emit_canonical("runtime.error", error=params.get("error", params), raw=params)
+
+        await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
 
     async def _handle_server_request(self, method: str, request_id: int | str, params: dict[str, Any]) -> None:
         request_kind = self._classify_request_kind(method)
-        pending = {
+        self._pending_requests[request_id] = {
             "method": method,
             "request_kind": request_kind,
             "params": params,
         }
-        self._pending_requests[request_id] = pending
         await self._emit_canonical(
             "request.opened",
             request_id=request_id,
@@ -270,9 +307,12 @@ class CodexProviderAdapter(ProviderAdapter):
                 params=params,
             )
 
-    def _build_thread_payload(self, kwargs: dict[str, Any]) -> tuple[dict[str, Any], RuntimeMode, str, AgentRecord | None]:
+    def _build_thread_payload(
+        self,
+        kwargs: dict[str, Any],
+    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRecord | None]:
         data = dict(kwargs)
-        runtime_mode = data.pop("runtime_mode", RuntimeMode.WORKSPACE_WRITE)
+        runtime_mode = RuntimeMode(data.pop("runtime_mode", RuntimeMode.WORKSPACE_WRITE))
         approval_policy = data.pop("approval_policy", "never")
         agent_record = data.pop("agent_record", None) or self.agent_record
         cwd = data.pop("cwd", self._cwd)
@@ -282,11 +322,7 @@ class CodexProviderAdapter(ProviderAdapter):
         reasoning_effort = data.pop("reasoning_effort", None)
         reasoning_summary = data.pop("reasoning_summary", None)
 
-        payload = {
-            **data,
-            "approvalPolicy": approval_policy,
-            "sandbox": runtime_mode.codex_thread_sandbox,
-        }
+        payload = {**data, "approvalPolicy": approval_policy, "sandbox": runtime_mode.codex_thread_sandbox}
         if cwd is not None:
             payload["cwd"] = str(Path(cwd))
         if model_provider is not None:
@@ -349,7 +385,7 @@ class CodexProviderAdapter(ProviderAdapter):
     async def _emit_canonical(self, event_type: str, **payload: Any) -> None:
         event: CanonicalEvent = {
             "type": event_type,
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "timestamp": _timestamp_now(),
             "provider": "codex",
         }
         if self.agent_record is not None:
@@ -358,7 +394,40 @@ class CodexProviderAdapter(ProviderAdapter):
         if self.provider_thread_id is not None:
             event["provider_thread_id"] = self.provider_thread_id
         event.update(payload)
+
+        if self._canonical_logger is not None:
+            self._canonical_logger.log_canonical(
+                event_type,
+                {key: value for key, value in event.items() if key not in {"type", "timestamp"}},
+                timestamp=event["timestamp"],
+            )
         await self.on_canonical_event(event)
 
+    def _handle_native_event(self, raw_event: dict[str, Any]) -> None:
+        if self._native_logger is None:
+            self._ensure_loggers()
+        if self._native_logger is not None:
+            self._native_logger.log(
+                raw_event.get("event", "raw"),
+                raw_event.get("data") if isinstance(raw_event.get("data"), Mapping) else {"value": raw_event},
+            )
+
     def _handle_stderr(self, line: str) -> None:
-        del line
+        client_has_raw_hook = bool(self.client is not None and getattr(self.client, "_on_raw_event", None) is not None)
+        if self._native_logger is not None and not client_has_raw_hook:
+            self._native_logger.log_stderr(line)
+        if self._on_stderr_line is not None:
+            callback_result = self._on_stderr_line(line)
+            if inspect.isawaitable(callback_result):
+                raise RuntimeError("on_stderr_line must be synchronous")
+
+    async def _forward_raw_notification(self, notification: JsonRpcNotification) -> None:
+        if self._on_raw_notification is None:
+            return
+        callback_result = self._on_raw_notification(notification)
+        if inspect.isawaitable(callback_result):
+            await callback_result
+
+
+def _timestamp_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
