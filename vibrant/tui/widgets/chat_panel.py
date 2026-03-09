@@ -195,6 +195,17 @@ class ChatPanel(Static):
             return None
         return self._gatekeeper_thread.model_copy(deep=True)
 
+    def restore_gatekeeper_thread(self, thread: ThreadInfo) -> None:
+        """Restore a previously persisted Gatekeeper conversation thread."""
+
+        restored = thread.model_copy(deep=True)
+        restored.id = self.GATEKEEPER_THREAD_ID
+        restored.title = restored.title or "Gatekeeper"
+        restored.model = restored.model or "gatekeeper"
+        self._gatekeeper_thread = restored
+        self._refresh_active_gatekeeper_conversation()
+        self._refresh_widgets()
+
     def set_gatekeeper_state(
         self,
         *,

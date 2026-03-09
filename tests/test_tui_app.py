@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from textual.widgets import Static
 
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
+from vibrant.history import HistoryStore
 from vibrant.models import AppSettings, ConsensusStatus, OrchestratorStatus
 from vibrant.orchestrator import OrchestratorEngine
 from vibrant.project_init import initialize_project
 from vibrant.tui.app import HelpScreen, VibrantApp
+from vibrant.tui.widgets.chat_panel import ChatPanel
+from vibrant.tui.widgets.input_bar import InputBar
 
 
 class FakeSessionManager:
@@ -77,6 +81,22 @@ class EscalationLifecycle(ExecutingLifecycle):
         document.questions = ["Should auth use OAuth or API keys?"]
         self.engine.consensus = ConsensusWriter().write(self.project_root / ".vibrant" / "consensus.md", document)
         self.engine.refresh_from_disk()
+
+
+class PlanningLifecycle:
+    def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
+        self.project_root = Path(project_root)
+        self.on_canonical_event = on_canonical_event
+        self.engine = OrchestratorEngine.load(self.project_root)
+        self.gatekeeper = object()
+
+    def reload_from_disk(self) -> RoadmapDocument:
+        self.engine.refresh_from_disk()
+        return RoadmapDocument(project=self.project_root.name, tasks=[])
+
+    async def submit_gatekeeper_message(self, text: str):
+        self.engine.state.status = OrchestratorStatus.PLANNING
+        return SimpleNamespace(transcript="Plan drafted")
 
 
 @pytest.mark.asyncio
@@ -147,3 +167,42 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
         banner = app.query_one("#notification-banner", Static)
         assert banner.display is True
         assert "Gatekeeper needs your input" in (app.get_banner_text() or "")
+
+
+@pytest.mark.asyncio
+async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    history_dir = tmp_path / "history"
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(history_dir))
+
+    first_app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=FakeSessionManager(),
+        lifecycle_factory=PlanningLifecycle,
+    )
+    async with first_app.run_test() as pilot:
+        await pilot.pause()
+        await first_app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+        await pilot.pause()
+
+    stored_gatekeeper = HistoryStore(str(history_dir)).load_thread(ChatPanel.GATEKEEPER_THREAD_ID)
+    assert stored_gatekeeper is not None
+    assert [turn.items[0].content for turn in stored_gatekeeper.turns] == ["Build an auth MVP.", "Plan drafted"]
+
+    reloaded_app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=FakeSessionManager(),
+        lifecycle_factory=ExecutingLifecycle,
+    )
+    async with reloaded_app.run_test() as pilot:
+        await pilot.pause()
+        panel = reloaded_app.query_one(ChatPanel)
+        gatekeeper_thread = panel.get_gatekeeper_thread()
+        assert gatekeeper_thread is not None
+        assert [turn.items[0].content for turn in gatekeeper_thread.turns] == ["Build an auth MVP.", "Plan drafted"]
+        assert reloaded_app._conversation_threads()[0].id == ChatPanel.GATEKEEPER_THREAD_ID  # noqa: SLF001

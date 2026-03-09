@@ -322,6 +322,9 @@ class VibrantApp(App):
         saved_threads = self._history.list_threads()
         if saved_threads:
             for thread in saved_threads:
+                if thread.id == ChatPanel.GATEKEEPER_THREAD_ID:
+                    self.query_one(ChatPanel).restore_gatekeeper_thread(thread)
+                    continue
                 self._session_manager._threads[thread.id] = thread
             self._set_status(f"Loaded {len(saved_threads)} saved thread(s)")
 
@@ -561,6 +564,7 @@ class VibrantApp(App):
     async def action_quit_app(self) -> None:
         for thread in self._session_manager.list_threads():
             self._history.save_thread(thread)
+        self._persist_gatekeeper_thread()
         await self._session_manager.stop_all()
         self.exit()
 
@@ -592,6 +596,7 @@ class VibrantApp(App):
             self._set_status("Sending message to Gatekeeper…")
             chat_panel = self.query_one(ChatPanel)
             chat_panel.record_gatekeeper_user_message(event.text, question=pending_question)
+            self._persist_gatekeeper_thread()
 
             start_message = getattr(self._lifecycle, "start_gatekeeper_message", None)
             if callable(start_message):
@@ -618,6 +623,7 @@ class VibrantApp(App):
                     gatekeeper_text = _render_gatekeeper_result_text(result)
                     if gatekeeper_text:
                         chat_panel.record_gatekeeper_response(gatekeeper_text)
+                        self._persist_gatekeeper_thread()
                     self._refresh_project_views()
                     self.notify("Message sent to Gatekeeper.")
                     self._set_status("Gatekeeper updated the plan")
@@ -784,6 +790,7 @@ class VibrantApp(App):
             streamed_text = chat_panel.get_gatekeeper_streaming_text().strip()
             if streamed_text:
                 chat_panel.record_gatekeeper_response(streamed_text)
+                self._persist_gatekeeper_thread()
             return
 
         if event_type == "runtime.error":
@@ -792,6 +799,7 @@ class VibrantApp(App):
                 error_text = _error_text_from_event(event)
                 if error_text:
                     chat_panel.record_gatekeeper_response(f"Error: {error_text}")
+                    self._persist_gatekeeper_thread()
             chat_panel.clear_gatekeeper_streaming_text()
             return
 
@@ -901,6 +909,7 @@ class VibrantApp(App):
             gatekeeper_text = _render_gatekeeper_result_text(result.gatekeeper_result)
             if gatekeeper_text:
                 self.query_one(ChatPanel).record_gatekeeper_response(gatekeeper_text)
+                self._persist_gatekeeper_thread()
 
         if result.outcome == "accepted":
             completed = bool(self._lifecycle and self._lifecycle.engine.state.status is OrchestratorStatus.COMPLETED)
@@ -968,6 +977,14 @@ class VibrantApp(App):
         if gatekeeper_thread is None:
             return threads
         return [gatekeeper_thread, *threads]
+
+    def _persist_gatekeeper_thread(self) -> None:
+        if not self.is_mounted:
+            return
+        gatekeeper_thread = self.query_one(ChatPanel).get_gatekeeper_thread()
+        if gatekeeper_thread is None or not gatekeeper_thread.turns:
+            return
+        self._history.save_thread(gatekeeper_thread)
 
     def _find_conversation_thread(self, thread_id: str) -> ThreadInfo | None:
         if thread_id == ChatPanel.GATEKEEPER_THREAD_ID:
