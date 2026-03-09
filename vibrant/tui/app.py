@@ -16,7 +16,7 @@ from textual.widgets import Footer, Header, Static
 
 from ..config import DEFAULT_CONFIG_DIR, find_project_root
 from ..history import HistoryStore
-from ..models import AppSettings, ThreadInfo, ThreadStatus
+from ..models import AppSettings, OrchestratorStatus, ThreadInfo, ThreadStatus
 from ..orchestrator import CodeAgentLifecycle, CodeAgentLifecycleResult
 from ..session_manager import (
     ApprovalRequested,
@@ -183,6 +183,7 @@ class VibrantApp(App):
         Binding("ctrl+n", "new_thread", "New Thread", show=True),
         Binding("ctrl+t", "cycle_thread", "Next Thread", show=True),
         Binding("ctrl+s", "open_settings", "Settings", show=True),
+        Binding("f3", "open_consensus_overlay", "Consensus", show=True),
         Binding("f5", "cycle_agent_output", "Next Agent", show=True),
         Binding("f6", "run_next_task", "Run Task", show=True),
         Binding("ctrl+d", "delete_thread", "Delete Thread", show=False),
@@ -210,6 +211,7 @@ class VibrantApp(App):
         self._lifecycle: CodeAgentLifecycle | None = None
         self._task_execution_in_progress = False
         self._task_refresh_loop: asyncio.Task[None] | None = None
+        self._known_pending_questions: tuple[str, ...] = ()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -291,6 +293,9 @@ class VibrantApp(App):
     def action_cycle_agent_output(self) -> None:
         self.query_one(AgentOutput).action_cycle_agent()
 
+    def action_open_consensus_overlay(self) -> None:
+        self.query_one(ConsensusView).action_open_full_consensus()
+
     async def action_run_next_task(self) -> None:
         if self._lifecycle is None:
             self.notify(
@@ -335,6 +340,7 @@ class VibrantApp(App):
             self._active_thread_id = None
             self.query_one(ChatPanel).clear()
         self._refresh_thread_list()
+        self._sync_chat_panel_state()
         self._set_status("Thread deleted")
 
     async def action_quit_app(self) -> None:
@@ -357,6 +363,29 @@ class VibrantApp(App):
         await self.action_delete_thread()
 
     async def on_input_bar_message_submitted(self, event: InputBar.MessageSubmitted) -> None:
+        pending_question = self._current_pending_gatekeeper_question()
+        input_bar = self.query_one(InputBar)
+        if pending_question is not None and self._lifecycle is not None:
+            input_bar.set_enabled(False)
+            input_bar.set_context("gatekeeper", "sending answer…")
+            self._set_status("Sending answer to Gatekeeper…")
+
+            try:
+                await self._lifecycle.engine.answer_pending_question(
+                    self._lifecycle.gatekeeper,
+                    answer=event.text,
+                    question=pending_question,
+                )
+            except Exception as exc:
+                self.notify(f"Error: {exc}", severity="error")
+                self._sync_chat_panel_state()
+            else:
+                self.query_one(ChatPanel).record_gatekeeper_answer(pending_question, event.text)
+                self._refresh_project_views()
+                self.notify("Answer sent to Gatekeeper.")
+                self._set_status("Answer sent to Gatekeeper")
+            return
+
         if not self._active_thread_id:
             self.notify("Create a thread first (Ctrl+N)", severity="warning")
             return
@@ -365,7 +394,6 @@ class VibrantApp(App):
             self.notify("Thread is busy", severity="warning")
             return
 
-        input_bar = self.query_one(InputBar)
         input_bar.set_enabled(False)
         input_bar.set_context(thread.model, "sending…")
         self._set_status("Sending message…")
@@ -459,6 +487,8 @@ class VibrantApp(App):
                     severity="warning",
                 )
 
+        self._sync_chat_panel_state()
+
     async def _on_lifecycle_canonical_event(self, event: dict[str, Any]) -> None:
         try:
             self.query_one(AgentOutput).ingest_canonical_event(event)
@@ -466,7 +496,7 @@ class VibrantApp(App):
             logger.exception("Failed to update agent output panel")
 
         event_type = str(event.get("type") or "")
-        if event_type in {"turn.started", "turn.completed", "runtime.error", "task.progress"}:
+        if event_type in {"turn.started", "turn.completed", "runtime.error", "task.progress", "user-input.requested"}:
             self._refresh_project_views()
         if event_type == "turn.started":
             self._set_status(f"Running {event.get('task_id', 'task')}…")
@@ -474,6 +504,8 @@ class VibrantApp(App):
             self._set_status(f"Completed {event.get('task_id', 'task')}")
         elif event_type == "runtime.error":
             self._set_status(str(event.get("error") or "Task failed"))
+        elif event_type == "user-input.requested":
+            self._sync_chat_panel_state(force_flash=True)
 
     def _initialize_project_lifecycle(self) -> None:
         project_root = find_project_root(self._settings.default_cwd or os.getcwd())
@@ -493,21 +525,39 @@ class VibrantApp(App):
     def _refresh_project_views(self) -> None:
         plan_tree = self.query_one(PlanTree)
         agent_output = self.query_one(AgentOutput)
+        consensus_view = self.query_one(ConsensusView)
         if self._lifecycle is None:
             plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
             agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
+            consensus_view.clear_summary("No `.vibrant/consensus.md` found for this workspace.")
+            self._sync_chat_panel_state()
             return
 
         agent_output.sync_agents(self._lifecycle.engine.agents.values())
+        consensus_document = getattr(self._lifecycle.engine, "consensus", None)
+        consensus_path = getattr(self._lifecycle.engine, "consensus_path", None)
 
         try:
             roadmap = self._lifecycle.reload_from_disk()
+            consensus_document = getattr(self._lifecycle.engine, "consensus", consensus_document)
+            consensus_path = getattr(self._lifecycle.engine, "consensus_path", consensus_path)
         except Exception as exc:
             logger.exception("Failed to refresh roadmap view")
             plan_tree.clear_tasks(f"Failed to load roadmap: {exc}")
+            consensus_view.update_consensus(
+                consensus_document,
+                source_path=consensus_path,
+            )
+            self._sync_chat_panel_state()
             return
 
         plan_tree.update_tasks(roadmap.tasks, agent_summaries=self._collect_task_summaries())
+        consensus_view.update_consensus(
+            consensus_document,
+            tasks=roadmap.tasks,
+            source_path=consensus_path,
+        )
+        self._sync_chat_panel_state()
 
     def _collect_task_summaries(self) -> dict[str, str]:
         if self._lifecycle is None:
@@ -568,6 +618,64 @@ class VibrantApp(App):
         input_bar.set_context(thread.model, thread.status.value)
         input_bar.set_enabled(thread.status != ThreadStatus.RUNNING)
         input_bar.focus_input()
+        self._sync_chat_panel_state()
+
+    def _pending_gatekeeper_questions(self) -> list[str]:
+        if self._lifecycle is None:
+            return []
+        engine = getattr(self._lifecycle, "engine", None)
+        state = getattr(engine, "state", None)
+        questions = getattr(state, "pending_questions", None)
+        if not questions:
+            return []
+        return [question for question in questions if isinstance(question, str) and question]
+
+    def _current_pending_gatekeeper_question(self) -> str | None:
+        questions = self._pending_gatekeeper_questions()
+        return questions[0] if questions else None
+
+    def _sync_chat_panel_state(self, *, force_flash: bool = False) -> None:
+        chat_panel = self.query_one(ChatPanel)
+        input_bar = self.query_one(InputBar)
+        questions = self._pending_gatekeeper_questions()
+
+        status = None
+        if self._lifecycle is not None:
+            engine = getattr(self._lifecycle, "engine", None)
+            state = getattr(engine, "state", None)
+            status = getattr(state, "status", None)
+
+        new_questions = [question for question in questions if question not in self._known_pending_questions]
+        flash = force_flash or bool(new_questions)
+        chat_panel.set_gatekeeper_state(status=status, pending_questions=questions, flash=flash)
+
+        if questions:
+            input_bar.set_enabled(True)
+            input_bar.set_context("gatekeeper", "awaiting answer")
+            if flash:
+                banner = getattr(
+                    getattr(self._lifecycle, "engine", None),
+                    "USER_INPUT_BANNER",
+                    "⚠ Gatekeeper needs your input — see Chat panel",
+                )
+                self.notify(banner, severity="warning")
+                self._set_status(banner)
+                if bool(getattr(getattr(self._lifecycle, "engine", None), "notification_bell_enabled", False)):
+                    with suppress(Exception):
+                        self.bell()
+        elif self._active_thread_id:
+            thread = self._session_manager.get_thread(self._active_thread_id)
+            if thread is not None:
+                input_bar.set_context(thread.model, thread.status.value)
+                input_bar.set_enabled(thread.status != ThreadStatus.RUNNING)
+        elif status is OrchestratorStatus.PLANNING:
+            input_bar.set_enabled(True)
+            input_bar.set_context("gatekeeper", "planning")
+        else:
+            input_bar.set_enabled(True)
+            input_bar.set_context(None, "")
+
+        self._known_pending_questions = tuple(questions)
 
     def _set_status(self, text: str) -> None:
         try:

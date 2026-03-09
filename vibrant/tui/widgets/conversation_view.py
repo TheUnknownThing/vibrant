@@ -142,6 +142,12 @@ class ConversationView(Static):
         self._scroll.display = False
         yield self._scroll
 
+    @property
+    def current_thread_id(self) -> str | None:
+        """Return the id of the conversation currently displayed."""
+
+        return self._current_thread_id
+
     def show_thread(self, thread: ThreadInfo) -> None:
         """Display the conversation for a thread."""
         self._current_thread_id = thread.id
