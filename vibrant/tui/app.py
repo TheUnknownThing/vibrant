@@ -766,6 +766,10 @@ class VibrantApp(App):
         elif event_type == "user-input.requested":
             self._sync_chat_panel_state(force_flash=True)
         elif event_type == "gatekeeper.result.applied":
+            gatekeeper_text = _render_gatekeeper_event_text(event)
+            if gatekeeper_text:
+                self.query_one(ChatPanel).record_gatekeeper_response(gatekeeper_text)
+                self._persist_gatekeeper_thread()
             self._sync_chat_panel_state(force_flash=bool(event.get("questions")))
             if event.get("error"):
                 self.notify(f"Gatekeeper error: {event['error']}", severity="error")
@@ -787,10 +791,6 @@ class VibrantApp(App):
             return
 
         if event_type == "turn.completed":
-            streamed_text = chat_panel.get_gatekeeper_streaming_text().strip()
-            if streamed_text:
-                chat_panel.record_gatekeeper_response(streamed_text)
-                self._persist_gatekeeper_thread()
             return
 
         if event_type == "runtime.error":
@@ -1226,6 +1226,18 @@ def _error_text_from_event(event: dict[str, Any]) -> str:
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "").strip()
+
+
+def _render_gatekeeper_event_text(event: dict[str, Any]) -> str:
+    transcript = event.get("transcript")
+    if isinstance(transcript, str) and transcript.strip():
+        return transcript.strip()
+
+    verdict = event.get("verdict")
+    if isinstance(verdict, str) and verdict.strip():
+        return f"Verdict: {verdict.strip()}"
+
+    return ""
 
 
 def _render_gatekeeper_result_text(result: object) -> str:

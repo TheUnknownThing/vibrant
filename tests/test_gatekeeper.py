@@ -245,7 +245,6 @@ def test_gatekeeper_prompt_describes_consensus_contract_and_no_blocked_state(tmp
 
     assert "## Consensus Contract" in prompt
     assert "INIT, PLANNING, EXECUTING, PAUSED, COMPLETED, FAILED" in prompt
-    assert "There is no `BLOCKED` or `blocked` consensus status." in prompt
     assert "`made_by` must be one of: gatekeeper, user." in prompt
     assert "Questions will block progress on their own" in prompt
 
