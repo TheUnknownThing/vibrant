@@ -17,7 +17,7 @@ from uuid import uuid4
 from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
-from vibrant.models.consensus import ConsensusDocument
+from vibrant.models.consensus import ConsensusDocument, ConsensusStatus, DecisionAuthor
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
@@ -348,6 +348,7 @@ class Gatekeeper:
         """Render the Gatekeeper prompt template from the spec."""
 
         consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
+        consensus_contract_text = _render_consensus_contract()
         skills_text = self._render_available_skills()
         summary_text = request.agent_summary.strip() if request.agent_summary else "N/A"
 
@@ -359,8 +360,12 @@ class Gatekeeper:
                 "2. Update .vibrant/consensus.md when tasks are completed or when the plan needs adjustment.",
                 "3. If an agent failed, analyze the failure and modify the task's prompt or acceptance criteria.",
                 "4. If you encounter a high-level decision (product direction, UX, architecture), ask the user",
-                '   by adding a question to the Questions section of consensus.md with priority "blocking".',
+                "   by adding a question to the Questions section of consensus.md.",
+                "   Questions will block progress on their own, so only use a blocking question when the work truly cannot proceed",
+                "   without a user-level decision.",
                 "5. If the decision is purely technical, make it yourself and log it in the Decisions section.",
+                "## Consensus Contract",
+                consensus_contract_text,
                 "## Current Consensus",
                 consensus_text,
                 "## Trigger",
@@ -558,6 +563,22 @@ def _extract_skill_description(path: Path) -> str:
             continue
         return line
     return "No description provided."
+
+
+def _render_consensus_contract() -> str:
+    status_values = ", ".join(status.value for status in ConsensusStatus)
+    decision_authors = ", ".join(author.value for author in DecisionAuthor)
+    return "\n".join(
+        [
+            "- `ConsensusDocument` fields: `project`, `created_at`, `updated_at`, `version`, `status`, `objectives`, `decisions`, `getting_started`, `questions`.",
+            f"- `status` must be one of: {status_values}.",
+            "- `decisions` must be a list of structured entries with: `title`, `date`, `made_by`, `context`, `resolution`, `impact`.",
+            f"- `made_by` must be one of: {decision_authors}.",
+            "- `questions` must contain only the user questions that still require an answer.",
+            "- A blocking question is not a workflow state. It blocks execution by being unresolved, so use it only when necessary.",
+            "- `ConsensusPool` is just a backward-compatible alias of `ConsensusDocument`; keep writing the same structure to `consensus.md`.", # TODO: maybe remove the alias and update the spec to just refer to ConsensusDocument
+        ]
+    )
 
 
 def _read_text(path: Path) -> str | None:

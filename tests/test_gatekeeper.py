@@ -232,6 +232,24 @@ def test_gatekeeper_response_parsing_extracts_verdict_questions_and_plan_updates
     assert result.roadmap_document is not None
 
 
+def test_gatekeeper_prompt_describes_consensus_contract_and_no_blocked_state(tmp_path):
+    initialize_project(tmp_path)
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter)
+
+    prompt = gatekeeper.render_prompt(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.PROJECT_START,
+            trigger_description="Create the initial plan.",
+        )
+    )
+
+    assert "## Consensus Contract" in prompt
+    assert "INIT, PLANNING, EXECUTING, PAUSED, COMPLETED, FAILED" in prompt
+    assert "There is no `BLOCKED` or `blocked` consensus status." in prompt
+    assert "`made_by` must be one of: gatekeeper, user." in prompt
+    assert "Questions will block progress on their own" in prompt
+
+
 @pytest.mark.asyncio
 async def test_gatekeeper_project_start_run_updates_consensus_and_roadmap(tmp_path):
     FakeGatekeeperAdapter.instances.clear()
