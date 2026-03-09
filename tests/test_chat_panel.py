@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -134,6 +135,39 @@ class FakePlanningLifecycle:
 
 class FakeAutomaticPlanningLifecycle(FakePlanningLifecycle):
     execution_mode = RoadmapExecutionMode.AUTOMATIC
+
+
+class FakeStreamingPlanningLifecycle(FakePlanningLifecycle):
+    async def submit_gatekeeper_message(self, text: str):
+        self.messages.append(text)
+        self.engine.state.status = OrchestratorStatus.PLANNING
+        if self.on_canonical_event is not None:
+            await self.on_canonical_event(
+                {
+                    "type": "turn.started",
+                    "agent_id": "gatekeeper-project_start-test",
+                    "task_id": "gatekeeper-project_start",
+                    "turn": {"id": "turn-gatekeeper-1"},
+                }
+            )
+            await self.on_canonical_event(
+                {
+                    "type": "content.delta",
+                    "agent_id": "gatekeeper-project_start-test",
+                    "task_id": "gatekeeper-project_start",
+                    "delta": "Plan draft in progress",
+                }
+            )
+            await asyncio.sleep(0.05)
+            await self.on_canonical_event(
+                {
+                    "type": "turn.completed",
+                    "agent_id": "gatekeeper-project_start-test",
+                    "task_id": "gatekeeper-project_start",
+                    "turn": {"id": "turn-gatekeeper-1"},
+                }
+            )
+        return SimpleNamespace(transcript="Plan drafted")
 
 
 
@@ -318,3 +352,43 @@ async def test_app_automatic_mode_runs_workflow_after_gatekeeper_update(tmp_path
         lifecycle = app._lifecycle  # noqa: SLF001 - verify wiring
         assert lifecycle is not None
         assert lifecycle.execute_until_blocked_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_app_streams_gatekeeper_response_live_during_planning(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=FakeSessionManager(),
+        lifecycle_factory=FakeStreamingPlanningLifecycle,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel = app.query_one(ChatPanel)
+
+        task = asyncio.create_task(
+            app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+        )
+        await pilot.pause(0.02)
+
+        assert panel.get_gatekeeper_streaming_text() == "Plan draft in progress"
+        gatekeeper_thread = panel.get_gatekeeper_thread()
+        assert gatekeeper_thread is not None
+        assert [turn.items[0].content for turn in gatekeeper_thread.turns] == ["Build an auth MVP."]
+
+        await task
+        await pilot.pause()
+
+        assert panel.get_gatekeeper_streaming_text() == ""
+        gatekeeper_thread = panel.get_gatekeeper_thread()
+        assert gatekeeper_thread is not None
+        assert [turn.items[0].content for turn in gatekeeper_thread.turns] == [
+            "Build an auth MVP.",
+            "Plan drafted",
+        ]

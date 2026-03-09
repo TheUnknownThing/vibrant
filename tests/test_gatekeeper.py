@@ -1,7 +1,6 @@
 """Tests for the Phase 4 Gatekeeper prompt and runtime wrapper."""
 
 from __future__ import annotations
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -258,8 +257,35 @@ async def test_gatekeeper_project_start_run_updates_consensus_and_roadmap(tmp_pa
     assert result.consensus_document.status is ConsensusStatus.PLANNING
     assert result.roadmap_document is not None
     assert len(result.roadmap_document.tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_path):
+    FakeGatekeeperAdapter.instances.clear()
+    FakeGatekeeperAdapter.scenario = "project_start"
+    initialize_project(tmp_path)
+
+    forwarded: list[dict[str, Any]] = []
+    gatekeeper = Gatekeeper(
+        tmp_path,
+        adapter_factory=FakeGatekeeperAdapter,
+        on_canonical_event=forwarded.append,
+        timeout_seconds=1,
+    )
+
+    result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.PROJECT_START,
+            trigger_description="Build a resilient multi-agent orchestrator.",
+        )
+    )
+
+    assert forwarded
+    assert forwarded[0]["agent_id"].startswith("gatekeeper-project_start-")
+    assert forwarded[0]["task_id"] == "gatekeeper-project_start"
+    assert any(event["type"] == "content.delta" and event["delta"] == "Verdict: planned\n" for event in forwarded)
     assert result.agent_record is not None
-    assert result.agent_record.status is result.agent_record.status.COMPLETED
+    assert result.agent_record.status.value == "completed"
 
 
 @pytest.mark.asyncio

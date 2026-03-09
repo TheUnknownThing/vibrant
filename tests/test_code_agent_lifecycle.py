@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -246,6 +247,34 @@ class FakeGatekeeper:
         )
 
 
+class AsyncHandle:
+    def __init__(self, result_future: asyncio.Future[GatekeeperRunResult]) -> None:
+        self.result_future = result_future
+
+    def done(self) -> bool:
+        return self.result_future.done()
+
+    async def wait(self) -> GatekeeperRunResult:
+        return await self.result_future
+
+
+class AsyncFakeGatekeeper(FakeGatekeeper):
+    async def start_run(self, request: GatekeeperRequest, *, resume_latest_thread: bool | None = None, on_result=None):
+        self.requests.append(request)
+
+        async def finish() -> GatekeeperRunResult:
+            await asyncio.sleep(0)
+            result = await FakeGatekeeper.run(self, request, resume_latest_thread=resume_latest_thread)
+            if on_result is not None:
+                maybe_result = on_result(result)
+                if asyncio.iscoroutine(maybe_result):
+                    await maybe_result
+            return result
+
+        result_future = asyncio.create_task(finish())
+        return AsyncHandle(result_future)
+
+
 @pytest.mark.asyncio
 async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tmp_path):
     repo, engine = _prepare_project(tmp_path)
@@ -303,6 +332,50 @@ async def test_submit_gatekeeper_message_routes_initial_prompt_to_project_start(
     roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")
     assert roadmap.tasks
     assert roadmap.tasks[0].title == "Update the tracked file"
+
+
+@pytest.mark.asyncio
+async def test_start_gatekeeper_message_returns_handle_before_result_is_applied(tmp_path):
+    repo = _init_repo(tmp_path)
+    initialize_project(repo)
+    gatekeeper = AsyncFakeGatekeeper(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    handle = await lifecycle.start_gatekeeper_message("Build an auth MVP for the app.")
+
+    assert handle.done() is False
+    assert gatekeeper.requests[0].trigger is GatekeeperTrigger.PROJECT_START
+
+    result = await handle.wait()
+    await asyncio.sleep(0)
+
+    assert result.request.trigger is GatekeeperTrigger.PROJECT_START
+    assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
+
+
+def test_lifecycle_passes_canonical_callback_to_default_gatekeeper(tmp_path, monkeypatch):
+    repo, engine = _prepare_project(tmp_path)
+    captured: dict[str, object] = {}
+    callback = object()
+
+    class CapturingGatekeeper:
+        def __init__(self, project_root: Path, *, on_canonical_event=None, **kwargs: Any) -> None:
+            captured["project_root"] = project_root
+            captured["callback"] = on_canonical_event
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("vibrant.orchestrator.lifecycle.Gatekeeper", CapturingGatekeeper)
+
+    lifecycle = CodeAgentLifecycle(
+        repo,
+        engine=engine,
+        adapter_factory=FakeCodeAgentAdapter,
+        on_canonical_event=callback,
+    )
+
+    assert lifecycle.gatekeeper is not None
+    assert captured["project_root"] == repo
+    assert captured["callback"] is callback
 
 
 @pytest.mark.asyncio
