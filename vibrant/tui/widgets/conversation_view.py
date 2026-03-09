@@ -134,7 +134,7 @@ class ConversationView(Static):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[dim]No thread selected. Press [b]Ctrl+N[/b] to create one.[/dim]",
+            "[dim]No conversation selected. Start planning below or press [b]Ctrl+N[/b] for a Codex thread.[/dim]",
             id="empty-state",
             markup=True,
         )

@@ -8,9 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from vibrant.config import load_config
+from vibrant.config import RoadmapExecutionMode, load_config
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
+from vibrant.project_init import ensure_project_files
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DIRECTORIES = [
@@ -86,6 +87,8 @@ class TestVibrantInit:
 
         config = load_config(start_path=tmp_path)
         assert config.codex_binary == "codex"
+        assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
+        assert 'execution-mode = "automatic"' in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
 
         state = OrchestratorState.model_validate_json((tmp_path / ".vibrant/state.json").read_text(encoding="utf-8"))
         assert state.status is OrchestratorStatus.INIT
@@ -112,3 +115,20 @@ class TestVibrantInit:
         assert consensus_after == consensus_before
         for entry in EXPECTED_GITIGNORE_ENTRIES:
             assert gitignore_lines.count(entry) == 1
+
+
+    def test_ensure_project_files_backfills_missing_source_of_truth_files(self, tmp_path):
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        (project_root / ".git").mkdir()
+        vibrant_dir = project_root / ".vibrant"
+        vibrant_dir.mkdir()
+        (vibrant_dir / "agents").mkdir()
+
+        result = ensure_project_files(project_root)
+
+        assert result == vibrant_dir
+        for relative_file in EXPECTED_FILES:
+            assert (project_root / relative_file).is_file(), relative_file
+        for relative_dir in EXPECTED_DIRECTORIES:
+            assert (project_root / relative_dir).is_dir(), relative_dir

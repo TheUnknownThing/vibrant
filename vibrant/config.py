@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -18,6 +19,13 @@ DEFAULT_WORKTREE_DIRECTORY = "/tmp/vibrant-worktrees"
 
 class VibrantConfigError(ValueError):
     """Raised when ``vibrant.toml`` cannot be parsed or validated."""
+
+
+class RoadmapExecutionMode(str, enum.Enum):
+    """Execution strategy for roadmap task dispatch."""
+
+    MANUAL = "manual"
+    AUTOMATIC = "automatic"
 
 
 class VibrantConfig(BaseModel):
@@ -89,6 +97,16 @@ class VibrantConfig(BaseModel):
         default=DEFAULT_WORKTREE_DIRECTORY,
         validation_alias=AliasChoices("worktree_directory", "worktree-directory"),
         serialization_alias="worktree-directory",
+    )
+    execution_mode: RoadmapExecutionMode = Field(
+        default=RoadmapExecutionMode.AUTOMATIC,
+        validation_alias=AliasChoices(
+            "execution_mode",
+            "execution-mode",
+            "roadmap_execution_mode",
+            "roadmap-execution-mode",
+        ),
+        serialization_alias="execution-mode",
     )
     test_commands: list[str] = Field(
         default_factory=list,
@@ -196,6 +214,7 @@ def load_config(
 __all__ = [
     "DEFAULT_CONFIG_RELATIVE_PATH",
     "DEFAULT_WORKTREE_DIRECTORY",
+    "RoadmapExecutionMode",
     "VibrantConfig",
     "VibrantConfigError",
     "find_project_root",

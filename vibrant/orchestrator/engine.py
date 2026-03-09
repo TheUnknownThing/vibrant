@@ -14,6 +14,7 @@ from vibrant.gatekeeper.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, ProviderRuntimeState
+from vibrant.project_init import ensure_project_files
 
 
 class OrchestratorEngine:
@@ -27,9 +28,14 @@ class OrchestratorEngine:
             OrchestratorStatus.PLANNING,
             OrchestratorStatus.VALIDATING,
             OrchestratorStatus.PAUSED,
+            OrchestratorStatus.COMPLETED,
         },
         OrchestratorStatus.VALIDATING: {OrchestratorStatus.COMPLETED},
-        OrchestratorStatus.PAUSED: {OrchestratorStatus.PLANNING, OrchestratorStatus.EXECUTING},
+        OrchestratorStatus.PAUSED: {
+            OrchestratorStatus.PLANNING,
+            OrchestratorStatus.EXECUTING,
+            OrchestratorStatus.COMPLETED,
+        },
         OrchestratorStatus.COMPLETED: set(),
     }
 
@@ -67,6 +73,7 @@ class OrchestratorEngine:
         vibrant_dir = root / DEFAULT_CONFIG_DIR
         if not vibrant_dir.exists():
             raise FileNotFoundError(f"Vibrant project directory not found: {vibrant_dir}")
+        ensure_project_files(root)
 
         state = cls._load_state(root)
         agents = cls._load_agents(vibrant_dir / "agents")
@@ -201,6 +208,7 @@ class OrchestratorEngine:
             self.consensus = result.consensus_document
 
         self._reconstruct_state()
+        self._sync_status_from_consensus()
         events: list[dict[str, object]] = []
         if result.questions:
             event = self._build_user_input_requested_event(result.questions)
@@ -289,6 +297,16 @@ class OrchestratorEngine:
             self.state.gatekeeper_status = GatekeeperStatus.RUNNING
         else:
             self.state.gatekeeper_status = GatekeeperStatus.IDLE
+
+    def _sync_status_from_consensus(self) -> None:
+        if self.consensus is None:
+            return
+
+        inferred_status = _consensus_to_orchestrator_status(self.consensus.status)
+        if inferred_status is None or inferred_status is self.state.status:
+            return
+        if self.can_transition_to(inferred_status):
+            self.state.status = inferred_status
 
     def _build_user_input_requested_event(self, questions: list[str]) -> dict[str, object]:
         return {

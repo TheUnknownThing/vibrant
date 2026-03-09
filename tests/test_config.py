@@ -8,6 +8,7 @@ import pytest
 
 from vibrant.config import (
     DEFAULT_WORKTREE_DIRECTORY,
+    RoadmapExecutionMode,
     VibrantConfigError,
     load_config,
     resolve_config_path,
@@ -40,6 +41,7 @@ class TestLoadConfig:
                 concurrency-limit = 8
                 agent-timeout-seconds = 2700
                 worktree-directory = "/var/tmp/vibrant-worktrees"
+                execution-mode = "manual"
 
                 [validation]
                 test-commands = ["pytest -q", "ruff check ."]
@@ -64,6 +66,7 @@ class TestLoadConfig:
         assert config.concurrency_limit == 8
         assert config.agent_timeout_seconds == 2700
         assert config.worktree_directory == "/var/tmp/vibrant-worktrees"
+        assert config.execution_mode is RoadmapExecutionMode.MANUAL
         assert config.test_commands == ["pytest -q", "ruff check ."]
         assert config.extra_config == {"persistExtendedHistory": True}
 
@@ -84,6 +87,7 @@ class TestLoadConfig:
         assert config.concurrency_limit == 4
         assert config.agent_timeout_seconds == 1500
         assert config.worktree_directory == DEFAULT_WORKTREE_DIRECTORY
+        assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
         assert config.test_commands == []
 
     def test_invalid_toml_raises_clear_error(self, tmp_path):

@@ -163,11 +163,11 @@ Create `vibrant init` CLI subcommand:
 
 ---
 
-## Phase 1 [x] — Orchestrator Core & State Machine
+## [x] Phase 1 — Orchestrator Core & State Machine
 
 > **Goal**: Implement the Orchestrator engine that manages lifecycle, state persistence, and task dispatch.
 
-### Task 1.1 [x] — Orchestrator State Machine
+### [x] Task 1.1 — Orchestrator State Machine
 
 **Depends**: 0.3, 0.4  
 **[Spec §5.2]**
@@ -186,7 +186,7 @@ Implement `vibrant/orchestrator/engine.py`:
 
 ---
 
-### Task 1.2 [x] — Task Dispatch Engine
+### [x] Task 1.2 — Task Dispatch Engine
 
 **Depends**: 1.1  
 **[Spec §5.3, §6.1]**
@@ -206,7 +206,7 @@ Implement `vibrant/orchestrator/task_dispatch.py`:
 
 ---
 
-### Task 1.3 [x] — Git Worktree Manager
+### [x] Task 1.3 — Git Worktree Manager
 
 **Depends**: 0.2  
 **[Spec §12.1, §12.2, §12.3]**
@@ -377,7 +377,7 @@ Implement escalation pipeline:
 
 > **Goal**: Wire together Orchestrator + Provider + Gatekeeper for the full task execution loop.
 
-### Task 5.1 — Code Agent Lifecycle
+### [x] Task 5.1 — Code Agent Lifecycle
 
 **Depends**: 1.1, 1.2, 1.3, 2.2, 4.1  
 **[Spec §5.1, §8.2, §8.3]**
@@ -439,11 +439,11 @@ Implement merge conflict resolution:
 
 ---
 
-## Phase 6 — 4-Panel TUI
+## [x] Phase 6 — 4-Panel TUI
 
 > **Goal**: Replace the current 2-panel layout with the spec's 4-panel layout.
 
-### Task 6.1 — Panel A: Plan/Task Tree
+### [x] Task 6.1 — Panel A: Plan/Task Tree
 
 **Depends**: 3.2  
 **[Spec §7.3 Panel A]**
@@ -462,7 +462,7 @@ Implement `vibrant/tui/widgets/plan_tree.py`:
 
 ---
 
-### Task 6.2 — Panel B: Agent Output Streams
+### [x] Task 6.2 — Panel B: Agent Output Streams
 
 **Depends**: 2.3  
 **[Spec §7.3 Panel B]**
@@ -482,7 +482,7 @@ Implement `vibrant/tui/widgets/agent_output.py`:
 
 ---
 
-### Task 6.3 — Panel C: Consensus Pool View
+### [x] Task 6.3 — Panel C: Consensus Pool View
 
 **Depends**: 3.1  
 **[Spec §7.3 Panel C]**
@@ -498,8 +498,7 @@ Implement `vibrant/tui/widgets/consensus_view.py`:
 - Test: F3 opens full markdown view
 
 ---
-
-### Task 6.4 — Panel D: Chat/Q&A Panel
+### [x] Task 6.4 — Panel D: Chat/Q&A Panel
 
 **Depends**: 4.2  
 **[Spec §7.3 Panel D]**
@@ -519,7 +518,7 @@ Implement `vibrant/tui/widgets/chat_panel.py`:
 
 ---
 
-### Task 6.5 — 4-Panel Layout Assembly
+### [x] Task 6.5 — 4-Panel Layout Assembly
 
 **Depends**: 6.1, 6.2, 6.3, 6.4  
 **[Spec §7.2]**

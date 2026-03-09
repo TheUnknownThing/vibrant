@@ -51,6 +51,20 @@ def initialize_project(target_path: str | Path = ".") -> Path:
     return vibrant_dir
 
 
+def ensure_project_files(target_path: str | Path = ".") -> Path | None:
+    """Backfill missing files for an already-initialized ``.vibrant`` directory."""
+
+    project_root = Path(target_path).expanduser().resolve()
+    if project_root.name == DEFAULT_CONFIG_DIR:
+        project_root = project_root.parent
+
+    vibrant_dir = project_root / DEFAULT_CONFIG_DIR
+    if not vibrant_dir.exists():
+        return None
+
+    return initialize_project(project_root)
+
+
 def _write_if_missing(path: Path, content: str) -> None:
     if not path.exists():
         path.write_text(content, encoding="utf-8")
@@ -97,6 +111,7 @@ def _render_default_config() -> str:
         f"concurrency-limit = {config.concurrency_limit}",
         f"agent-timeout-seconds = {config.agent_timeout_seconds}",
         f'worktree-directory = "{config.worktree_directory}"',
+        f'execution-mode = "{config.execution_mode.value}"',
         "",
         "[validation]",
         "test-commands = []",

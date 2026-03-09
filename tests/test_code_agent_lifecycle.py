@@ -191,7 +191,7 @@ class FakeGatekeeper:
         self.failure_prompts: list[str] = ["Retry with guard clause."]
         self.escalation_question = "Should the task be broken down further?"
 
-    async def run(self, request: GatekeeperRequest) -> GatekeeperRunResult:
+    async def run(self, request: GatekeeperRequest, *, resume_latest_thread: bool | None = None) -> GatekeeperRunResult:
         self.requests.append(request)
         consensus_path = self.project_root / ".vibrant" / "consensus.md"
         roadmap_path = self.project_root / ".vibrant" / "roadmap.md"
@@ -217,6 +217,12 @@ class FakeGatekeeper:
             verdict = "escalate"
             consensus.questions = [self.escalation_question]
             questions = list(consensus.questions)
+        elif request.trigger in {GatekeeperTrigger.PROJECT_START, GatekeeperTrigger.USER_CONVERSATION}:
+            verdict = "planned"
+            consensus.status = ConsensusStatus.PLANNING
+            consensus.objectives = request.trigger_description
+            roadmap = RoadmapParser().parse(ROADMAP_TEXT)
+            plan_modified = True
 
         ConsensusWriter().write(consensus_path, consensus)
         RoadmapParser().write(roadmap_path, roadmap)
@@ -278,7 +284,25 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     assert record.provider.canonical_event_log is not None
     assert lifecycle.engine.state.total_agent_spawns == 1
     assert lifecycle.engine.state.active_agents == []
-    assert lifecycle.engine.state.status is OrchestratorStatus.EXECUTING
+    assert lifecycle.engine.state.status is OrchestratorStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_submit_gatekeeper_message_routes_initial_prompt_to_project_start(tmp_path):
+    repo = _init_repo(tmp_path)
+    initialize_project(repo)
+    gatekeeper = FakeGatekeeper(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    result = await lifecycle.submit_gatekeeper_message("Build an auth MVP for the app.")
+
+    assert result.request.trigger is GatekeeperTrigger.PROJECT_START
+    assert gatekeeper.requests[0].trigger is GatekeeperTrigger.PROJECT_START
+    assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
+
+    roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")
+    assert roadmap.tasks
+    assert roadmap.tasks[0].title == "Update the tracked file"
 
 
 @pytest.mark.asyncio

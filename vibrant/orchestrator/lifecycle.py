@@ -12,17 +12,18 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
-from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
-from vibrant.consensus import ConsensusParser, RoadmapDocument, RoadmapParser
+from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, load_config
+from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument, RoadmapParser
 from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.gatekeeper.gatekeeper import _extract_error_message, _extract_text_from_progress_item, _stop_adapter_safely
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
-from vibrant.models.consensus import ConsensusDocument
+from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.engine import OrchestratorEngine
 from vibrant.orchestrator.git_manager import GitManager, GitManagerError, GitMergeResult, GitWorktreeInfo
 from vibrant.orchestrator.task_dispatch import TaskDispatcher
+from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
@@ -79,6 +80,7 @@ class CodeAgentLifecycle:
         self.consensus_path = self.vibrant_dir / "consensus.md"
         self.skills_dir = self.vibrant_dir / "skills"
 
+        ensure_project_files(self.project_root)
         self.config = load_config(start_path=self.project_root)
         self.engine = engine or OrchestratorEngine.load(self.project_root)
         self.gatekeeper = gatekeeper or Gatekeeper(self.project_root)
@@ -89,6 +91,7 @@ class CodeAgentLifecycle:
         self.adapter_factory = adapter_factory or CodexProviderAdapter
         self.on_canonical_event = on_canonical_event
         self.consensus_parser = ConsensusParser()
+        self.consensus_writer = ConsensusWriter(parser=self.consensus_parser)
         self.roadmap_parser = RoadmapParser()
         self.roadmap_document: RoadmapDocument | None = None
         self.dispatcher: TaskDispatcher | None = None
@@ -98,6 +101,7 @@ class CodeAgentLifecycle:
     def reload_from_disk(self) -> RoadmapDocument:
         """Refresh consensus, roadmap, and derived dispatcher state from disk."""
 
+        self.config = load_config(start_path=self.project_root)
         self.engine.refresh_from_disk()
         if self.roadmap_path.exists():
             incoming = self.roadmap_parser.parse_file(self.roadmap_path)
@@ -115,6 +119,85 @@ class CodeAgentLifecycle:
         self.dispatcher.concurrency_limit = self.engine.state.concurrency_limit
         self._merge_roadmap_updates(incoming)
         return self.roadmap_document
+
+    @property
+    def execution_mode(self) -> RoadmapExecutionMode:
+        """Return the configured roadmap execution strategy."""
+
+        return self.config.execution_mode
+
+    async def _run_gatekeeper_request(
+        self,
+        request: GatekeeperRequest,
+        *,
+        resume_latest_thread: bool | None = None,
+    ) -> GatekeeperRunResult:
+        """Run the Gatekeeper with optional resume support when available."""
+
+        run_gatekeeper = self.gatekeeper.run
+        try:
+            signature = inspect.signature(run_gatekeeper)
+        except (TypeError, ValueError):
+            signature = None
+
+        if signature is not None and "resume_latest_thread" in signature.parameters:
+            return await run_gatekeeper(request, resume_latest_thread=resume_latest_thread)
+        return await run_gatekeeper(request)
+
+    async def submit_gatekeeper_message(self, text: str) -> GatekeeperRunResult:
+        """Route planning or escalation input to the Gatekeeper and refresh state."""
+
+        self.reload_from_disk()
+        message = text.strip()
+        if not message:
+            raise ValueError("Gatekeeper message cannot be empty")
+
+        if self.engine.state.pending_questions:
+            result = await self.engine.answer_pending_question(self.gatekeeper, answer=message)
+        else:
+            trigger = (
+                GatekeeperTrigger.PROJECT_START
+                if self.engine.state.status is OrchestratorStatus.INIT
+                else GatekeeperTrigger.USER_CONVERSATION
+            )
+            request = GatekeeperRequest(
+                trigger=trigger,
+                trigger_description=message,
+                agent_summary=message,
+            )
+            result = await self._run_gatekeeper_request(
+                request,
+                resume_latest_thread=trigger is GatekeeperTrigger.USER_CONVERSATION,
+            )
+            self.engine.apply_gatekeeper_result(result)
+
+        self._merge_roadmap_from_result(result)
+        self._persist_roadmap()
+        self._maybe_complete_workflow()
+        self.engine.refresh_from_disk()
+        return result
+
+    async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
+        """Keep executing ready tasks until user input, pause, completion, or exhaustion."""
+
+        results: list[CodeAgentLifecycleResult] = []
+        while True:
+            result = await self.execute_next_task()
+            if result is None:
+                break
+
+            results.append(result)
+            self._maybe_complete_workflow()
+
+            if result.outcome not in {"accepted", "retried"}:
+                break
+            if self.engine.state.pending_questions:
+                break
+            if self.engine.state.status in {OrchestratorStatus.PAUSED, OrchestratorStatus.COMPLETED}:
+                break
+
+        self._maybe_complete_workflow()
+        return results
 
     async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
         """Dispatch and execute the next eligible roadmap task."""
@@ -134,6 +217,7 @@ class CodeAgentLifecycle:
 
         task = self.dispatcher.dispatch_next_task()
         if task is None:
+            self._maybe_complete_workflow()
             self._persist_roadmap()
             return None
 
@@ -289,6 +373,7 @@ class CodeAgentLifecycle:
                 accepted_task = self.dispatcher.accept_task(completed_task.id)
                 self._persist_roadmap()
                 self._cleanup_worktree(completed_task.id)
+                self._maybe_complete_workflow()
                 return CodeAgentLifecycleResult(
                     task_id=accepted_task.id,
                     outcome="accepted",
@@ -585,6 +670,28 @@ class CodeAgentLifecycle:
             capture_output=True,
             check=False,
         )
+
+    def _maybe_complete_workflow(self) -> bool:
+        if self.roadmap_document is None or not self.roadmap_document.tasks:
+            return False
+        if any(task.status is not TaskStatus.ACCEPTED for task in self.roadmap_document.tasks):
+            return False
+        if self.engine.state.pending_questions or self.engine.state.active_agents:
+            return False
+
+        consensus_document = self.engine.consensus
+        if consensus_document is None and self.consensus_path.exists():
+            consensus_document = self.consensus_parser.parse_file(self.consensus_path)
+
+        if consensus_document is not None and consensus_document.status is not ConsensusStatus.COMPLETED:
+            updated = consensus_document.model_copy(deep=True)
+            updated.status = ConsensusStatus.COMPLETED
+            self.engine.consensus = self.consensus_writer.write(self.consensus_path, updated)
+            self.engine.refresh_from_disk()
+
+        if self.engine.state.status is not OrchestratorStatus.COMPLETED:
+            self.engine.transition_to(OrchestratorStatus.COMPLETED)
+        return True
 
 
 def _transition_terminal_agent(

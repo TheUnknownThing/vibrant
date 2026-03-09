@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from vibrant.consensus.writer import ConsensusWriter
+from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
@@ -49,8 +50,9 @@ class TestOrchestratorEngineTransitions:
             engine.transition_to(OrchestratorStatus.VALIDATING)
 
         engine.transition_to(OrchestratorStatus.EXECUTING)
+        engine.transition_to(OrchestratorStatus.COMPLETED)
         with pytest.raises(ValueError, match="Invalid orchestrator state transition"):
-            engine.transition_to(OrchestratorStatus.COMPLETED)
+            engine.transition_to(OrchestratorStatus.PLANNING)
 
     def test_paused_state_reachable_from_planning_and_executing(self, tmp_path):
         initialize_project(tmp_path)
@@ -63,6 +65,51 @@ class TestOrchestratorEngineTransitions:
         engine.transition_to(OrchestratorStatus.EXECUTING)
         engine.transition_to(OrchestratorStatus.PAUSED)
         assert engine.state.status is OrchestratorStatus.PAUSED
+
+
+
+
+def test_apply_gatekeeper_result_syncs_completed_status(tmp_path):
+    initialize_project(tmp_path)
+    engine = OrchestratorEngine.load(tmp_path)
+    engine.transition_to(OrchestratorStatus.PLANNING)
+    engine.transition_to(OrchestratorStatus.EXECUTING)
+
+    consensus = ConsensusWriter().write(
+        tmp_path / ".vibrant" / "consensus.md",
+        ConsensusDocument(
+            project="demo",
+            created_at=datetime(2026, 3, 8, 10, 0, tzinfo=timezone.utc),
+            updated_at=datetime(2026, 3, 8, 10, 15, tzinfo=timezone.utc),
+            version=2,
+            status=ConsensusStatus.COMPLETED,
+            objectives="Ship Phase 1.",
+            getting_started="Read the roadmap.",
+        ),
+    )
+
+    result = GatekeeperRunResult(
+        request=GatekeeperRequest(
+            trigger=GatekeeperTrigger.TASK_COMPLETION,
+            trigger_description="Task accepted.",
+        ),
+        prompt="gatekeeper prompt",
+        transcript="Verdict: accepted",
+        verdict="accepted",
+        questions=[],
+        consensus_updated=True,
+        roadmap_updated=False,
+        plan_modified=False,
+        consensus_document=consensus,
+        roadmap_document=None,
+        error=None,
+        turn_result=None,
+    )
+
+    engine.apply_gatekeeper_result(result)
+
+    assert engine.state.status is OrchestratorStatus.COMPLETED
+    assert engine.state.last_consensus_version == 2
 
 
 class TestOrchestratorEnginePersistence:

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Sequence
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
-from ...models import ThreadInfo
+from ...models import ItemInfo, ItemType, ThreadInfo, ThreadStatus, TurnInfo, TurnRole, TurnStatus
 from ...models.state import OrchestratorStatus
 from .conversation_view import ConversationView
 
@@ -24,6 +25,8 @@ class GatekeeperExchange:
 
 class ChatPanel(Static):
     """Conversation panel with Gatekeeper escalation context."""
+
+    GATEKEEPER_THREAD_ID = "__gatekeeper__"
 
     DEFAULT_CSS = """
     ChatPanel {
@@ -85,6 +88,12 @@ class ChatPanel(Static):
         self._status: OrchestratorStatus | str | None = None
         self._notification_token = 0
         self._gatekeeper_history: list[GatekeeperExchange] = []
+        self._gatekeeper_thread = ThreadInfo(
+            id=self.GATEKEEPER_THREAD_ID,
+            title="Gatekeeper",
+            status=ThreadStatus.IDLE,
+            model="gatekeeper",
+        )
         self._conversation: ConversationView | None = None
 
     def compose(self) -> ComposeResult:
@@ -100,6 +109,12 @@ class ChatPanel(Static):
 
         if self._conversation is not None:
             self._conversation.show_thread(thread)
+
+    def show_gatekeeper_thread(self) -> None:
+        """Render the synthetic Gatekeeper conversation thread."""
+
+        if self._conversation is not None:
+            self._conversation.show_thread(self._gatekeeper_thread)
 
     def update_streaming_text(self, text: str) -> None:
         """Forward live assistant text into the conversation history view."""
@@ -132,6 +147,23 @@ class ChatPanel(Static):
 
         return self._question_summary_text
 
+    @property
+    def has_gatekeeper_history(self) -> bool:
+        """Return whether the synthetic Gatekeeper conversation should be visible."""
+
+        normalized = self._normalized_status()
+        return bool(self._gatekeeper_thread.turns) or bool(self._pending_questions) or normalized in {
+            OrchestratorStatus.INIT.value,
+            OrchestratorStatus.PLANNING.value,
+        }
+
+    def get_gatekeeper_thread(self) -> ThreadInfo | None:
+        """Return a copy of the synthetic Gatekeeper thread for sidebar rendering."""
+
+        if not self.has_gatekeeper_history:
+            return None
+        return self._gatekeeper_thread.model_copy(deep=True)
+
     def set_gatekeeper_state(
         self,
         *,
@@ -143,6 +175,8 @@ class ChatPanel(Static):
 
         self._status = status
         self._pending_questions = tuple(question for question in pending_questions if question)
+        self._gatekeeper_thread.status = _gatekeeper_thread_status(status, self._pending_questions)
+        self._gatekeeper_thread.updated_at = datetime.now(timezone.utc)
 
         known_questions = {exchange.question for exchange in self._gatekeeper_history}
         for question in self._pending_questions:
@@ -162,17 +196,38 @@ class ChatPanel(Static):
     def record_gatekeeper_answer(self, question: str, answer: str) -> None:
         """Record the latest user answer for a Gatekeeper escalation."""
 
-        for exchange in reversed(self._gatekeeper_history):
-            if exchange.question == question and exchange.answer is None:
-                exchange.answer = answer
-                break
-        else:
-            self._gatekeeper_history.append(GatekeeperExchange(question=question, answer=answer))
+        self.record_gatekeeper_user_message(answer, question=question)
 
-        self._question_summary_text = _render_gatekeeper_summary(
-            self._gatekeeper_history,
-            pending_questions=self._pending_questions,
-        )
+    def record_gatekeeper_user_message(self, text: str, *, question: str | None = None) -> None:
+        """Append one user turn to the synthetic Gatekeeper conversation."""
+
+        normalized = text.strip()
+        if not normalized:
+            return
+
+        if question is not None:
+            for exchange in reversed(self._gatekeeper_history):
+                if exchange.question == question and exchange.answer is None:
+                    exchange.answer = normalized
+                    break
+            else:
+                self._gatekeeper_history.append(GatekeeperExchange(question=question, answer=normalized))
+
+            self._question_summary_text = _render_gatekeeper_summary(
+                self._gatekeeper_history,
+                pending_questions=self._pending_questions,
+            )
+
+        self._append_gatekeeper_turn(TurnRole.USER, normalized)
+        self._refresh_widgets()
+
+    def record_gatekeeper_response(self, text: str) -> None:
+        """Append one assistant turn to the synthetic Gatekeeper conversation."""
+
+        normalized = text.strip()
+        if not normalized:
+            return
+        self._append_gatekeeper_turn(TurnRole.ASSISTANT, normalized)
         self._refresh_widgets()
 
     def flash_question_notification(self) -> None:
@@ -202,6 +257,23 @@ class ChatPanel(Static):
             notice.display = False
         notice.set_class(bool(self._pending_questions), "has-pending-question")
 
+    def _append_gatekeeper_turn(self, role: TurnRole, content: str) -> None:
+        timestamp = datetime.now(timezone.utc)
+        turn = TurnInfo(
+            role=role,
+            status=TurnStatus.COMPLETED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            items=[ItemInfo(type=ItemType.TEXT, content=content)],
+        )
+        self._gatekeeper_thread.turns.append(turn)
+        self._gatekeeper_thread.updated_at = timestamp
+
+    def _normalized_status(self) -> str:
+        if isinstance(self._status, OrchestratorStatus):
+            return self._status.value
+        return str(self._status or "").strip().lower()
+
 
 
 def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_questions: bool) -> str:
@@ -216,6 +288,20 @@ def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_que
     if normalized == OrchestratorStatus.COMPLETED.value:
         return "Completed · Review history"
     return "Conversation threads"
+
+
+def _gatekeeper_thread_status(
+    status: OrchestratorStatus | str | None,
+    pending_questions: Sequence[str],
+) -> ThreadStatus:
+    normalized = status.value if isinstance(status, OrchestratorStatus) else str(status or "").strip().lower()
+    if pending_questions:
+        return ThreadStatus.IDLE
+    if normalized in {OrchestratorStatus.INIT.value, OrchestratorStatus.PLANNING.value}:
+        return ThreadStatus.RUNNING
+    if normalized == OrchestratorStatus.PAUSED.value:
+        return ThreadStatus.STOPPED
+    return ThreadStatus.IDLE
 
 
 

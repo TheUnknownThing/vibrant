@@ -71,7 +71,7 @@ class ThreadList(Static):
         self._items_map: dict[str, int] = {}  # thread_id → index
 
     def compose(self) -> ComposeResult:
-        yield Static("[b]Threads[/b]", id="thread-list-header", markup=True)
+        yield Static("[b]Conversations[/b]", id="thread-list-header", markup=True)
         self._list_view = ListView(id="thread-listview")
         yield self._list_view
 

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 from textual.app import App, ComposeResult
 
+from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus import RoadmapDocument
 from vibrant.models import AppSettings, ItemInfo, ItemType, ThreadInfo, ThreadStatus, TurnInfo, TurnRole
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus
@@ -89,6 +90,50 @@ class FakeLifecycle:
 
     def reload_from_disk(self) -> RoadmapDocument:
         return RoadmapDocument(project=self.project_root.name, tasks=[])
+
+
+class FakePlanningEngine:
+    USER_INPUT_BANNER = "⚠ Gatekeeper needs your input — see Chat panel"
+
+    def __init__(self) -> None:
+        self.agents = {}
+        self.consensus = None
+        self.consensus_path = None
+        self.notification_bell_enabled = False
+        self.state = OrchestratorState(
+            session_id="session-2",
+            status=OrchestratorStatus.INIT,
+            gatekeeper_status=GatekeeperStatus.IDLE,
+            pending_questions=[],
+        )
+
+
+class FakePlanningLifecycle:
+    execution_mode = RoadmapExecutionMode.MANUAL
+
+    def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
+        self.project_root = Path(project_root)
+        self.on_canonical_event = on_canonical_event
+        self.engine = FakePlanningEngine()
+        self.gatekeeper = object()
+        self.messages: list[str] = []
+        self.execute_until_blocked_calls = 0
+
+    def reload_from_disk(self) -> RoadmapDocument:
+        return RoadmapDocument(project=self.project_root.name, tasks=[])
+
+    async def submit_gatekeeper_message(self, text: str):
+        self.messages.append(text)
+        self.engine.state.status = OrchestratorStatus.PLANNING
+        return SimpleNamespace(transcript="Plan drafted")
+
+    async def execute_until_blocked(self):
+        self.execute_until_blocked_calls += 1
+        return []
+
+
+class FakeAutomaticPlanningLifecycle(FakePlanningLifecycle):
+    execution_mode = RoadmapExecutionMode.AUTOMATIC
 
 
 
@@ -214,3 +259,62 @@ async def test_app_thread_switching_updates_chat_panel(tmp_path: Path):
         await pilot.press("ctrl+t")
         await pilot.pause()
         assert panel.current_thread_id == "thread-2"
+
+
+
+@pytest.mark.asyncio
+async def test_app_routes_initial_prompt_to_gatekeeper_on_init(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    thread_one = _thread("thread-1", "first user prompt", "first assistant reply")
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    session_manager = FakeSessionManager([thread_one])
+    app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=session_manager,
+        lifecycle_factory=FakePlanningLifecycle,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel = app.query_one(ChatPanel)
+        assert panel.current_thread_id == ChatPanel.GATEKEEPER_THREAD_ID
+
+        await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+        await pilot.pause()
+
+        lifecycle = app._lifecycle  # noqa: SLF001 - verify wiring
+        assert lifecycle is not None
+        assert lifecycle.messages == ["Build an auth MVP."]
+        assert session_manager.sent_messages == []
+        assert panel.current_thread_id == ChatPanel.GATEKEEPER_THREAD_ID
+        gatekeeper_thread = panel.get_gatekeeper_thread()
+        assert gatekeeper_thread is not None
+        assert [turn.items[0].content for turn in gatekeeper_thread.turns] == ["Build an auth MVP.", "Plan drafted"]
+
+
+@pytest.mark.asyncio
+async def test_app_automatic_mode_runs_workflow_after_gatekeeper_update(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=FakeSessionManager(),
+        lifecycle_factory=FakeAutomaticPlanningLifecycle,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+        await pilot.pause(0.2)
+
+        lifecycle = app._lifecycle  # noqa: SLF001 - verify wiring
+        assert lifecycle is not None
+        assert lifecycle.execute_until_blocked_calls == 1
