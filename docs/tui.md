@@ -4,7 +4,7 @@
 
 The TUI of project Vibrant requires a redesign to enhance user experience. The details of the new user interface are outlined below.
 
-## Initization Screen
+## Initization Screen (Finished)
 
 Upon entering the software, it will check whether the present directory has been initialized. If so, it will directly enter the planning screen or the vibing screen, depending on the state of the project. If not, initialization screen will be shown.
 
@@ -13,6 +13,8 @@ The initialization screen has a logo in the top, and three options listed below:
 - Initialize Project Here
 - Initialize Project (Select Directory)
 - Exit
+
+When choosing a directory, the path input should support filesystem autocomplete with a dropdown list so users can quickly select an existing folder.
 
 ## Planning Screen
 

@@ -13,14 +13,14 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Markdown, Static
+from textual.widgets import Button, Footer, Header, Input, Label, Markdown, Static
 
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..consensus import ConsensusParser, ConsensusWriter
 from ..history import HistoryStore
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo, ThreadStatus
 from ..orchestrator import CodeAgentLifecycle, CodeAgentLifecycleResult
-from ..project_init import ensure_project_files
+from ..project_init import ensure_project_files, initialize_project
 from ..session_manager import (
     ApprovalRequested,
     ItemAdded,
@@ -35,6 +35,7 @@ from .widgets.agent_output import AgentOutput
 from .widgets.chat_panel import ChatPanel
 from .widgets.consensus_view import ConsensusView
 from .widgets.input_bar import InputBar
+from .widgets.path_autocomplete import PathAutocomplete
 from .widgets.plan_tree import PlanTree
 from .widgets.settings_panel import SettingsPanel
 from .widgets.thread_list import ThreadList
@@ -109,6 +110,212 @@ Press `Esc` or `F1` to close this help.
 
     def action_close_help(self) -> None:
         self.dismiss(None)
+
+
+class DirectorySelectionScreen(ModalScreen[Path | None]):
+    """Prompt for selecting a directory to initialize."""
+
+    CSS = """
+    DirectorySelectionScreen {
+        align: center middle;
+        background: $surface 92%;
+    }
+
+    #directory-selection-modal {
+        width: 72;
+        height: auto;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #directory-selection-title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #directory-selection-path {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+
+    .directory-selection-button {
+        width: 1fr;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "submit", "Initialize", show=False),
+    ]
+
+    def __init__(self, initial_path: str | Path) -> None:
+        super().__init__(id="directory-selection-screen")
+        self._initial_path = Path(initial_path).expanduser().resolve()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="directory-selection-modal"):
+            yield Static("Initialize Project", id="directory-selection-title")
+            yield Label("Directory", classes="setting-label")
+            yield Static(
+                "Choose an existing directory to place the `.vibrant` workspace in.",
+                id="directory-selection-path",
+            )
+            yield PathAutocomplete(
+                value=str(self._initial_path),
+                base_path=self._initial_path.parent,
+                directories_only=True,
+                id="directory-selection-input",
+            )
+            yield Button("Initialize", variant="primary", id="directory-selection-confirm", classes="directory-selection-button")
+            yield Button("Cancel", id="directory-selection-cancel", classes="directory-selection-button")
+
+    def on_mount(self) -> None:
+        self.query_one("#directory-selection-input", PathAutocomplete).focus_input()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "directory-selection-confirm":
+            self.action_submit()
+        elif event.button.id == "directory-selection-cancel":
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_submit(self) -> None:
+        raw_value = self.query_one("#directory-selection-input", PathAutocomplete).value.strip()
+        if not raw_value:
+            self.notify("Enter a directory path first.", severity="warning")
+            return
+
+        selected_path = Path(raw_value).expanduser()
+        if not selected_path.exists():
+            self.notify(f"Directory does not exist: {selected_path}", severity="error")
+            return
+        if not selected_path.is_dir():
+            self.notify(f"Path is not a directory: {selected_path}", severity="error")
+            return
+
+        self.dismiss(selected_path.resolve())
+
+
+class InitializationScreen(ModalScreen[None]):
+    """Full-screen entry flow for uninitialized workspaces."""
+
+    CSS = """
+    InitializationScreen {
+        align: center middle;
+        background: $surface 100%;
+    }
+
+    #initialization-shell {
+        width: 78;
+        height: auto;
+        padding: 2 3;
+        border: heavy $primary;
+        background: $surface;
+    }
+
+    #initialization-logo {
+        text-align: center;
+        color: $accent;
+        margin-bottom: 1;
+    }
+
+    #initialization-title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #initialization-path {
+        color: $text-muted;
+        text-align: center;
+        margin-bottom: 2;
+    }
+
+    .initialization-option {
+        width: 1fr;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("1", "initialize_here", "Init Here", show=False),
+        Binding("2", "select_directory", "Choose Dir", show=False),
+        Binding("3", "exit_app", "Exit", show=False),
+    ]
+
+    _LOGO = """
+██╗   ██╗██╗██████╗ ██████╗  █████╗ ███╗   ██╗████████╗
+██║   ██║██║██╔══██╗██╔══██╗██╔══██╗████╗  ██║╚══██╔══╝
+██║   ██║██║██████╔╝██████╔╝███████║██╔██╗ ██║   ██║   
+╚██╗ ██╔╝██║██╔══██╗██╔══██╗██╔══██║██║╚██╗██║   ██║   
+ ╚████╔╝ ██║██████╔╝██║  ██║██║  ██║██║ ╚████║   ██║   
+  ╚═══╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   
+"""
+
+    def __init__(self, current_directory: str | Path) -> None:
+        super().__init__(id="initialization-screen")
+        self._current_directory = Path(current_directory).expanduser().resolve()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="initialization-shell"):
+            yield Static(self._LOGO, id="initialization-logo")
+            yield Static("This workspace is not initialized yet.", id="initialization-title")
+            yield Static(
+                f"Workspace: {self._current_directory}",
+                id="initialization-path",
+            )
+            yield Button(
+                "Initialize Project Here",
+                variant="primary",
+                id="initialize-here-button",
+                classes="initialization-option",
+            )
+            yield Button(
+                "Initialize Project (Select Directory)",
+                id="initialize-select-button",
+                classes="initialization-option",
+            )
+            yield Button("Exit", variant="error", id="initialize-exit-button", classes="initialization-option")
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "initialize-here-button":
+            await self.action_initialize_here()
+        elif event.button.id == "initialize-select-button":
+            await self.action_select_directory()
+        elif event.button.id == "initialize-exit-button":
+            self.action_exit_app()
+
+    async def action_initialize_here(self) -> None:
+        await self._initialize_directory(self._current_directory)
+
+    async def action_select_directory(self) -> None:
+        self.app.push_screen(
+            DirectorySelectionScreen(self._current_directory),
+            callback=self._on_directory_selected,
+        )
+
+    def _on_directory_selected(self, selected_path: Path | None) -> None:
+        if selected_path is None:
+            return
+        asyncio.create_task(self._initialize_directory(selected_path), name="vibrant-init-selected-directory")
+
+    def action_exit_app(self) -> None:
+        self.app.exit()
+
+    async def _initialize_directory(self, target_path: Path) -> None:
+        initialize_for_app = getattr(self.app, "initialize_project_at", None)
+        if not callable(initialize_for_app):
+            self.notify("Initialization is unavailable in this app instance.", severity="error")
+            return
+
+        initialized = await initialize_for_app(target_path)
+        if initialized:
+            self.dismiss(None)
 
 
 class VibrantApp(App):
@@ -326,6 +533,10 @@ class VibrantApp(App):
         self._refresh_thread_list()
         self._initialize_project_lifecycle()
         self._refresh_project_views()
+        if not self._project_has_vibrant_state():
+            self._set_status("Project not initialized")
+            self.push_screen(InitializationScreen(self._project_root))
+            return
         self.query_one(InputBar).focus_input()
 
     async def on_unmount(self) -> None:
@@ -373,7 +584,31 @@ class VibrantApp(App):
             self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
             self._initialize_project_lifecycle()
             self._refresh_project_views()
+            if not self._project_has_vibrant_state():
+                self._set_status("Project not initialized")
+                self.push_screen(InitializationScreen(self._project_root))
+                return
+            self.query_one(InputBar).focus_input()
             self._set_status("Settings updated")
+
+    async def initialize_project_at(self, target_path: str | Path) -> bool:
+        try:
+            vibrant_dir = initialize_project(target_path)
+        except Exception as exc:
+            logger.exception("Failed to initialize Vibrant project")
+            self.notify(f"Failed to initialize project: {exc}", severity="error")
+            self._set_status(f"Initialization failed: {exc}")
+            return False
+
+        project_root = vibrant_dir.parent
+        self._settings.default_cwd = str(project_root)
+        self._project_root = project_root
+        self._initialize_project_lifecycle()
+        self._refresh_project_views()
+        self._set_status(f"Initialized Vibrant project in {project_root}")
+        self.notify(f"Initialized Vibrant project in {project_root}")
+        self.call_after_refresh(self._focus_primary_input)
+        return True
 
     def action_open_help(self) -> None:
         self.push_screen(HelpScreen())
@@ -448,12 +683,21 @@ class VibrantApp(App):
 
         try:
             if automatic:
-                results = await self._lifecycle.execute_until_blocked()
-                if not results:
-                    if notify_when_idle:
-                        self._handle_task_result(None)
+                execute_until_blocked = getattr(self._lifecycle, "execute_until_blocked", None)
+                if callable(execute_until_blocked):
+                    results = await execute_until_blocked()
+                    if not results:
+                        if notify_when_idle:
+                            self._handle_task_result(None)
+                    else:
+                        self._handle_task_results(results)
                 else:
-                    self._handle_task_results(results)
+                    result = await self._lifecycle.execute_next_task()
+                    if result is None:
+                        if notify_when_idle:
+                            self._handle_task_result(None)
+                    else:
+                        self._handle_task_result(result)
             else:
                 result = await self._lifecycle.execute_next_task()
                 if result is None:
@@ -714,6 +958,13 @@ class VibrantApp(App):
             self._lifecycle = None
             self._gatekeeper_focus_initialized = False
             self.notify(f"Failed to load project state: {exc}", severity="error")
+
+    def _project_has_vibrant_state(self) -> bool:
+        return (self._project_root / DEFAULT_CONFIG_DIR).exists()
+
+    def _focus_primary_input(self) -> None:
+        with suppress(Exception):
+            self.query_one(InputBar).focus_input()
 
     def _refresh_project_views(self) -> None:
         plan_tree = self.query_one(PlanTree)

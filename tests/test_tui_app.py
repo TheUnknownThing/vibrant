@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
-from textual.widgets import Static
+from textual.widgets import Input, OptionList, Static
 
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
 from vibrant.models import AppSettings, ConsensusStatus, OrchestratorStatus
 from vibrant.orchestrator import OrchestratorEngine
 from vibrant.project_init import initialize_project
-from vibrant.tui.app import HelpScreen, VibrantApp
+from vibrant.tui.app import HelpScreen, InitializationScreen, VibrantApp
+from vibrant.tui.widgets.path_autocomplete import PathAutocomplete
 
 
 class FakeSessionManager:
@@ -105,6 +107,104 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
         await pilot.press("f1")
         await pilot.pause()
         assert isinstance(app.screen, HelpScreen)
+
+
+@pytest.mark.asyncio
+async def test_uninitialized_workspace_shows_initialization_screen(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, InitializationScreen)
+        assert app.screen.query_one("#initialize-here-button") is not None
+        assert app.screen.query_one("#initialize-select-button") is not None
+
+
+@pytest.mark.asyncio
+async def test_initialization_screen_can_initialize_current_workspace(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, InitializationScreen)
+
+        await app.screen.action_initialize_here()
+        await pilot.pause()
+
+        assert (repo / ".vibrant").is_dir()
+        assert not isinstance(app.screen, InitializationScreen)
+        assert app._lifecycle is not None  # noqa: SLF001 - verifies app reloaded lifecycle
+
+
+@pytest.mark.asyncio
+async def test_initialization_screen_can_initialize_selected_workspace(tmp_path: Path):
+    current_repo = tmp_path / "current"
+    target_repo = tmp_path / "target"
+    current_repo.mkdir()
+    target_repo.mkdir()
+
+    settings = AppSettings(default_cwd=str(current_repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(current_repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, InitializationScreen)
+
+        app.screen._on_directory_selected(target_repo)  # noqa: SLF001 - verifies callback wiring
+        await pilot.pause()
+        await pilot.pause()
+
+        assert (target_repo / ".vibrant").is_dir()
+        assert not isinstance(app.screen, InitializationScreen)
+        assert app._project_root == target_repo  # noqa: SLF001 - verifies selected directory became active
+
+
+@pytest.mark.asyncio
+async def test_directory_selection_screen_autocompletes_directories_only(tmp_path: Path):
+    current_repo = tmp_path / "current"
+    target_alpha = tmp_path / "target-alpha"
+    target_beta = tmp_path / "target-beta"
+    ignored_file = tmp_path / "target-file.txt"
+    current_repo.mkdir()
+    target_alpha.mkdir()
+    target_beta.mkdir()
+    ignored_file.write_text("ignore me", encoding="utf-8")
+
+    settings = AppSettings(default_cwd=str(current_repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(current_repo), session_manager=FakeSessionManager())
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, InitializationScreen)
+
+        await app.screen.action_select_directory()
+        await pilot.pause()
+
+        path_input = app.screen.query_one("#directory-selection-input", PathAutocomplete)
+        input_widget = path_input.query_one(Input)
+        option_list = path_input.query_one(OptionList)
+
+        input_widget.value = str(tmp_path / "target")
+        await pilot.pause()
+
+        prompts = [str(option.prompt) for option in option_list.options]
+        assert option_list.display is True
+        assert f"{target_alpha.resolve()}{os.sep}" in prompts
+        assert f"{target_beta.resolve()}{os.sep}" in prompts
+        assert str(ignored_file.resolve()) not in prompts
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert Path(path_input.value).resolve() == target_alpha.resolve()
 
 
 @pytest.mark.asyncio
