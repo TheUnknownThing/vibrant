@@ -12,11 +12,13 @@ from typing import Any, Callable
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Grid, Vertical
-from textual.widgets import Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import Footer, Header, Markdown, Static
 
 from ..config import DEFAULT_CONFIG_DIR, find_project_root
+from ..consensus import ConsensusParser, ConsensusWriter
 from ..history import HistoryStore
-from ..models import AppSettings, OrchestratorStatus, ThreadInfo, ThreadStatus
+from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo, ThreadStatus
 from ..orchestrator import CodeAgentLifecycle, CodeAgentLifecycleResult
 from ..session_manager import (
     ApprovalRequested,
@@ -38,6 +40,74 @@ from .widgets.thread_list import ThreadList
 
 logger = logging.getLogger(__name__)
 LifecycleFactory = Callable[..., CodeAgentLifecycle]
+
+_WORKFLOW_TO_CONSENSUS = {
+    OrchestratorStatus.INIT: ConsensusStatus.INIT,
+    OrchestratorStatus.PLANNING: ConsensusStatus.PLANNING,
+    OrchestratorStatus.EXECUTING: ConsensusStatus.EXECUTING,
+    OrchestratorStatus.PAUSED: ConsensusStatus.PAUSED,
+    OrchestratorStatus.COMPLETED: ConsensusStatus.COMPLETED,
+}
+
+
+class HelpScreen(ModalScreen[None]):
+    """Modal help overlay for the 4-panel workspace."""
+
+    CSS = """
+    HelpScreen {
+        align: center middle;
+    }
+
+    #help-markdown {
+        width: 72%;
+        height: 78%;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close_help", "Close"),
+        Binding("f1", "close_help", "Close", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Markdown(
+            """# Vibrant Help
+
+## Workspace
+- **Panel A**: roadmap task tree (`Enter` opens task details)
+- **Panel B**: active agent output stream (`F5` cycles agents)
+- **Panel C**: consensus summary (`F3` opens full markdown)
+- **Panel D**: conversation threads and Gatekeeper Q&A
+
+## Keys
+- `F1` help
+- `F2` pause / resume workflow
+- `F3` open consensus overlay
+- `F5` switch active agent output
+- `F10` quit
+
+## Shortcuts
+- `Ctrl+N` new thread
+- `Ctrl+T` next conversation thread
+- `Ctrl+S` settings
+- `F6` run next roadmap task
+
+## Commands
+- `/run` execute the next roadmap task
+- `/refresh` reload roadmap, consensus, and thread state
+- `/logs` show provider log paths
+- `/settings` open application settings
+
+Press `Esc` or `F1` to close this help.
+""",
+            id="help-markdown",
+        )
+
+    def action_close_help(self) -> None:
+        self.dismiss(None)
 
 
 class VibrantApp(App):
@@ -170,6 +240,14 @@ class VibrantApp(App):
         padding: 0;
     }
 
+    #notification-banner {
+        display: none;
+        height: auto;
+        padding: 0 1;
+        background: $warning;
+        color: $text;
+    }
+
     #status-bar {
         dock: bottom;
         height: 1;
@@ -180,14 +258,17 @@ class VibrantApp(App):
     """
 
     BINDINGS = [
-        Binding("ctrl+n", "new_thread", "New Thread", show=True),
-        Binding("ctrl+t", "cycle_thread", "Next Thread", show=True),
-        Binding("ctrl+s", "open_settings", "Settings", show=True),
+        Binding("f1", "open_help", "Help", show=True),
+        Binding("f2", "toggle_pause", "Pause", show=True),
         Binding("f3", "open_consensus_overlay", "Consensus", show=True),
-        Binding("f5", "cycle_agent_output", "Next Agent", show=True),
-        Binding("f6", "run_next_task", "Run Task", show=True),
+        Binding("f5", "cycle_agent_output", "Switch Agent", show=True),
+        Binding("f10", "quit_app", "Quit", show=True),
+        Binding("ctrl+n", "new_thread", "New Thread", show=False),
+        Binding("ctrl+t", "cycle_thread", "Next Thread", show=False),
+        Binding("ctrl+s", "open_settings", "Settings", show=False),
+        Binding("f6", "run_next_task", "Run Task", show=False),
         Binding("ctrl+d", "delete_thread", "Delete Thread", show=False),
-        Binding("ctrl+q", "quit_app", "Quit", show=True),
+        Binding("ctrl+q", "quit_app", "Quit", show=False),
     ]
 
     def __init__(
@@ -212,9 +293,12 @@ class VibrantApp(App):
         self._task_execution_in_progress = False
         self._task_refresh_loop: asyncio.Task[None] | None = None
         self._known_pending_questions: tuple[str, ...] = ()
+        self._paused_return_status: OrchestratorStatus | None = None
+        self._banner_text: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Static("", id="notification-banner")
         with Grid(id="workspace-grid"):
             yield PlanTree(id="plan-panel")
             yield AgentOutput(id="agent-output-panel")
@@ -223,7 +307,7 @@ class VibrantApp(App):
                 yield ThreadList(id="thread-panel")
                 yield ChatPanel(id="conversation-panel")
                 yield InputBar(id="input-panel")
-        yield Static("Ready · F6 run next task · Enter inspect task · Ctrl+Q quit", id="status-bar")
+        yield Static("Ready", id="status-bar")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -289,6 +373,46 @@ class VibrantApp(App):
             self._refresh_project_views()
             self._set_status("Settings updated")
 
+    def action_open_help(self) -> None:
+        self.push_screen(HelpScreen())
+
+    def action_toggle_pause(self) -> None:
+        if self._lifecycle is None:
+            self.notify(
+                f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
+                severity="warning",
+            )
+            return
+
+        engine = self._lifecycle.engine
+        current_status = engine.state.status
+        normalized_status = _normalize_orchestrator_status(current_status)
+        if normalized_status is OrchestratorStatus.PAUSED:
+            next_status = self._paused_return_status or self._infer_resume_status()
+        elif normalized_status in {OrchestratorStatus.PLANNING, OrchestratorStatus.EXECUTING}:
+            self._paused_return_status = normalized_status
+            next_status = OrchestratorStatus.PAUSED
+        else:
+            label = normalized_status.value if normalized_status is not None else str(current_status)
+            self.notify(f"Cannot toggle pause from {label}.", severity="warning")
+            return
+
+        try:
+            self._transition_workflow_state(next_status)
+        except Exception as exc:
+            logger.exception("Failed to toggle workflow pause state")
+            self.notify(f"Failed to update workflow state: {exc}", severity="error")
+            self._set_status(f"Workflow update failed: {exc}")
+            return
+
+        if next_status is OrchestratorStatus.PAUSED:
+            self._set_status("Workflow paused")
+            self.notify("Workflow paused.")
+        else:
+            self._paused_return_status = None
+            self._set_status(f"Workflow resumed ({next_status.value})")
+            self.notify(f"Workflow resumed ({next_status.value}).")
+        self._refresh_project_views()
 
     def action_cycle_agent_output(self) -> None:
         self.query_one(AgentOutput).action_cycle_agent()
@@ -645,37 +769,105 @@ class VibrantApp(App):
             state = getattr(engine, "state", None)
             status = getattr(state, "status", None)
 
+        normalized_status = _normalize_orchestrator_status(status)
+        if normalized_status in {OrchestratorStatus.PLANNING, OrchestratorStatus.EXECUTING}:
+            self._paused_return_status = normalized_status
         new_questions = [question for question in questions if question not in self._known_pending_questions]
         flash = force_flash or bool(new_questions)
-        chat_panel.set_gatekeeper_state(status=status, pending_questions=questions, flash=flash)
+        chat_panel.set_gatekeeper_state(status=normalized_status or status, pending_questions=questions, flash=flash)
 
         if questions:
+            banner = getattr(
+                getattr(self._lifecycle, "engine", None),
+                "USER_INPUT_BANNER",
+                "⚠ Gatekeeper needs your input — see Chat panel",
+            )
+            self._set_banner(banner)
             input_bar.set_enabled(True)
             input_bar.set_context("gatekeeper", "awaiting answer")
             if flash:
-                banner = getattr(
-                    getattr(self._lifecycle, "engine", None),
-                    "USER_INPUT_BANNER",
-                    "⚠ Gatekeeper needs your input — see Chat panel",
-                )
                 self.notify(banner, severity="warning")
                 self._set_status(banner)
                 if bool(getattr(getattr(self._lifecycle, "engine", None), "notification_bell_enabled", False)):
                     with suppress(Exception):
                         self.bell()
-        elif self._active_thread_id:
-            thread = self._session_manager.get_thread(self._active_thread_id)
-            if thread is not None:
-                input_bar.set_context(thread.model, thread.status.value)
-                input_bar.set_enabled(thread.status != ThreadStatus.RUNNING)
-        elif status is OrchestratorStatus.PLANNING:
-            input_bar.set_enabled(True)
-            input_bar.set_context("gatekeeper", "planning")
         else:
-            input_bar.set_enabled(True)
-            input_bar.set_context(None, "")
+            self._set_banner(None)
+            if self._active_thread_id:
+                thread = self._session_manager.get_thread(self._active_thread_id)
+                if thread is not None:
+                    input_bar.set_context(thread.model, thread.status.value)
+                    input_bar.set_enabled(thread.status != ThreadStatus.RUNNING)
+            elif normalized_status is OrchestratorStatus.PLANNING:
+                input_bar.set_enabled(True)
+                input_bar.set_context("gatekeeper", "planning")
+            elif normalized_status is OrchestratorStatus.PAUSED:
+                input_bar.set_enabled(True)
+                input_bar.set_context("workflow", "paused")
+            else:
+                input_bar.set_enabled(True)
+                input_bar.set_context(None, "")
 
         self._known_pending_questions = tuple(questions)
+
+    def _infer_resume_status(self) -> OrchestratorStatus:
+        if self._lifecycle is None:
+            return OrchestratorStatus.EXECUTING
+
+        consensus = getattr(self._lifecycle.engine, "consensus", None)
+        if consensus is not None:
+            mapped = {
+                ConsensusStatus.PLANNING: OrchestratorStatus.PLANNING,
+                ConsensusStatus.EXECUTING: OrchestratorStatus.EXECUTING,
+            }.get(consensus.status)
+            if mapped is not None:
+                return mapped
+
+        roadmap_document = getattr(self._lifecycle, "roadmap_document", None)
+        if roadmap_document is None:
+            roadmap_document = self._lifecycle.reload_from_disk()
+        return OrchestratorStatus.EXECUTING if getattr(roadmap_document, "tasks", None) else OrchestratorStatus.PLANNING
+
+    def _transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
+        if self._lifecycle is None:
+            raise RuntimeError("Project lifecycle is not initialized")
+
+        engine = self._lifecycle.engine
+        if not engine.can_transition_to(next_status):
+            current = engine.state.status.value
+            raise ValueError(f"Invalid orchestrator state transition: {current} -> {next_status.value}")
+
+        consensus_document = getattr(engine, "consensus", None)
+        consensus_path = Path(getattr(engine, "consensus_path", self._project_root / DEFAULT_CONFIG_DIR / "consensus.md"))
+        target_consensus_status = _WORKFLOW_TO_CONSENSUS.get(next_status)
+
+        if target_consensus_status is not None and consensus_path.exists():
+            document = consensus_document
+            if document is None:
+                document = ConsensusParser().parse_file(consensus_path)
+            updated_document = document.model_copy(deep=True)
+            updated_document.status = target_consensus_status
+            engine.consensus = ConsensusWriter().write(consensus_path, updated_document)
+
+        engine.transition_to(next_status)
+        engine.refresh_from_disk()
+
+    def _set_banner(self, text: str | None) -> None:
+        self._banner_text = text.strip() if text else None
+        try:
+            banner = self.query_one("#notification-banner", Static)
+        except Exception:
+            return
+
+        if self._banner_text:
+            banner.update(self._banner_text)
+            banner.display = True
+        else:
+            banner.update("")
+            banner.display = False
+
+    def get_banner_text(self) -> str | None:
+        return self._banner_text
 
     def _set_status(self, text: str) -> None:
         try:
@@ -703,3 +895,15 @@ class VibrantApp(App):
                 await asyncio.sleep(0.2)
         except asyncio.CancelledError:
             raise
+
+
+def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
+    if isinstance(status, OrchestratorStatus):
+        return status
+    if isinstance(status, str):
+        normalized = status.strip().lower()
+        try:
+            return OrchestratorStatus(normalized)
+        except ValueError:
+            return None
+    return None
