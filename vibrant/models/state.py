@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -50,6 +51,24 @@ class OrchestratorState(BaseModel):
     failed_tasks: list[str] = Field(default_factory=list)
     total_agent_spawns: int = 0
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+
+        data = dict(value)
+
+        if "provider_runtime" not in data:
+            legacy_threads = data.pop("provider_threads", None)
+            if isinstance(legacy_threads, list):
+                data["provider_runtime"] = _legacy_provider_runtime(legacy_threads)
+        else:
+            data.pop("provider_threads", None)
+
+        data.pop("pending_requests", None)
+        return data
+
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: object) -> object:
@@ -71,3 +90,30 @@ class OrchestratorState(BaseModel):
         if self.total_agent_spawns < 0:
             raise ValueError("total_agent_spawns must be >= 0")
         return self
+
+
+def _legacy_provider_runtime(items: list[object]) -> dict[str, ProviderRuntimeState]:
+    runtime: dict[str, ProviderRuntimeState] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        owner_agent_id = item.get("owner_agent_id")
+        if not isinstance(owner_agent_id, str) or not owner_agent_id:
+            continue
+
+        runtime[owner_agent_id] = ProviderRuntimeState(
+            status=_legacy_runtime_status(item),
+            provider_thread_id=_legacy_provider_thread_id(item),
+        )
+    return runtime
+
+
+def _legacy_runtime_status(item: dict[str, Any]) -> str:
+    value = item.get("runtime_state") or item.get("status") or "ready"
+    return value if isinstance(value, str) and value else "ready"
+
+
+def _legacy_provider_thread_id(item: dict[str, Any]) -> str | None:
+    value = item.get("provider_thread_id")
+    return value if isinstance(value, str) and value else None

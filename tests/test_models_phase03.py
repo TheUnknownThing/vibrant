@@ -66,6 +66,44 @@ class TestAgentRecord:
         with pytest.raises(ValueError, match="Invalid agent status transition"):
             record.transition_to(AgentStatus.RUNNING)
 
+    def test_legacy_agent_record_is_migrated(self):
+        record = AgentRecord.model_validate(
+            {
+                "agent_id": "agent-gatekeeper-user_discussion-001",
+                "agent_kind": "gatekeeper",
+                "status": "running",
+                "task_id": None,
+                "branch_name": None,
+                "provider_binding": {
+                    "provider_name": "codex",
+                    "transport_name": "app-server-json-rpc",
+                    "runtime_state": "running",
+                    "runtime_mode": "workspace_write",
+                    "provider_thread_id": "thread-123",
+                    "resume_token": {
+                        "threadId": "thread-123",
+                        "threadPath": "/tmp/thread-123.jsonl",
+                    },
+                    "native_event_log_path": ".vibrant/logs/providers/native/agent.ndjson",
+                    "canonical_event_log_path": ".vibrant/logs/providers/canonical/agent.ndjson",
+                },
+                "pending_requests": [],
+                "validation_result": None,
+            }
+        )
+
+        assert record.type is AgentType.GATEKEEPER
+        assert record.task_id == "gatekeeper-user_discussion"
+        assert record.provider.kind == "codex"
+        assert record.provider.transport == "app-server-json-rpc"
+        assert record.provider.runtime_mode == "workspace-write"
+        assert record.provider.provider_thread_id == "thread-123"
+        assert record.provider.resume_cursor == {
+            "threadId": "thread-123",
+            "threadPath": "/tmp/thread-123.jsonl",
+        }
+        assert record.provider.thread_path == "/tmp/thread-123.jsonl"
+
 
 class TestOrchestratorState:
     def test_round_trip_serialize_deserialize(self):
@@ -102,6 +140,29 @@ class TestOrchestratorState:
         )
 
         assert state.status is OrchestratorStatus.EXECUTING
+
+    def test_legacy_provider_threads_are_migrated(self):
+        state = OrchestratorState.model_validate(
+            {
+                "session_id": "session-123",
+                "status": "executing",
+                "pending_requests": [],
+                "provider_threads": [
+                    {
+                        "owner_agent_id": "agent-task-001",
+                        "runtime_state": "running",
+                        "provider_thread_id": "thread-abc123",
+                    }
+                ],
+            }
+        )
+
+        assert state.provider_runtime == {
+            "agent-task-001": ProviderRuntimeState(
+                status="running",
+                provider_thread_id="thread-abc123",
+            )
+        }
 
 
 class TestTaskInfo:

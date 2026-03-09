@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -193,3 +194,98 @@ class TestOrchestratorEnginePersistence:
         assert recovered.state.failed_tasks == ["task-003"]
         assert recovered.state.last_consensus_version == 14
         assert recovered.state.provider_runtime["agent-task-001"].provider_thread_id == "thread-001"
+
+    def test_restart_migrates_legacy_runtime_state_and_agents(self, tmp_path):
+        vibrant_dir = initialize_project(tmp_path)
+        state_path = vibrant_dir / "state.json"
+        agent_path = vibrant_dir / "agents" / "agent-gatekeeper-user_discussion-001.json"
+
+        state_path.write_text(
+            json.dumps(
+                {
+                    "session_id": "session-legacy",
+                    "started_at": "2026-03-09T00:57:40Z",
+                    "status": "executing",
+                    "active_agents": ["agent-gatekeeper-user_discussion-001"],
+                    "gatekeeper_status": "running",
+                    "pending_requests": [],
+                    "last_consensus_version": 4,
+                    "concurrency_limit": 1,
+                    "provider_threads": [
+                        {
+                            "owner_agent_id": "agent-gatekeeper-user_discussion-001",
+                            "provider_name": "codex",
+                            "transport_name": "app-server-json-rpc",
+                            "runtime_state": "running",
+                            "runtime_mode": "workspace_write",
+                            "provider_thread_id": "thread-legacy",
+                            "resume_token": {
+                                "threadId": "thread-legacy",
+                                "threadPath": "/tmp/thread-legacy.jsonl",
+                            },
+                        }
+                    ],
+                    "completed_tasks": [],
+                    "failed_tasks": [],
+                    "total_agent_spawns": 1,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        agent_path.write_text(
+            json.dumps(
+                {
+                    "agent_id": "agent-gatekeeper-user_discussion-001",
+                    "agent_kind": "gatekeeper",
+                    "status": "running",
+                    "task_id": None,
+                    "pid": None,
+                    "branch_name": None,
+                    "worktree_path": str(vibrant_dir),
+                    "started_at": "2026-03-09T10:37:04Z",
+                    "finished_at": None,
+                    "exit_code": None,
+                    "provider_binding": {
+                        "owner_agent_id": "agent-gatekeeper-user_discussion-001",
+                        "provider_name": "codex",
+                        "transport_name": "app-server-json-rpc",
+                        "runtime_state": "running",
+                        "runtime_mode": "workspace_write",
+                        "provider_thread_id": "thread-legacy",
+                        "resume_token": {
+                            "threadId": "thread-legacy",
+                            "threadPath": "/tmp/thread-legacy.jsonl",
+                        },
+                        "native_event_log_path": ".vibrant/logs/providers/native/agent-gatekeeper.ndjson",
+                        "canonical_event_log_path": ".vibrant/logs/providers/canonical/agent-gatekeeper.ndjson",
+                    },
+                    "summary": None,
+                    "prompt_used": "hello",
+                    "skills_loaded": [],
+                    "retry_count": 0,
+                    "max_retries": 1,
+                    "pending_requests": [],
+                    "validation_result": None,
+                    "error": None,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        recovered = OrchestratorEngine.load(tmp_path)
+
+        assert recovered.state.session_id == "session-legacy"
+        assert recovered.state.active_agents == ["agent-gatekeeper-user_discussion-001"]
+        assert recovered.state.provider_runtime["agent-gatekeeper-user_discussion-001"].provider_thread_id == (
+            "thread-legacy"
+        )
+        assert recovered.agents["agent-gatekeeper-user_discussion-001"].task_id == "gatekeeper-user_discussion"
+        assert recovered.agents["agent-gatekeeper-user_discussion-001"].provider.thread_path == "/tmp/thread-legacy.jsonl"
+
+        persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert "provider_threads" not in persisted_state
+        assert "pending_requests" not in persisted_state
