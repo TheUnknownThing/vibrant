@@ -175,7 +175,7 @@ class AuthorizationServerService:
         self.settings = settings
         self.store = store
         self.signer = signer
-        self._server = self._create_authlib_server()
+        self._server: Any | None = None
 
     def register_user(self, user: AuthUser) -> AuthUser:
         """Persist a user record in the backing store."""
@@ -184,6 +184,60 @@ class AuthorizationServerService:
     def register_client(self, client: OAuthClient) -> OAuthClient:
         """Persist a client record in the backing store."""
         return self.store.save_client(client)
+
+    def mint_token_for_subject(
+        self,
+        *,
+        subject_id: str,
+        client_id: str,
+        requested_scopes: Iterable[str] | None = None,
+        audience: str | None = None,
+        expires_in: int | None = None,
+        additional_claims: Mapping[str, Any] | None = None,
+    ) -> AccessTokenBundle:
+        """Mint a token directly for an internal subject without the OAuth HTTP flow."""
+        user = self._require_active_user(subject_id)
+        client = self._require_client(client_id)
+        try:
+            granted_scopes = resolve_scopes(
+                requested_scopes=requested_scopes,
+                client_allowed_scopes=client.allowed_scopes,
+                user_roles=user.roles,
+                role_scopes=self.settings.role_scopes,
+                direct_user_scopes=user.extra_scopes,
+                baseline_scopes=self.settings.baseline_scopes,
+            )
+        except ScopeResolutionError as exc:
+            raise OAuthError("invalid_scope", str(exc)) from exc
+
+        return self._issue_access_token(
+            client=client,
+            user=user,
+            granted_scopes=granted_scopes,
+            audience=audience or self.settings.default_audience,
+            expires_in=expires_in,
+            additional_claims=additional_claims,
+        )
+
+    def mint_agent_token(
+        self,
+        *,
+        agent_id: str,
+        client_id: str,
+        requested_scopes: Iterable[str] | None = None,
+        audience: str | None = None,
+        expires_in: int | None = None,
+        additional_claims: Mapping[str, Any] | None = None,
+    ) -> AccessTokenBundle:
+        """Convenience wrapper for minting a token for a spawned agent identity."""
+        return self.mint_token_for_subject(
+            subject_id=agent_id,
+            client_id=client_id,
+            requested_scopes=requested_scopes,
+            audience=audience,
+            expires_in=expires_in,
+            additional_claims=additional_claims,
+        )
 
     def metadata_document(self) -> dict[str, Any]:
         """Return OAuth authorization-server metadata."""
@@ -217,7 +271,7 @@ class AuthorizationServerService:
         """Approve an authorization request for the given logged-in user."""
         user = self._require_active_user(user_id)
         approved = tuple(normalize_scopes(approved_scopes)) if approved_scopes is not None else None
-        response = self._server.create_authorization_response(
+        response = self._authlib_server().create_authorization_response(
             self._build_authorization_http_request(request, approved),
             grant_user=user,
         )
@@ -225,12 +279,17 @@ class AuthorizationServerService:
 
     def exchange_authorization_code(self, request: TokenExchangeRequest) -> AccessTokenBundle:
         """Exchange an authorization code for a signed JWT access token."""
-        response = self._server.create_token_response(self._build_token_http_request(request))
+        response = self._authlib_server().create_token_response(self._build_token_http_request(request))
         if response.status_code >= 400:
             self._raise_response_error(response)
         if not isinstance(response.body, Mapping):
             raise OAuthError("server_error", "Token response body was not a JSON object", status_code=500)
         return AccessTokenBundle.model_validate(dict(response.body))
+
+    def _authlib_server(self) -> Any:
+        if self._server is None:
+            self._server = self._create_authlib_server()
+        return self._server
 
     def _create_authlib_server(self) -> Any:
         if not AUTHLIB_AVAILABLE:
@@ -387,29 +446,14 @@ class AuthorizationServerService:
                 expires_in: int | None = None,
                 include_refresh_token: bool = True,
             ) -> dict[str, Any]:
-                issued_at = utc_now()
-                ttl = expires_in or service.settings.access_token_ttl_seconds
-                expires_at = issued_at + timedelta(seconds=ttl)
-                claims = {
-                    "iss": service.settings.issuer_url,
-                    "sub": user.user_id if user else client.get_client_id(),
-                    "aud": service.settings.default_audience,
-                    "exp": int(expires_at.timestamp()),
-                    "iat": int(issued_at.timestamp()),
-                    "client_id": client.get_client_id(),
-                    "scope": scope or "",
-                }
-                if user is not None:
-                    claims["roles"] = list(user.roles)
-                    claims.update(user.claims)
-                access_token = service.signer.sign(claims)
-                token = {
-                    "token_type": "Bearer",
-                    "access_token": access_token,
-                    "expires_in": ttl,
-                    "scope": scope or "",
-                }
-                return token
+                granted_scopes = normalize_scopes(scope)
+                return service._build_token_payload(
+                    client=client,
+                    user=user,
+                    granted_scopes=granted_scopes,
+                    audience=service.settings.default_audience,
+                    expires_in=expires_in,
+                )
 
         return EmbeddedAuthorizationServer()
 
@@ -501,6 +545,62 @@ class AuthorizationServerService:
                 )
         raise OAuthError("server_error", "OAuth request failed", response.status_code)
 
+    def _issue_access_token(
+        self,
+        *,
+        client: OAuthClient,
+        user: AuthUser,
+        granted_scopes: Iterable[str],
+        audience: str,
+        expires_in: int | None = None,
+        additional_claims: Mapping[str, Any] | None = None,
+    ) -> AccessTokenBundle:
+        token = self._build_token_payload(
+            client=client,
+            user=user,
+            granted_scopes=granted_scopes,
+            audience=audience,
+            expires_in=expires_in,
+            additional_claims=additional_claims,
+        )
+        self.store.save_access_token(token)
+        return AccessTokenBundle.model_validate(token)
+
+    def _build_token_payload(
+        self,
+        *,
+        client: OAuthClient,
+        user: AuthUser | None,
+        granted_scopes: Iterable[str],
+        audience: str,
+        expires_in: int | None = None,
+        additional_claims: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        issued_at = utc_now()
+        ttl = expires_in or self.settings.access_token_ttl_seconds
+        expires_at = issued_at + timedelta(seconds=ttl)
+        claims = {
+            "iss": self.settings.issuer_url,
+            "sub": user.user_id if user else client.get_client_id(),
+            "aud": audience,
+            "exp": int(expires_at.timestamp()),
+            "iat": int(issued_at.timestamp()),
+            "client_id": client.get_client_id(),
+            "scope": scope_string(granted_scopes),
+        }
+        if user is not None:
+            claims["roles"] = list(user.roles)
+            claims.update(user.claims)
+        if additional_claims:
+            claims.update(dict(additional_claims))
+        access_token = self.signer.sign(claims)
+        return {
+            "token_type": "Bearer",
+            "access_token": access_token,
+            "expires_in": ttl,
+            "scope": claims["scope"],
+        }
+
     def _supported_scopes(self) -> set[str]:
         scopes = set(normalize_scopes(self.settings.baseline_scopes))
         for role_scopes in self.settings.role_scopes.values():
@@ -514,6 +614,12 @@ class AuthorizationServerService:
         if not user.active:
             raise OAuthError("access_denied", f"User is inactive: {user_id}", status_code=403)
         return user
+
+    def _require_client(self, client_id: str) -> OAuthClient:
+        client = self.store.get_client(client_id)
+        if client is None:
+            raise OAuthError("unauthorized_client", f"Unknown client_id: {client_id}", status_code=401)
+        return client
 
     def _absolute_url(self, path: str) -> str:
         return f"{self.settings.issuer_url.rstrip('/')}/{path.lstrip('/')}"

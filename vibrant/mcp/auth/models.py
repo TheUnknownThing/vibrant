@@ -62,7 +62,7 @@ class OAuthClient(BaseModel):
 
     client_id: str
     client_secret: str | None = None
-    redirect_uris: tuple[str, ...]
+    redirect_uris: tuple[str, ...] = ()
     allowed_scopes: tuple[str, ...]
     is_public: bool = True
     require_pkce: bool = True

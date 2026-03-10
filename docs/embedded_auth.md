@@ -20,7 +20,8 @@ This is **not** a full identity platform. It is a focused embedded authorization
 
 The embedded auth service handles:
 
-- OAuth authorization code flow
+- direct internal token minting for spawned agents and other internal subjects
+- OAuth authorization code flow when needed
 - PKCE validation through Authlib
 - token issuance
 - authorization server metadata
@@ -101,10 +102,62 @@ service.register_client(
 
 After that, the service can:
 
+- mint an internal token with `service.mint_token_for_subject(...)`
+- mint a spawned-agent token with `service.mint_agent_token(...)`
 - approve an authorization request with `service.authorize(...)`
 - exchange a code for a token with `service.exchange_authorization_code(...)`
 - expose metadata with `service.metadata_document()`
 - expose keys with `service.jwks_document()`
+
+## Internal agent usage
+
+For spawned sub-agents, you usually do **not** want the agent itself to perform the OAuth HTTP flow.
+
+Instead, the parent process should mint a token internally and hand it to the agent.
+
+```python
+auth_service.register_user(
+    AuthUser(
+        user_id="agent-task-001",
+        username="agent-task-001",
+        roles=["editor"],
+    )
+)
+
+auth_service.register_client(
+    OAuthClient(
+        client_id="vibrant-subagent",
+        allowed_scopes=["mcp:access", "tasks:read", "tasks:write"],
+        is_public=True,
+    )
+)
+
+token_bundle = auth_service.mint_agent_token(
+    agent_id="agent-task-001",
+    client_id="vibrant-subagent",
+    requested_scopes=["tasks:write"],
+)
+```
+
+In this flow:
+
+- the parent process chooses the agent identity
+- the auth service resolves roles into scopes
+- the auth service returns an access token bundle
+- the spawned agent receives the access token as runtime input
+
+What the agent gets:
+
+- MCP base URL from the orchestrator or runtime config
+- bearer token from `token_bundle.access_token`
+- optional expiry metadata from `token_bundle.expires_in`
+
+What the agent later sends to the MCP server:
+
+- normal MCP-over-HTTP requests
+- `Authorization: Bearer <token>` on each request
+
+This is the recommended path for internal agent-to-MCP access.
 
 ## FastAPI usage
 
@@ -135,7 +188,7 @@ This exposes:
 
 The embedded auth service does **not** implement a login UI.
 
-Instead, the hosting app must tell it who the current user is.
+Instead, the hosting app must tell it which subject is acting. In the current code the subject model is named `AuthUser`, but for agent access you can treat it as a service principal.
 
 That is why `create_auth_app(...)` takes `resolve_current_user`. The expected flow is:
 
