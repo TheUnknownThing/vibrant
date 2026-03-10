@@ -20,6 +20,9 @@ from vibrant.models.consensus import ConsensusDocument
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
+PLANNING_COMPLETE_MCP_TOOL = "vibrant.end_planning_phase"
+PLANNING_COMPLETE_MCP_SENTINEL = f"MCP: {PLANNING_COMPLETE_MCP_TOOL}"
+
 
 class GatekeeperTrigger(str, enum.Enum):
     """Supported Gatekeeper invocation triggers."""
@@ -261,6 +264,9 @@ class Gatekeeper:
                 "3. Never remove completed decisions from the log.",
                 "4. When re-planning a failed task, keep the failure history in Gatekeeper Notes.",
                 "5. You have read/write access to the .vibrant/ directory ONLY.",
+                f"6. Planning stays open until you call `{PLANNING_COMPLETE_MCP_TOOL}`.",
+                f"7. When planning is complete, call `{PLANNING_COMPLETE_MCP_TOOL}` instead of asking the user to type `/vibe`.",
+                f"8. Until the MCP bridge is wired, also emit `{PLANNING_COMPLETE_MCP_SENTINEL}` on its own line before you finish.",
                 "## Available Skills",
                 "The following skills are available for agents. Assign them to tasks as needed:",
                 skills_text,

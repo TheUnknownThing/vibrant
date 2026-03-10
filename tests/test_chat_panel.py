@@ -10,6 +10,7 @@ from textual.app import App, ComposeResult
 
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus import RoadmapDocument
+from vibrant.gatekeeper import PLANNING_COMPLETE_MCP_SENTINEL, PLANNING_COMPLETE_MCP_TOOL
 from vibrant.models import AppSettings, ItemInfo, ItemType, ThreadInfo, ThreadStatus, TurnInfo, TurnRole
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus
 from vibrant.project_init import initialize_project
@@ -134,6 +135,13 @@ class FakePlanningLifecycle:
 
 class FakeAutomaticPlanningLifecycle(FakePlanningLifecycle):
     execution_mode = RoadmapExecutionMode.AUTOMATIC
+
+
+class FakePlanningCompletionLifecycle(FakePlanningLifecycle):
+    async def submit_gatekeeper_message(self, text: str):
+        self.messages.append(text)
+        self.engine.state.status = OrchestratorStatus.PLANNING
+        return SimpleNamespace(transcript=f"Plan drafted\n{PLANNING_COMPLETE_MCP_SENTINEL}")
 
 
 
@@ -297,7 +305,7 @@ async def test_app_routes_initial_prompt_to_gatekeeper_on_init(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_app_automatic_mode_runs_workflow_after_gatekeeper_update(tmp_path: Path):
+async def test_app_automatic_mode_does_not_run_workflow_while_still_planning(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_project(repo)
@@ -317,4 +325,28 @@ async def test_app_automatic_mode_runs_workflow_after_gatekeeper_update(tmp_path
 
         lifecycle = app._lifecycle  # noqa: SLF001 - verify wiring
         assert lifecycle is not None
-        assert lifecycle.execute_until_blocked_calls == 1
+        assert lifecycle.execute_until_blocked_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_app_exits_with_todo_when_gatekeeper_requests_planning_completion(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=FakeSessionManager(),
+        lifecycle_factory=FakePlanningCompletionLifecycle,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+        await pilot.pause()
+
+        todo_message = app.get_todo_exit_message()
+        assert todo_message is not None
+        assert PLANNING_COMPLETE_MCP_TOOL in todo_message

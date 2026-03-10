@@ -10,6 +10,8 @@ from textual.widgets import Static, Input
 class InputBar(Static):
     """Message input bar at the bottom of the conversation panel."""
 
+    DEFAULT_PLACEHOLDER = "Type a message... (Ctrl+N for new thread)"
+
     class MessageSubmitted(Message):
         """Emitted when the user submits a message."""
         def __init__(self, text: str) -> None:
@@ -28,6 +30,7 @@ class InputBar(Static):
         self._input: Input | None = None
         self._context_label: Static | None = None
         self._enabled = True
+        self._placeholder = self.DEFAULT_PLACEHOLDER
 
     def compose(self) -> ComposeResult:
         self._context_label = Static(
@@ -37,7 +40,7 @@ class InputBar(Static):
         )
         yield self._context_label
         self._input = Input(
-            placeholder="Type a message... (Ctrl+N for new thread)",
+            placeholder=self._placeholder,
             id="message-input",
         )
         yield self._input
@@ -60,6 +63,19 @@ class InputBar(Static):
         self._enabled = enabled
         if self._input:
             self._input.disabled = not enabled
+
+    def set_placeholder(self, text: str) -> None:
+        """Update the placeholder shown when the input is empty."""
+
+        self._placeholder = text
+        if self._input is not None:
+            self._input.placeholder = text
+
+    @property
+    def placeholder(self) -> str:
+        """Return the currently configured input placeholder."""
+
+        return self._placeholder
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter key in the input field."""

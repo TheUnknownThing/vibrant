@@ -17,6 +17,7 @@ from textual.widgets import Button, Footer, Header, Input, Label, Markdown, Stat
 
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..consensus import ConsensusParser, ConsensusWriter
+from ..gatekeeper import PLANNING_COMPLETE_MCP_SENTINEL, PLANNING_COMPLETE_MCP_TOOL
 from ..history import HistoryStore
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo, ThreadStatus
 from ..orchestrator import CodeAgentLifecycle, CodeAgentLifecycleResult
@@ -358,12 +359,25 @@ class VibrantApp(App):
     SUB_TITLE = "Multi-agent orchestration control plane"
 
     CSS = """
+    VibrantApp.planning-mode #workspace-grid {
+        grid-size: 1 1;
+        grid-columns: 1fr;
+        grid-rows: 1fr;
+    }
+
     #workspace-grid {
         layout: grid;
         grid-size: 2 2;
         grid-columns: 34 1fr;
         grid-rows: 1fr 1fr;
         height: 1fr;
+    }
+
+    VibrantApp.planning-mode #plan-panel,
+    VibrantApp.planning-mode #agent-output-panel,
+    VibrantApp.planning-mode #consensus-panel,
+    VibrantApp.planning-mode #thread-panel {
+        display: none;
     }
 
     #plan-panel,
@@ -377,6 +391,18 @@ class VibrantApp(App):
         border: round $primary-background;
         background: $surface;
         padding: 0;
+    }
+
+    #planning-hero {
+        display: none;
+        height: auto;
+        padding: 1 2;
+        border-bottom: solid $primary-background;
+        background: $surface;
+    }
+
+    VibrantApp.planning-mode #planning-hero {
+        display: block;
     }
 
     #thread-panel {
@@ -537,6 +563,7 @@ class VibrantApp(App):
         self._paused_return_status: OrchestratorStatus | None = None
         self._banner_text: str | None = None
         self._gatekeeper_focus_initialized = False
+        self._todo_exit_message: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -546,6 +573,12 @@ class VibrantApp(App):
             yield AgentOutput(id="agent-output-panel")
             yield ConsensusView(id="consensus-panel")
             with Vertical(id="chat-panel-container"):
+                yield Static(
+                    "[b]Consensus Building[/b]\n"
+                    "Tell the Gatekeeper what you want to build. Planning stays open until the Gatekeeper ends it.",
+                    id="planning-hero",
+                    markup=True,
+                )
                 yield ThreadList(id="thread-panel")
                 yield ChatPanel(id="conversation-panel")
                 yield InputBar(id="input-panel")
@@ -567,6 +600,7 @@ class VibrantApp(App):
         self._refresh_thread_list()
         self._initialize_project_lifecycle()
         self._refresh_project_views()
+        self._apply_view_mode()
         if not self._project_has_vibrant_state():
             self._set_status("Project not initialized")
             self.push_screen(InitializationScreen(self._project_root))
@@ -618,6 +652,7 @@ class VibrantApp(App):
             self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
             self._initialize_project_lifecycle()
             self._refresh_project_views()
+            self._apply_view_mode()
             if not self._project_has_vibrant_state():
                 self._set_status("Project not initialized")
                 self.push_screen(InitializationScreen(self._project_root))
@@ -639,6 +674,7 @@ class VibrantApp(App):
         self._project_root = project_root
         self._initialize_project_lifecycle()
         self._refresh_project_views()
+        self._apply_view_mode()
         self._set_status(f"Initialized Vibrant project in {project_root}")
         self.notify(f"Initialized Vibrant project in {project_root}")
         self.call_after_refresh(self._focus_primary_input)
@@ -751,6 +787,8 @@ class VibrantApp(App):
     def _start_automatic_workflow_if_needed(self) -> None:
         if self._lifecycle is None or self._task_execution_in_progress:
             return
+        if self._is_planning_mode():
+            return
         if self._roadmap_execution_mode() is not RoadmapExecutionMode.AUTOMATIC:
             return
 
@@ -841,6 +879,8 @@ class VibrantApp(App):
                 gatekeeper_text = _render_gatekeeper_result_text(result)
                 if gatekeeper_text:
                     chat_panel.record_gatekeeper_response(gatekeeper_text)
+                if self._maybe_handle_planning_completion_request(result):
+                    return
                 self._refresh_project_views()
                 self.notify("Message sent to Gatekeeper.")
                 self._set_status("Gatekeeper updated the plan")
@@ -907,6 +947,12 @@ class VibrantApp(App):
                 "/logs - Show provider log paths\n"
                 "/help - Show this help"
             )
+        elif cmd == "vibe":
+            self.notify(
+                f"Planning now ends when the Gatekeeper calls `{PLANNING_COMPLETE_MCP_TOOL}`.",
+                severity="warning",
+            )
+            self._set_status("Waiting for Gatekeeper to end planning")
         else:
             self.notify(f"Unknown command: /{cmd}", severity="warning")
 
@@ -957,6 +1003,10 @@ class VibrantApp(App):
         self._sync_chat_panel_state()
 
     async def _on_lifecycle_canonical_event(self, event: dict[str, Any]) -> None:
+        if _event_requests_planning_completion(event):
+            self._exit_for_unavailable_planning_mcp(PLANNING_COMPLETE_MCP_TOOL)
+            return
+
         try:
             self.query_one(AgentOutput).ingest_canonical_event(event)
         except Exception:
@@ -1010,6 +1060,7 @@ class VibrantApp(App):
             consensus_view.clear_summary("No `.vibrant/consensus.md` found for this workspace.")
             self._refresh_thread_list()
             self._sync_chat_panel_state()
+            self._apply_view_mode()
             return
 
         agent_output.sync_agents(self._lifecycle.engine.agents.values())
@@ -1028,6 +1079,7 @@ class VibrantApp(App):
                 source_path=consensus_path,
             )
             self._sync_chat_panel_state()
+            self._apply_view_mode()
             return
 
         plan_tree.update_tasks(roadmap.tasks, agent_summaries=self._collect_task_summaries())
@@ -1036,6 +1088,7 @@ class VibrantApp(App):
             tasks=roadmap.tasks,
             source_path=consensus_path,
         )
+        self._apply_view_mode()
         self._sync_chat_panel_state()
         self._refresh_thread_list()
         self._sync_chat_panel_state()
@@ -1345,6 +1398,48 @@ class VibrantApp(App):
         except asyncio.CancelledError:
             raise
 
+    def _is_planning_mode(self) -> bool:
+        if self._lifecycle is None:
+            return False
+
+        status = _normalize_orchestrator_status(self._lifecycle.engine.state.status)
+        return status in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}
+
+    def _apply_view_mode(self) -> None:
+        planning_mode = self._is_planning_mode()
+        self.set_class(planning_mode, "planning-mode")
+        self.set_class(not planning_mode, "vibing-mode")
+
+        input_bar = self.query_one(InputBar)
+        if planning_mode:
+            input_bar.set_placeholder("Tell me what you want to build")
+        else:
+            input_bar.set_placeholder(InputBar.DEFAULT_PLACEHOLDER)
+
+    def _maybe_handle_planning_completion_request(self, result: object) -> bool:
+        completion_request = _extract_planning_completion_request(result)
+        if completion_request is None:
+            return False
+
+        self._exit_for_unavailable_planning_mcp(completion_request)
+        return True
+
+    def _exit_for_unavailable_planning_mcp(self, tool_name: str) -> None:
+        # TODO: Replace this stub once Gatekeeper MCP/tool-call events are wired all
+        # the way through the provider adapter and TUI. For now we surface the
+        # missing endpoint clearly and exit so the incomplete handoff is explicit.
+        message = (
+            f"TODO: implement Gatekeeper MCP `{tool_name}` and transition into the vibing screen; "
+            "exiting until that endpoint is available."
+        )
+        self._todo_exit_message = message
+        self.notify(message, severity="warning")
+        self._set_status(message)
+        self.call_after_refresh(self.exit)
+
+    def get_todo_exit_message(self) -> str | None:
+        return self._todo_exit_message
+
 
 def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
     if isinstance(status, OrchestratorStatus):
@@ -1368,3 +1463,33 @@ def _render_gatekeeper_result_text(result: object) -> str:
         return f"Verdict: {verdict.strip()}"
 
     return "Gatekeeper updated the plan."
+
+
+def _extract_planning_completion_request(result: object) -> str | None:
+    transcript = getattr(result, "transcript", None)
+    if isinstance(transcript, str):
+        for line in transcript.splitlines():
+            if line.strip() == PLANNING_COMPLETE_MCP_SENTINEL:
+                return PLANNING_COMPLETE_MCP_TOOL
+
+    events = getattr(result, "events", None)
+    if isinstance(events, list):
+        for event in events:
+            if _event_requests_planning_completion(event):
+                return PLANNING_COMPLETE_MCP_TOOL
+
+    return None
+
+
+def _event_requests_planning_completion(event: object) -> bool:
+    if not isinstance(event, dict):
+        return False
+
+    candidates = [
+        event.get("tool_name"),
+        event.get("tool"),
+        event.get("name"),
+        event.get("endpoint"),
+        event.get("method"),
+    ]
+    return any(isinstance(candidate, str) and candidate.strip() == PLANNING_COMPLETE_MCP_TOOL for candidate in candidates)

@@ -82,6 +82,23 @@ class EscalationLifecycle(ExecutingLifecycle):
         self.engine.refresh_from_disk()
 
 
+class PlanningLifecycle(ExecutingLifecycle):
+    def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
+        self.project_root = Path(project_root)
+        self.on_canonical_event = on_canonical_event
+        self.engine = OrchestratorEngine.load(self.project_root)
+        self.gatekeeper = object()
+
+        if self.engine.state.status is OrchestratorStatus.INIT:
+            self.engine.transition_to(OrchestratorStatus.PLANNING)
+
+        document = self.engine.consensus or ConsensusParser().parse_file(self.project_root / ".vibrant" / "consensus.md")
+        updated = document.model_copy(deep=True)
+        updated.status = ConsensusStatus.PLANNING
+        self.engine.consensus = ConsensusWriter().write(self.project_root / ".vibrant" / "consensus.md", updated)
+        self.engine.refresh_from_disk()
+
+
 @pytest.mark.asyncio
 async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     repo = tmp_path / "repo"
@@ -265,3 +282,24 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
         banner = app.query_one("#notification-banner", Static)
         assert banner.display is True
         assert "Gatekeeper needs your input" in (app.get_banner_text() or "")
+
+
+@pytest.mark.asyncio
+async def test_planning_mode_shows_consensus_building_screen(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=PlanningLifecycle)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert app.has_class("planning-mode") is True
+        assert app.query_one("#planning-hero", Static).display is True
+        assert app.query_one("#plan-panel").display is False
+        assert app.query_one("#agent-output-panel").display is False
+        assert app.query_one("#consensus-panel").display is False
+        assert app.query_one("#thread-panel").display is False
+        assert app.query_one("#message-input", Input).placeholder == "Tell me what you want to build"
