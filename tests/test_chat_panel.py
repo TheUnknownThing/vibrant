@@ -283,7 +283,8 @@ async def test_app_forwards_pending_question_answer_to_gatekeeper(tmp_path: Path
         lifecycle_factory=FakeLifecycle,
     )
 
-    async with _run_test(app):
+    async with _run_test(app) as pilot:
+        await pilot.pause()
         panel = app.query_one(ChatPanel)
         assert "Gatekeeper → User" in panel.get_question_summary_text()
 
@@ -302,26 +303,18 @@ async def test_app_forwards_pending_question_answer_to_gatekeeper(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_app_thread_switching_updates_chat_panel(tmp_path: Path):
+async def test_app_keeps_gatekeeper_chat_active(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_project(repo)
 
-    thread_one = _thread("thread-1", "first user prompt", "first assistant reply")
-    thread_two = _thread("thread-2", "second user prompt", "second assistant reply")
-
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    session_manager = FakeSessionManager([thread_one, thread_two])
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=session_manager)
+    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=FakePlanningLifecycle)
 
     async with _run_test(app) as pilot:
+        await pilot.pause()
         panel = app.query_one(ChatPanel)
-
-        await pilot.press("ctrl+t")
-        assert panel.current_thread_id == "thread-1"
-
-        await pilot.press("ctrl+t")
-        assert panel.current_thread_id == "thread-2"
+        assert panel.current_thread_id == ChatPanel.GATEKEEPER_THREAD_ID
 
 
 
@@ -341,7 +334,8 @@ async def test_app_routes_initial_prompt_to_gatekeeper_on_init(tmp_path: Path):
         lifecycle_factory=FakePlanningLifecycle,
     )
 
-    async with _run_test(app):
+    async with _run_test(app) as pilot:
+        await pilot.pause()
         panel = app.query_one(ChatPanel)
         assert panel.current_thread_id == ChatPanel.GATEKEEPER_THREAD_ID
 
@@ -392,7 +386,7 @@ async def test_app_automatic_mode_does_not_run_workflow_while_still_planning(tmp
 
 
 @pytest.mark.asyncio
-async def test_app_exits_with_todo_when_gatekeeper_requests_planning_completion(tmp_path: Path):
+async def test_app_routes_to_vibing_when_gatekeeper_requests_planning_completion(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
     initialize_project(repo)
@@ -410,9 +404,8 @@ async def test_app_exits_with_todo_when_gatekeeper_requests_planning_completion(
         await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
         await pilot.pause()
 
-        todo_message = app.get_todo_exit_message()
-        assert todo_message is not None
-        assert PLANNING_COMPLETE_MCP_TOOL in todo_message
+        assert app.get_todo_exit_message() is None
+        assert app.has_class("vibing-mode") is True
 
 
 def test_app_streams_gatekeeper_response_live_during_planning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -430,14 +423,8 @@ def test_app_streams_gatekeeper_response_live_during_planning(tmp_path: Path, mo
     panel = ChatPanel()
     panel.record_gatekeeper_user_message("Build an auth MVP.")
 
-    def _query_one(selector, *args, **kwargs):
-        if selector is ChatPanel:
-            return panel
-        raise AssertionError(f"Unexpected query: {selector!r}")
-
-    monkeypatch.setattr(app, "query_one", _query_one)
+    monkeypatch.setattr(app, "_workspace_screen", SimpleNamespace(chat_panel=panel))
     monkeypatch.setattr(app, "_persist_gatekeeper_thread", lambda: None)
-    monkeypatch.setattr(app, "_refresh_thread_list", lambda: None)
     monkeypatch.setattr(app, "_set_status", lambda text: None)
 
     app._handle_gatekeeper_canonical_event(  # noqa: SLF001 - exercising app event wiring directly

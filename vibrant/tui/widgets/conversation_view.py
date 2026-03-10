@@ -126,6 +126,68 @@ class StreamingBubble(Vertical):
 class ConversationView(Static):
     """Scrollable view of the conversation for the active thread."""
 
+    DEFAULT_CSS = """
+    ConversationView #empty-state {
+        height: 100%;
+        content-align: center middle;
+        text-align: center;
+        padding: 4;
+    }
+
+    ConversationView #conversation-scroll {
+        height: 1fr;
+        padding: 0 1;
+    }
+
+    ConversationView MessageBubble {
+        margin: 1 0;
+        padding: 0 1;
+    }
+
+    ConversationView .user-msg {
+        background: $primary 15%;
+        border-left: tall $primary;
+    }
+
+    ConversationView .assistant-msg {
+        background: $secondary 10%;
+        border-left: tall $secondary;
+    }
+
+    ConversationView .msg-role {
+        margin-bottom: 0;
+    }
+
+    ConversationView .msg-content {
+        margin-top: 0;
+    }
+
+    ConversationView .msg-command-header {
+        background: $primary-background;
+        padding: 0 1;
+        margin: 0;
+    }
+
+    ConversationView .msg-command-output {
+        background: $surface;
+        padding: 0 1;
+        margin: 0;
+        color: $text-muted;
+        max-height: 20;
+        overflow-y: auto;
+    }
+
+    ConversationView .msg-file {
+        margin: 0;
+    }
+
+    ConversationView .command-collapsible,
+    ConversationView .reasoning-collapsible {
+        margin: 0;
+        padding: 0;
+    }
+    """
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._scroll: VerticalScroll | None = None
@@ -134,7 +196,7 @@ class ConversationView(Static):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[dim]No conversation selected. Start planning below or press [b]Ctrl+N[/b] for a Codex thread.[/dim]",
+            "[dim]No Gatekeeper messages yet. Start planning below.[/dim]",
             id="empty-state",
             markup=True,
         )
