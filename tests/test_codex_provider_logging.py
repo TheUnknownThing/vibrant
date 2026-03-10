@@ -12,7 +12,7 @@ import pytest
 
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.wire import JsonRpcNotification
-from vibrant.providers.base import RuntimeMode
+from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
 
@@ -93,6 +93,33 @@ class TestCodexProviderLogging:
         assert any(line["event"] == "jsonrpc.request.sent" for line in native_lines)
         assert any(line["event"] == "stderr.line" for line in native_lines)
         assert [line["event"] for line in canonical_lines[:3]] == ["session.started", "thread.started", "content.delta"]
+
+    @pytest.mark.asyncio
+    async def test_adapter_redacts_auth_secrets_in_native_log(self, tmp_path: Path):
+        client = LoggingFakeCodexClient()
+        client.responses["initialize"] = {"serverInfo": {"name": "codex"}}
+        client.responses["account/login/start"] = {"type": "apiKey"}
+
+        agent = AgentRecord(
+            agent_id="agent-auth-redact",
+            task_id="task-auth-redact",
+            type=AgentType.CODE,
+            provider={
+                "native_event_log": str(tmp_path / "native.ndjson"),
+                "canonical_event_log": str(tmp_path / "canonical.ndjson"),
+            },
+        )
+        adapter = CodexProviderAdapter(client=client, cwd=str(tmp_path), agent_record=agent)
+
+        await adapter.start_session(
+            cwd=str(tmp_path),
+            auth_config=CodexAuthConfig(mode=CodexAuthMode.API_KEY, api_key="sk-secret"),
+        )
+        await adapter.stop_session()
+
+        native_text = Path(agent.provider.native_event_log).read_text(encoding="utf-8")
+        assert "sk-secret" not in native_text
+        assert "***REDACTED***" in native_text
 
 
 @pytest.mark.asyncio

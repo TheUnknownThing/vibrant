@@ -11,7 +11,7 @@ from typing import Any, Callable
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ...models.agent import AgentRecord
 from ...models.wire import JsonRpcNotification
-from ..base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
+from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
 from .client import CodexClient
 
 DEFAULT_CLIENT_INFO = {"name": "vibrant", "title": "Vibrant", "version": "0.1.0"}
@@ -28,6 +28,7 @@ class CodexProviderAdapter(ProviderAdapter):
         *,
         cwd: str | None = None,
         codex_binary: str = "codex",
+        launch_args: Sequence[str] | None = None,
         codex_home: str | None = None,
         agent_record: AgentRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
@@ -42,6 +43,7 @@ class CodexProviderAdapter(ProviderAdapter):
         self._client_factory = client_factory or CodexClient
         self._cwd = cwd
         self._codex_binary = codex_binary
+        self._launch_args = list(launch_args) if launch_args is not None else None
         self._codex_home = codex_home
         self.agent_record = agent_record
         self.provider_thread_id: str | None = None
@@ -49,6 +51,7 @@ class CodexProviderAdapter(ProviderAdapter):
         self.current_turn_id: str | None = None
         self._session_started = False
         self._pending_requests: dict[int | str, dict[str, Any]] = {}
+        self._awaiting_thread_started_for: str | None = None
         self._on_raw_notification = on_raw_notification
         self._on_stderr_line = on_stderr_line
         self._native_logger = native_logger
@@ -75,14 +78,18 @@ class CodexProviderAdapter(ProviderAdapter):
         self._ensure_loggers(cwd)
         if self.client is None:
             resolved_cwd = cwd or self._cwd
-            self.client = self._client_factory(
-                cwd=resolved_cwd,
-                codex_binary=self._codex_binary,
-                codex_home=self._codex_home,
-                on_notification=self._handle_notification,
-                on_stderr=self._handle_stderr,
-                on_raw_event=self._handle_native_event,
-            )
+            kwargs: dict[str, Any] = {
+                "cwd": resolved_cwd,
+                "codex_binary": self._codex_binary,
+                "on_notification": self._handle_notification,
+                "on_stderr": self._handle_stderr,
+                "on_raw_event": self._handle_native_event,
+            }
+            if self._launch_args is not None:
+                kwargs["launch_args"] = self._launch_args
+            if self._codex_home is not None:
+                kwargs["codex_home"] = self._codex_home
+            self.client = self._client_factory(**kwargs)
         self._bind_client_callbacks()
         return self.client
 
@@ -110,6 +117,7 @@ class CodexProviderAdapter(ProviderAdapter):
             self._canonical_logger = CanonicalLogger(canonical_path)
 
     async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+        auth_config = _coerce_auth_config(kwargs.pop("auth_config", None) or kwargs.pop("auth", None))
         client = self._ensure_client(cwd)
         if cwd is not None:
             self._cwd = cwd
@@ -127,6 +135,9 @@ class CodexProviderAdapter(ProviderAdapter):
         client.send_notification("initialized")
         self._session_started = True
         await self._emit_canonical("session.started", cwd=self._cwd, initialize_result=result)
+
+        if auth_config is not None and auth_config.mode is not CodexAuthMode.SYSTEM:
+            await self.login(auth_config)
         return result
 
     async def stop_session(self) -> None:
@@ -145,6 +156,8 @@ class CodexProviderAdapter(ProviderAdapter):
             approval_policy=approval_policy,
             agent_record=agent_record,
         )
+        if self.provider_thread_id:
+            self._awaiting_thread_started_for = self.provider_thread_id
         await self._emit_canonical(
             "thread.started",
             resumed=False,
@@ -164,6 +177,8 @@ class CodexProviderAdapter(ProviderAdapter):
             agent_record=agent_record,
             fallback_thread_id=provider_thread_id,
         )
+        if self.provider_thread_id:
+            self._awaiting_thread_started_for = self.provider_thread_id
         await self._emit_canonical(
             "thread.started",
             resumed=True,
@@ -199,6 +214,107 @@ class CodexProviderAdapter(ProviderAdapter):
         if self.provider_thread_id and "threadId" not in payload:
             payload["threadId"] = self.provider_thread_id
         return await client.send_request("turn/interrupt", payload or None)
+
+    async def send_request(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Send an arbitrary Codex management request."""
+
+        client = self._ensure_client(kwargs.pop("cwd", None))
+        timeout = kwargs.pop("timeout", None)
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {', '.join(sorted(kwargs))}")
+        request_params = dict(params) if params is not None else None
+        if timeout is None:
+            return await client.send_request(method, request_params)
+        return await client.send_request(method, request_params, timeout=float(timeout))
+
+    async def read_account(self, *, refresh_token: bool = False) -> Any:
+        """Return Codex auth/account state via ``account/read``."""
+
+        return await self.send_request("account/read", {"refreshToken": bool(refresh_token)})
+
+    async def login(self, auth_config: CodexAuthConfig) -> Any:
+        """Log in to Codex using ``account/login/start``."""
+
+        params = auth_config.to_login_params()
+        if params is None:
+            return await self.read_account(refresh_token=False)
+        return await self.send_request("account/login/start", params)
+
+    async def logout(self) -> Any:
+        """Logout via ``account/logout``."""
+
+        return await self.send_request("account/logout", None)
+
+    async def list_skills(
+        self,
+        *,
+        cwds: Sequence[str],
+        force_reload: bool = False,
+        per_cwd_extra_user_roots: Sequence[Mapping[str, Any]] | None = None,
+    ) -> Any:
+        """List skills via ``skills/list``."""
+
+        params: dict[str, Any] = {
+            "cwds": [str(Path(cwd)) for cwd in cwds],
+            "forceReload": bool(force_reload),
+        }
+        if per_cwd_extra_user_roots is not None:
+            params["perCwdExtraUserRoots"] = [dict(entry) for entry in per_cwd_extra_user_roots]
+        return await self.send_request("skills/list", params)
+
+    async def write_skill_config(self, *, path: str, enabled: bool) -> Any:
+        """Enable/disable a skill via ``skills/config/write``."""
+
+        return await self.send_request(
+            "skills/config/write",
+            {"path": str(Path(path)), "enabled": bool(enabled)},
+        )
+
+    async def reload_mcp_servers(self) -> Any:
+        """Reload MCP server configuration from disk via ``config/mcpServer/reload``."""
+
+        return await self.send_request("config/mcpServer/reload", None)
+
+    async def list_mcp_server_status(self, *, cursor: str | None = None, limit: int | None = None) -> Any:
+        """List MCP server status via ``mcpServerStatus/list``."""
+
+        params: dict[str, Any] = {}
+        if cursor is not None:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = int(limit)
+        return await self.send_request("mcpServerStatus/list", params or None)
+
+    async def start_mcp_oauth_login(self, *, name: str) -> Any:
+        """Start an MCP OAuth login via ``mcpServer/oauth/login``."""
+
+        return await self.send_request("mcpServer/oauth/login", {"name": name})
+
+    async def detect_external_agent_config(
+        self,
+        *,
+        include_home: bool = True,
+        cwds: Sequence[str] | None = None,
+    ) -> Any:
+        """Detect migratable external-agent config via ``externalAgentConfig/detect``."""
+
+        params: dict[str, Any] = {"includeHome": bool(include_home)}
+        if cwds is not None:
+            params["cwds"] = [str(Path(cwd)) for cwd in cwds]
+        return await self.send_request("externalAgentConfig/detect", params)
+
+    async def import_external_agent_config(self, *, migration_items: Sequence[Mapping[str, Any]]) -> Any:
+        """Import external-agent config items via ``externalAgentConfig/import``."""
+
+        return await self.send_request(
+            "externalAgentConfig/import",
+            {"migrationItems": [dict(item) for item in migration_items]},
+        )
 
     async def respond_to_request(
         self,
@@ -255,7 +371,11 @@ class CodexProviderAdapter(ProviderAdapter):
         elif method == "thread/started":
             thread_payload = params.get("thread", params)
             self._persist_thread_metadata({"thread": thread_payload}, fallback_thread_id=thread_payload.get("id"))
-            await self._emit_canonical("thread.started", resumed=False, thread=thread_payload)
+            thread_id = thread_payload.get("id") if isinstance(thread_payload, Mapping) else None
+            if thread_id and self._awaiting_thread_started_for == str(thread_id):
+                self._awaiting_thread_started_for = None
+            else:
+                await self._emit_canonical("thread.started", resumed=False, thread=thread_payload)
         elif method == "turn/started":
             turn_payload = params.get("turn", params)
             self.current_turn_id = turn_payload.get("id") or self.current_turn_id
@@ -268,8 +388,18 @@ class CodexProviderAdapter(ProviderAdapter):
                 delta=params.get("delta", ""),
                 raw=params,
             )
+        elif method == "item/reasoning/summaryTextDelta":
+            await self._emit_canonical(
+                "reasoning.summary.delta",
+                item_id=params.get("itemId") or params.get("item_id"),
+                turn_id=params.get("turnId") or self.current_turn_id,
+                delta=params.get("delta", ""),
+                summary_index=params.get("summaryIndex"),
+                raw=params,
+            )
         elif method == "item/completed":
             item_payload = params.get("item", params)
+            item_payload = _sanitize_progress_item(item_payload)
             await self._emit_canonical(
                 "task.progress",
                 item=item_payload,
@@ -406,11 +536,13 @@ class CodexProviderAdapter(ProviderAdapter):
     def _handle_native_event(self, raw_event: dict[str, Any]) -> None:
         if self._native_logger is None:
             self._ensure_loggers()
-        if self._native_logger is not None:
-            self._native_logger.log(
-                raw_event.get("event", "raw"),
-                raw_event.get("data") if isinstance(raw_event.get("data"), Mapping) else {"value": raw_event},
-            )
+        if self._native_logger is None:
+            return
+
+        event_name = raw_event.get("event", "raw")
+        data = raw_event.get("data") if isinstance(raw_event.get("data"), Mapping) else {"value": raw_event}
+        safe_data = _sanitize_native_event_data(event_name, data, pending_requests=self._pending_requests)
+        self._native_logger.log(event_name, safe_data)
 
     def _handle_stderr(self, line: str) -> None:
         client_has_raw_hook = bool(self.client is not None and getattr(self.client, "_on_raw_event", None) is not None)
@@ -431,3 +563,128 @@ class CodexProviderAdapter(ProviderAdapter):
 
 def _timestamp_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _coerce_auth_config(value: object) -> CodexAuthConfig | None:
+    if value is None:
+        return None
+    if isinstance(value, CodexAuthConfig):
+        return value
+    if isinstance(value, Mapping):
+        data = dict(value)
+        raw_mode = data.pop("mode", None) or data.pop("auth_mode", None) or data.get("type")
+        mode = _coerce_auth_mode(raw_mode)
+        return CodexAuthConfig(
+            mode=mode,
+            api_key=data.get("api_key") or data.get("apiKey"),
+            id_token=data.get("id_token") or data.get("idToken"),
+            access_token=data.get("access_token") or data.get("accessToken"),
+        )
+    raise TypeError("auth_config must be CodexAuthConfig, a mapping, or None")
+
+
+def _coerce_auth_mode(value: object) -> CodexAuthMode:
+    if value is None:
+        return CodexAuthMode.SYSTEM
+    if isinstance(value, CodexAuthMode):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        lowered = normalized.replace("-", "_").lower()
+        mapping = {
+            "system": CodexAuthMode.SYSTEM,
+            "default": CodexAuthMode.SYSTEM,
+            "apikey": CodexAuthMode.API_KEY,
+            "api_key": CodexAuthMode.API_KEY,
+            "apikeys": CodexAuthMode.API_KEY,
+            "apikeymode": CodexAuthMode.API_KEY,
+            "apikeyauth": CodexAuthMode.API_KEY,
+            "apikeymode": CodexAuthMode.API_KEY,
+            "apiKey": CodexAuthMode.API_KEY,
+            "chatgpt": CodexAuthMode.CHATGPT,
+            "chatgptauthtokens": CodexAuthMode.CHATGPT_AUTH_TOKENS,
+            "chatgpt_auth_tokens": CodexAuthMode.CHATGPT_AUTH_TOKENS,
+        }
+        if normalized in (mode.value for mode in CodexAuthMode):
+            return CodexAuthMode(normalized)
+        if lowered in mapping:
+            return mapping[lowered]
+    raise ValueError(f"Unsupported Codex auth mode: {value!r}")
+
+
+def _sanitize_progress_item(item_payload: Any) -> Any:
+    """Return a canonical-safe representation of an ``item/completed`` payload."""
+
+    if not isinstance(item_payload, Mapping):
+        return item_payload
+
+    item = dict(item_payload)
+    item_type = str(item.get("type") or "").lower()
+    if item_type != "reasoning":
+        return item
+
+    summary_text = _reasoning_summary_text(item.get("summary"))
+    if summary_text:
+        item.setdefault("text", summary_text)
+
+    # Avoid writing raw reasoning content to canonical logs.
+    item.pop("content", None)
+    return item
+
+
+def _reasoning_summary_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        parts: list[str] = []
+        for entry in value:
+            if isinstance(entry, str):
+                parts.append(entry)
+            elif isinstance(entry, Mapping):
+                text = entry.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
+    return str(value).strip()
+
+
+def _sanitize_native_event_data(
+    event_name: object,
+    data: Mapping[str, Any],
+    *,
+    pending_requests: Mapping[int | str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Redact sensitive fields before writing native debug logs."""
+
+    sanitized = dict(data)
+    event = str(event_name or "raw")
+
+    method = sanitized.get("method")
+    params = sanitized.get("params")
+
+    if isinstance(method, str) and isinstance(params, Mapping):
+        if method == "account/login/start":
+            sanitized["params"] = _redact_keys(params, {"apiKey", "idToken", "accessToken"})
+        elif method == "item/reasoning/textDelta":
+            sanitized["params"] = _redact_keys(params, {"delta"})
+
+    if event == "jsonrpc.response.sent":
+        request_id = sanitized.get("id")
+        pending = (pending_requests or {}).get(request_id) if request_id is not None else None
+        pending_method = pending.get("method") if isinstance(pending, Mapping) else None
+        if pending_method == "account/chatgptAuthTokens/refresh":
+            result = sanitized.get("result")
+            if isinstance(result, Mapping):
+                sanitized["result"] = _redact_keys(result, {"idToken", "accessToken"})
+
+    return sanitized
+
+
+def _redact_keys(payload: Mapping[str, Any], keys: set[str]) -> dict[str, Any]:
+    redacted = dict(payload)
+    for key in keys:
+        if key in redacted and redacted[key] is not None:
+            redacted[key] = "***REDACTED***"
+    return redacted

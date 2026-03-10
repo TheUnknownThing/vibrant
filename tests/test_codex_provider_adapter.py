@@ -11,7 +11,7 @@ import pytest
 
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.wire import JsonRpcNotification
-from vibrant.providers.base import RuntimeMode
+from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 from vibrant.providers.codex.client import CodexClientError
 
@@ -106,6 +106,25 @@ class TestCodexProviderAdapter:
         assert events[0]["delta"] == "hello"
 
     @pytest.mark.asyncio
+    async def test_reasoning_summary_delta_maps_to_canonical_event(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/reasoning/summaryTextDelta",
+                params={"itemId": "item-r1", "turnId": "turn-1", "delta": "summary", "summaryIndex": 0},
+            )
+        )
+
+        assert len(events) == 1
+        assert events[0]["type"] == "reasoning.summary.delta"
+        assert events[0]["item_id"] == "item-r1"
+        assert events[0]["turn_id"] == "turn-1"
+        assert events[0]["delta"] == "summary"
+        assert events[0]["summary_index"] == 0
+
+    @pytest.mark.asyncio
     async def test_turn_completed_maps_to_canonical_turn_completed(self):
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
@@ -139,6 +158,59 @@ class TestCodexProviderAdapter:
         assert events[0]["request_kind"] == "approval"
         assert client.server_responses == [(10, {"approved": True}, None)]
         assert events[1]["type"] == "request.resolved"
+
+    @pytest.mark.asyncio
+    async def test_send_request_delegates_to_client(self):
+        client = FakeCodexClient()
+        client.responses["skills/list"] = {"data": []}
+        adapter = CodexProviderAdapter(client=client)
+
+        result = await adapter.send_request("skills/list", {"cwds": ["/tmp"]})
+
+        assert result == {"data": []}
+        assert client.calls[0] == ("skills/list", {"cwds": ["/tmp"]})
+
+    @pytest.mark.asyncio
+    async def test_start_session_with_custom_auth_calls_account_login_start(self):
+        client = FakeCodexClient()
+        client.responses["initialize"] = {"serverInfo": {"name": "codex"}}
+        client.responses["account/login/start"] = {"type": "apiKey"}
+        adapter = CodexProviderAdapter(client=client)
+
+        await adapter.start_session(
+            cwd="/tmp/project",
+            auth_config=CodexAuthConfig(mode=CodexAuthMode.API_KEY, api_key="sk-test"),
+        )
+
+        methods = [call[0] for call in client.calls]
+        assert methods == ["start", "initialize", "notify:initialized", "account/login/start"]
+        assert client.calls[3][1]["type"] == "apiKey"
+        assert client.calls[3][1]["apiKey"] == "sk-test"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_item_completed_sanitizes_raw_content(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/completed",
+                params={
+                    "item": {
+                        "type": "reasoning",
+                        "id": "r1",
+                        "summary": ["line 1", "line 2"],
+                        "content": [{"type": "text", "text": "raw reasoning"}],
+                    }
+                },
+            )
+        )
+
+        assert len(events) == 1
+        assert events[0]["type"] == "task.progress"
+        item = events[0]["item"]
+        assert item.get("text") == "line 1\nline 2"
+        assert "content" not in item
 
     @pytest.mark.asyncio
     async def test_resume_thread_uses_thread_resume(self):
