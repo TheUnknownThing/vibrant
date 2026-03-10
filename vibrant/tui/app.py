@@ -320,10 +320,13 @@ class VibrantApp(App):
         self._session_manager.add_listener(self._on_session_event)
 
         saved_threads = self._history.list_threads()
+        restored_gatekeeper = False
         if saved_threads:
             for thread in saved_threads:
-                if thread.id == ChatPanel.GATEKEEPER_THREAD_ID:
-                    self.query_one(ChatPanel).restore_gatekeeper_thread(thread)
+                if self._is_gatekeeper_history_thread(thread):
+                    if not restored_gatekeeper and self._gatekeeper_history_matches_project(thread):
+                        self.query_one(ChatPanel).restore_gatekeeper_thread(thread)
+                        restored_gatekeeper = True
                     continue
                 self._session_manager._threads[thread.id] = thread
             self._set_status(f"Loaded {len(saved_threads)} saved thread(s)")
@@ -518,7 +521,11 @@ class VibrantApp(App):
         try:
             start_message = getattr(self._lifecycle, "start_gatekeeper_message", None)
             if callable(start_message):
-                await start_message(text)
+                handle = await start_message(text)
+                self._sync_gatekeeper_storage_thread_id(
+                    getattr(getattr(handle, "agent_record", None), "agent_id", None)
+                )
+                self._persist_gatekeeper_thread()
                 self._set_status("Gatekeeper is responding…")
             else:
                 raise AttributeError("Lifecycle does not support async Gatekeeper messages")
@@ -597,7 +604,6 @@ class VibrantApp(App):
             self._set_status("Sending message to Gatekeeper…")
             chat_panel = self.query_one(ChatPanel)
             chat_panel.record_gatekeeper_user_message(event.text, question=pending_question)
-            self._persist_gatekeeper_thread()
 
             start_message = getattr(self._lifecycle, "start_gatekeeper_message", None)
             if callable(start_message):
@@ -621,10 +627,13 @@ class VibrantApp(App):
                     self.notify(f"Error: {exc}", severity="error")
                     self._sync_chat_panel_state()
                 else:
+                    self._sync_gatekeeper_storage_thread_id(
+                        getattr(getattr(result, "agent_record", None), "agent_id", None)
+                    )
                     gatekeeper_text = _render_gatekeeper_result_text(result)
                     if gatekeeper_text:
                         chat_panel.record_gatekeeper_response(gatekeeper_text)
-                        self._persist_gatekeeper_thread()
+                    self._persist_gatekeeper_thread()
                     self._refresh_project_views()
                     self.notify("Message sent to Gatekeeper.")
                     self._set_status("Gatekeeper updated the plan")
@@ -785,6 +794,8 @@ class VibrantApp(App):
             return
 
         chat_panel = self.query_one(ChatPanel)
+        if self._sync_gatekeeper_storage_thread_id(event.get("agent_id")):
+            self._persist_gatekeeper_thread()
         event_type = str(event.get("type") or "")
 
         if event_type == "turn.started":
@@ -985,10 +996,27 @@ class VibrantApp(App):
     def _persist_gatekeeper_thread(self) -> None:
         if not self.is_mounted:
             return
-        gatekeeper_thread = self.query_one(ChatPanel).get_gatekeeper_thread()
+        gatekeeper_thread = self.query_one(ChatPanel).get_persisted_gatekeeper_thread()
         if gatekeeper_thread is None or not gatekeeper_thread.turns:
             return
+        gatekeeper_thread.cwd = str(self._project_root)
         self._history.save_thread(gatekeeper_thread)
+
+    def _sync_gatekeeper_storage_thread_id(self, thread_id: str | None) -> bool:
+        if not self.is_mounted:
+            return False
+        return self.query_one(ChatPanel).set_gatekeeper_storage_thread_id(thread_id)
+
+    @staticmethod
+    def _is_gatekeeper_history_thread(thread: ThreadInfo) -> bool:
+        return thread.id == ChatPanel.GATEKEEPER_THREAD_ID or thread.model == "gatekeeper"
+
+    def _gatekeeper_history_matches_project(self, thread: ThreadInfo) -> bool:
+        if thread.id == ChatPanel.GATEKEEPER_THREAD_ID:
+            return True
+        if not thread.cwd:
+            return False
+        return Path(thread.cwd).expanduser().resolve() == self._project_root
 
     def _find_conversation_thread(self, thread_id: str) -> ThreadInfo | None:
         if thread_id == ChatPanel.GATEKEEPER_THREAD_ID:

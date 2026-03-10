@@ -96,7 +96,10 @@ class PlanningLifecycle:
 
     async def submit_gatekeeper_message(self, text: str):
         self.engine.state.status = OrchestratorStatus.PLANNING
-        return SimpleNamespace(transcript="Plan drafted")
+        return SimpleNamespace(
+            transcript="Plan drafted",
+            agent_record=SimpleNamespace(agent_id="gatekeeper-project_start-test"),
+        )
 
 
 @pytest.mark.asyncio
@@ -181,8 +184,12 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
     async with first_app.run_test() as pilot:
         await first_app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
 
-    stored_gatekeeper = HistoryStore(str(history_dir)).load_thread(ChatPanel.GATEKEEPER_THREAD_ID)
+    stored_gatekeeper = next(
+        thread for thread in HistoryStore(str(history_dir)).list_threads() if thread.model == "gatekeeper"
+    )
     assert stored_gatekeeper is not None
+    assert stored_gatekeeper.id == "gatekeeper-project_start-test"
+    assert (history_dir / "gatekeeper-project_start-test.json").is_file()
     assert [turn.items[0].content for turn in stored_gatekeeper.turns] == ["Build an auth MVP.", "Plan drafted"]
 
     reloaded_app = VibrantApp(
@@ -216,8 +223,12 @@ async def test_app_resolves_project_relative_history_dir(tmp_path: Path):
     async with app.run_test() as pilot:
         await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
 
-    stored_gatekeeper = HistoryStore(str(repo / ".vibrant" / "conversations")).load_thread(
-        ChatPanel.GATEKEEPER_THREAD_ID
+    stored_gatekeeper = next(
+        thread
+        for thread in HistoryStore(str(repo / ".vibrant" / "conversations")).list_threads()
+        if thread.model == "gatekeeper"
     )
     assert stored_gatekeeper is not None
+    assert stored_gatekeeper.id == "gatekeeper-project_start-test"
+    assert (repo / ".vibrant" / "conversations" / "gatekeeper-project_start-test.json").is_file()
     assert [turn.items[0].content for turn in stored_gatekeeper.turns] == ["Build an auth MVP.", "Plan drafted"]
