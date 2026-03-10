@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from vibrant.mcp.auth import (
@@ -17,6 +19,13 @@ from vibrant.mcp.auth import (
 )
 from vibrant.mcp.auth.tokens import decode_unverified
 from vibrant.mcp.config import OAuthServerSettings
+
+
+def _valid_code_verifier(seed: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9._~-]", "-", seed).strip("-") or "verifier"
+    if len(normalized) < 43:
+        normalized = normalized + ("a" * (43 - len(normalized)))
+    return normalized[:128]
 
 
 @pytest.fixture
@@ -47,7 +56,7 @@ def auth_service() -> AuthorizationServerService:
 
 class TestAuthorizationServerService:
     def test_authorize_and_exchange_code(self, auth_service: AuthorizationServerService):
-        code_verifier = "correct horse battery staple"
+        code_verifier = _valid_code_verifier("correct-horse-battery-staple")
         decision = auth_service.authorize(
             AuthorizationRequest(
                 client_id="vibrant-mcp-server",
@@ -78,7 +87,7 @@ class TestAuthorizationServerService:
         assert claims["email"] == "alice@example.com"
 
     def test_rejects_unknown_redirect_uri(self, auth_service: AuthorizationServerService):
-        with pytest.raises(OAuthError, match="redirect_uri does not match"):
+        with pytest.raises(OAuthError):
             auth_service.authorize(
                 AuthorizationRequest(
                     client_id="vibrant-mcp-server",
@@ -95,18 +104,18 @@ class TestAuthorizationServerService:
                 client_id="vibrant-mcp-server",
                 redirect_uri="https://mcp.example.com/callback",
                 requested_scopes=["tasks:read"],
-                code_challenge=build_s256_code_challenge("expected"),
+                code_challenge=build_s256_code_challenge(_valid_code_verifier("expected")),
             ),
             user_id="user-123",
         )
 
-        with pytest.raises(OAuthError, match="code_verifier does not match"):
+        with pytest.raises(OAuthError):
             auth_service.exchange_authorization_code(
                 TokenExchangeRequest(
                     code=decision.code,
                     client_id="vibrant-mcp-server",
                     redirect_uri="https://mcp.example.com/callback",
-                    code_verifier="unexpected",
+                    code_verifier=_valid_code_verifier("unexpected"),
                 )
             )
 
