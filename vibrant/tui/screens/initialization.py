@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Label, Static
 
@@ -122,6 +122,18 @@ class DirectorySelectionScreen(ModalScreen[Path | None]):
 class InitializationScreen(ModalScreen[None]):
     """Full-screen entry flow for uninitialized workspaces."""
 
+    class InitializeRequested(Message):
+        """Request project initialization for a target directory."""
+
+        def __init__(self, target_path: Path) -> None:
+            super().__init__()
+            self.target_path = target_path
+
+    class ExitRequested(Message):
+        """Request the app to exit from the initialization screen."""
+
+        pass
+
     CSS = """
     InitializationScreen {
         align: center middle;
@@ -231,7 +243,7 @@ class InitializationScreen(ModalScreen[None]):
         self.query_one("#initialization-options", Multiselect).action_select()
 
     async def action_initialize_here(self) -> None:
-        await self._initialize_directory(self._current_directory)
+        self.post_message(self.InitializeRequested(self._current_directory))
 
     async def action_select_directory(self) -> None:
         self.app.push_screen(
@@ -242,17 +254,7 @@ class InitializationScreen(ModalScreen[None]):
     def _on_directory_selected(self, selected_path: Path | None) -> None:
         if selected_path is None:
             return
-        asyncio.create_task(self._initialize_directory(selected_path), name="vibrant-init-selected-directory")
+        self.post_message(self.InitializeRequested(selected_path))
 
     def action_exit_app(self) -> None:
-        self.app.exit()
-
-    async def _initialize_directory(self, target_path: Path) -> None:
-        initialize_for_app = getattr(self.app, "initialize_project_at", None)
-        if not callable(initialize_for_app):
-            self.notify("Initialization is unavailable in this app instance.", severity="error")
-            return
-
-        initialized = await initialize_for_app(target_path)
-        if initialized:
-            self.dismiss(None)
+        self.post_message(self.ExitRequested())
