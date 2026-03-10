@@ -19,14 +19,14 @@ from typing import Any
 
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.consensus import ConsensusStatus
 from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
 from vibrant.models.task import TaskInfo
 
 from .lifecycle import CodeAgentLifecycle
-from .types import CodeAgentLifecycleResult
+from .types import CodeAgentLifecycleResult, OrchestratorAgentSnapshot
 
 _WORKFLOW_TO_CONSENSUS = {
     OrchestratorStatus.INIT: ConsensusStatus.INIT,
@@ -263,7 +263,18 @@ class OrchestratorFacade:
     def _engine(self) -> Any | None:
         return getattr(self.lifecycle, "engine", None)
 
+    def _state_store(self) -> Any | None:
+        return getattr(self.lifecycle, "state_store", None)
+
+    def _agent_manager(self) -> Any | None:
+        return getattr(self.lifecycle, "agent_manager", None)
+
     def _pending_questions_from_engine(self) -> list[str]:
+        state_store = self._state_store()
+        pending_questions = getattr(state_store, "pending_questions", None)
+        if callable(pending_questions):
+            return list(pending_questions())
+
         engine = self._engine()
         state = getattr(engine, "state", None)
         questions = getattr(state, "pending_questions", None)
@@ -272,6 +283,12 @@ class OrchestratorFacade:
         return [question for question in questions if isinstance(question, str) and question]
 
     def _question_records_from_engine(self) -> tuple[QuestionRecord, ...]:
+        state_store = self._state_store()
+        state = getattr(state_store, "state", None)
+        records = getattr(state, "questions", None)
+        if isinstance(records, list):
+            return tuple(record for record in records if isinstance(record, QuestionRecord))
+
         engine = self._engine()
         state = getattr(engine, "state", None)
         records = getattr(state, "questions", None)
@@ -280,11 +297,118 @@ class OrchestratorFacade:
         return tuple(record for record in records if isinstance(record, QuestionRecord))
 
     def _agent_records_from_engine(self) -> tuple[AgentRecord, ...]:
+        agent_manager = self._agent_manager()
+        list_records = getattr(agent_manager, "list_records", None)
+        if callable(list_records):
+            return tuple(list_records())
         engine = self._engine()
         agents = getattr(engine, "agents", None)
         if not isinstance(agents, dict):
             return ()
         return tuple(record for record in agents.values() if isinstance(record, AgentRecord))
+
+    @staticmethod
+    def _normalize_agent_type(value: object) -> AgentType | None:
+        if isinstance(value, AgentType):
+            return value
+        if isinstance(value, str):
+            try:
+                return AgentType(value.strip().lower())
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _normalize_agent_status(value: object) -> AgentStatus | None:
+        if isinstance(value, AgentStatus):
+            return value
+        if isinstance(value, str):
+            try:
+                return AgentStatus(value.strip().lower())
+            except ValueError:
+                return None
+        return None
+
+    def _snapshot_from_record(self, record: AgentRecord) -> OrchestratorAgentSnapshot:
+        status = record.status.value
+        done = record.status in AgentRecord.TERMINAL_STATUSES
+        return OrchestratorAgentSnapshot(
+            agent_id=record.agent_id,
+            task_id=record.task_id,
+            agent_type=record.type.value,
+            status=status,
+            state=status,
+            has_handle=False,
+            active=not done,
+            done=done,
+            awaiting_input=record.status is AgentStatus.AWAITING_INPUT,
+            pid=record.pid,
+            branch=record.branch,
+            worktree_path=record.worktree_path,
+            started_at=record.started_at,
+            finished_at=record.finished_at,
+            summary=record.summary,
+            error=record.error,
+            provider_thread_id=record.provider.provider_thread_id,
+            provider_thread_path=record.provider.thread_path,
+            provider_resume_cursor=record.provider.resume_cursor,
+            input_requests=[],
+            native_event_log=record.provider.native_event_log,
+            canonical_event_log=record.provider.canonical_event_log,
+        )
+
+    def _coerce_agent_snapshot(self, value: object) -> OrchestratorAgentSnapshot | None:
+        if isinstance(value, OrchestratorAgentSnapshot):
+            return value
+        if isinstance(value, AgentRecord):
+            return self._snapshot_from_record(value)
+
+        agent_id = getattr(value, "agent_id", None)
+        task_id = getattr(value, "task_id", None)
+        if not isinstance(agent_id, str) or not agent_id:
+            return None
+        if not isinstance(task_id, str) or not task_id:
+            return None
+
+        status_value = getattr(value, "status", None)
+        state_value = getattr(value, "state", status_value)
+        agent_type_value = getattr(value, "agent_type", getattr(value, "type", None))
+        status = self._normalize_agent_status(status_value)
+        state = self._normalize_agent_status(state_value)
+        agent_type = self._normalize_agent_type(agent_type_value)
+        done = bool(getattr(value, "done", status in AgentRecord.TERMINAL_STATUSES if status is not None else False))
+        awaiting_input = bool(
+            getattr(value, "awaiting_input", status is AgentStatus.AWAITING_INPUT or state is AgentStatus.AWAITING_INPUT)
+        )
+        active = bool(getattr(value, "active", not done))
+
+        return OrchestratorAgentSnapshot(
+            agent_id=agent_id,
+            task_id=task_id,
+            agent_type=agent_type.value if agent_type is not None else str(agent_type_value or "unknown"),
+            status=status.value if status is not None else str(status_value or "unknown"),
+            state=state.value if state is not None else str(state_value or status_value or "unknown"),
+            has_handle=bool(getattr(value, "has_handle", False)),
+            active=active,
+            done=done,
+            awaiting_input=awaiting_input,
+            pid=getattr(value, "pid", None),
+            branch=getattr(value, "branch", None),
+            worktree_path=getattr(value, "worktree_path", None),
+            started_at=getattr(value, "started_at", None),
+            finished_at=getattr(value, "finished_at", None),
+            summary=getattr(value, "summary", None),
+            error=getattr(value, "error", None),
+            provider_thread_id=getattr(value, "provider_thread_id", None),
+            provider_thread_path=getattr(value, "provider_thread_path", None),
+            provider_resume_cursor=getattr(value, "provider_resume_cursor", None),
+            input_requests=list(getattr(value, "input_requests", []) or []),
+            native_event_log=getattr(value, "native_event_log", None),
+            canonical_event_log=getattr(value, "canonical_event_log", None),
+        )
+
+    def _fallback_agent_snapshots(self) -> list[OrchestratorAgentSnapshot]:
+        return [self._snapshot_from_record(record) for record in self._agent_records_from_engine()]
 
     @staticmethod
     def _task_summary_timestamp(record: object) -> float:
@@ -342,13 +466,19 @@ class OrchestratorFacade:
 
     def snapshot(self) -> OrchestratorSnapshot:
         engine = self._engine()
-        state = getattr(engine, "state", None)
+        state_store = self._state_store()
+        state = getattr(state_store, "state", None) or getattr(engine, "state", None)
         status = getattr(state, "status", OrchestratorStatus.INIT)
         roadmap_document = getattr(self.lifecycle, "roadmap_document", None)
-        consensus_document = getattr(engine, "consensus", None)
+        consensus_document = getattr(state_store, "consensus", None)
+        if consensus_document is None:
+            consensus_document = getattr(engine, "consensus", None)
         consensus_path = getattr(engine, "consensus_path", None)
         if consensus_path is not None:
             consensus_path = Path(consensus_path)
+
+        user_input_banner = getattr(state_store, "user_input_banner", None)
+        notification_bell_enabled = getattr(state_store, "notification_bell_enabled", None)
 
         return OrchestratorSnapshot(
             status=self._normalize_status(status),
@@ -360,9 +490,11 @@ class OrchestratorFacade:
             agent_records=self._agent_records_from_engine(),
             execution_mode=self.execution_mode,
             user_input_banner=str(
-                getattr(engine, "USER_INPUT_BANNER", "⚠ Gatekeeper needs your input — see Chat panel")
+                user_input_banner() if callable(user_input_banner) else getattr(engine, "USER_INPUT_BANNER", "⚠ Gatekeeper needs your input — see Chat panel")
             ),
-            notification_bell_enabled=bool(getattr(engine, "notification_bell_enabled", False)),
+            notification_bell_enabled=bool(
+                notification_bell_enabled() if callable(notification_bell_enabled) else getattr(engine, "notification_bell_enabled", False)
+            ),
         )
 
     def workflow_status(self) -> OrchestratorStatus:
@@ -379,6 +511,55 @@ class OrchestratorFacade:
 
     def agent_records(self) -> list[AgentRecord]:
         return list(self.snapshot().agent_records)
+
+    def get_agent(self, agent_id: str) -> OrchestratorAgentSnapshot | None:
+        agent_manager = self._agent_manager()
+        get_agent = getattr(agent_manager, "get_agent", None)
+        if callable(get_agent):
+            return self._coerce_agent_snapshot(get_agent(agent_id))
+
+        for snapshot in self._fallback_agent_snapshots():
+            if snapshot.agent_id == agent_id:
+                return snapshot
+        return None
+
+    def list_agents(
+        self,
+        *,
+        task_id: str | None = None,
+        agent_type: AgentType | str | None = None,
+        include_completed: bool = True,
+        active_only: bool = False,
+    ) -> list[OrchestratorAgentSnapshot]:
+        agent_manager = self._agent_manager()
+        list_agents = getattr(agent_manager, "list_agents", None)
+        if callable(list_agents):
+            snapshots = [
+                snapshot
+                for item in list_agents(
+                    task_id=task_id,
+                    agent_type=agent_type,
+                    include_completed=include_completed,
+                    active_only=active_only,
+                )
+                if (snapshot := self._coerce_agent_snapshot(item)) is not None
+            ]
+            return snapshots
+
+        resolved_type = self._normalize_agent_type(agent_type)
+        snapshots = self._fallback_agent_snapshots()
+        if task_id is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.task_id == task_id]
+        if resolved_type is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.agent_type == resolved_type.value]
+        if active_only:
+            return [snapshot for snapshot in snapshots if snapshot.active]
+        if not include_completed:
+            return [snapshot for snapshot in snapshots if not snapshot.done or snapshot.awaiting_input]
+        return snapshots
+
+    def list_active_agents(self) -> list[OrchestratorAgentSnapshot]:
+        return self.list_agents(active_only=True)
 
     def question_records(self) -> list[QuestionRecord]:
         if self.questions is not None:
@@ -464,11 +645,7 @@ class OrchestratorFacade:
 
     def task_summaries(self) -> dict[str, str]:
         by_task: dict[str, tuple[float, str]] = {}
-        engine = self._engine()
-        if engine is not None and isinstance(getattr(engine, "agents", None), dict):
-            records = tuple(engine.agents.values())
-        else:
-            records = self.snapshot().agent_records
+        records = self.snapshot().agent_records
 
         for record in records:
             summary = getattr(record, "summary", None)

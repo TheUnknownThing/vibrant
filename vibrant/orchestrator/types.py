@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
@@ -27,6 +28,34 @@ class CodeAgentLifecycleResult:
     summary: str | None = None
     error: str | None = None
     worktree_path: str | None = None
+
+
+@dataclass(slots=True)
+class OrchestratorAgentSnapshot:
+    """Stable orchestrator-facing view of one agent run."""
+
+    agent_id: str
+    task_id: str
+    agent_type: str
+    status: str
+    state: str
+    has_handle: bool
+    active: bool
+    done: bool
+    awaiting_input: bool
+    pid: int | None = None
+    branch: str | None = None
+    worktree_path: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    summary: str | None = None
+    error: str | None = None
+    provider_thread_id: str | None = None
+    provider_thread_path: str | None = None
+    provider_resume_cursor: dict[str, Any] | None = None
+    input_requests: list[InputRequest] = field(default_factory=list)
+    native_event_log: str | None = None
+    canonical_event_log: str | None = None
 
 
 @dataclass(slots=True)

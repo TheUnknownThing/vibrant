@@ -11,7 +11,8 @@ from vibrant.agents.runtime import ProviderThreadHandle
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
-from vibrant.orchestrator.engine import OrchestratorEngine
+
+from .agent_records import AgentRecordStore
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +23,22 @@ AgentRecordCallback = Callable[[AgentRecord], Any]
 class AgentRegistry:
     """Own durable agent metadata and helper construction."""
 
-    def __init__(self, *, engine: OrchestratorEngine, vibrant_dir: str | Path) -> None:
-        self.engine = engine
+    def __init__(self, *, agent_store: AgentRecordStore, vibrant_dir: str | Path) -> None:
+        self.agent_store = agent_store
         self.vibrant_dir = Path(vibrant_dir)
 
-    def upsert(self, record: AgentRecord, *, increment_spawn: bool = False) -> Path:
-        return self.engine.upsert_agent_record(record, increment_spawn=increment_spawn)
+    def upsert(
+        self,
+        record: AgentRecord,
+        *,
+        increment_spawn: bool = False,
+        rebuild_state: bool = True,
+    ) -> Path:
+        return self.agent_store.upsert(
+            record,
+            increment_spawn=increment_spawn,
+            rebuild_state=rebuild_state,
+        )
 
     def make_record_callback(self, *, increment_spawn: bool = False) -> AgentRecordCallback:
         """Return a callback that persists every record mutation.
@@ -47,11 +58,11 @@ class AgentRegistry:
 
     def get(self, agent_id: str) -> AgentRecord | None:
         """Look up a persisted agent record by id."""
-        return self.engine.agents.get(agent_id)
+        return self.agent_store.get(agent_id)
 
     def list_records(self) -> list[AgentRecord]:
         """Return all known records in stable id order."""
-        return [self.engine.agents[agent_id] for agent_id in sorted(self.engine.agents)]
+        return self.agent_store.list_records()
 
     def list_active_records(self) -> list[AgentRecord]:
         """Return non-terminal records in stable id order."""
@@ -59,29 +70,15 @@ class AgentRegistry:
 
     def records_for_task(self, task_id: str) -> list[AgentRecord]:
         """Return records for a task ordered by start time then id."""
-        records = [record for record in self.engine.agents.values() if record.task_id == task_id]
-        return sorted(records, key=lambda record: ((record.started_at or record.finished_at) is None, record.started_at or record.finished_at, record.agent_id))
+        return self.agent_store.records_for_task(task_id)
 
     def latest_for_task(self, task_id: str, *, agent_type: AgentType | None = None) -> AgentRecord | None:
         """Return the latest persisted record for a task, optionally filtered by type."""
-        matches = self.records_for_task(task_id)
-        if agent_type is not None:
-            matches = [record for record in matches if record.type is agent_type]
-        return matches[-1] if matches else None
+        return self.agent_store.latest_for_task(task_id, agent_type=agent_type)
 
     def provider_thread_handle(self, agent_id: str) -> ProviderThreadHandle | None:
         """Return the persisted provider-thread handle for an agent, if available."""
-        record = self.get(agent_id)
-        if record is None:
-            return None
-        provider = record.provider
-        if provider.provider_thread_id is None and provider.thread_path is None and provider.resume_cursor is None:
-            return None
-        return ProviderThreadHandle(
-            thread_id=provider.provider_thread_id,
-            thread_path=provider.thread_path,
-            resume_cursor=provider.resume_cursor,
-        )
+        return self.agent_store.provider_thread_handle(agent_id)
 
     def create_code_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRecord:
         return self.create_task_agent_record(

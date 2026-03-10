@@ -1,6 +1,7 @@
 """Domain services for orchestrator state, planning, execution, and review."""
 
 from .agent_manager import AgentManagementService, ManagedAgentSnapshot
+from .agent_records import AgentRecordStore
 from .agents import AgentRegistry
 from .consensus import ConsensusService
 from .execution import TaskExecutionAttempt, TaskExecutionService
@@ -18,6 +19,7 @@ from .workflow import WorkflowService
 __all__ = [
     "AgentManagementService",
     "ManagedAgentSnapshot",
+    "AgentRecordStore",
     "AgentRegistry",
     "AgentRuntimeService",
     "RuntimeHandleSnapshot",

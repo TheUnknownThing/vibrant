@@ -9,6 +9,7 @@ As of March 10, 2026, the stable API for external consumers is:
 - `OrchestratorFacade`
 - `OrchestratorMCPServer`
 - `OrchestratorSnapshot`
+- `OrchestratorAgentSnapshot`
 - `CodeAgentLifecycleResult`
 
 `OrchestratorFacade` and `OrchestratorSnapshot` are the intended long-term
@@ -52,6 +53,38 @@ Fields:
 
 Use the snapshot when a caller wants a coherent, read-only view of orchestrator-backed state.
 
+### `OrchestratorAgentSnapshot`
+
+`OrchestratorAgentSnapshot` is the stable read model returned by facade agent-query methods.
+
+Fields:
+
+- `agent_id: str`
+- `task_id: str`
+- `agent_type: str`
+- `status: str`
+- `state: str`
+- `has_handle: bool`
+- `active: bool`
+- `done: bool`
+- `awaiting_input: bool`
+- `pid: int | None`
+- `branch: str | None`
+- `worktree_path: str | None`
+- `started_at: datetime | None`
+- `finished_at: datetime | None`
+- `summary: str | None`
+- `error: str | None`
+- `provider_thread_id: str | None`
+- `provider_thread_path: str | None`
+- `provider_resume_cursor: dict[str, Any] | None`
+- `input_requests: list[InputRequest]`
+- `native_event_log: str | None`
+- `canonical_event_log: str | None`
+
+Use this model when a caller needs the orchestrator's unified view of durable
+agent state plus any live runtime-handle projection that is available.
+
 ### `OrchestratorFacade` read methods
 
 Stable read methods:
@@ -63,6 +96,9 @@ Stable read methods:
 - `task(task_id)`
 - `consensus_source_path()`
 - `agent_records()`
+- `get_agent(agent_id)`
+- `list_agents(...)`
+- `list_active_agents()`
 - `task_summaries()`
 - `pending_questions()`
 - `question_records()`

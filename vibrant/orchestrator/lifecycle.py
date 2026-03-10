@@ -25,6 +25,7 @@ from vibrant.providers.codex.adapter import CodexProviderAdapter
 from .services import (
     AgentManagementService,
     AgentRegistry,
+    AgentRecordStore,
     AgentRuntimeService,
     ConsensusService,
     GitWorkspaceService,
@@ -93,9 +94,15 @@ class CodeAgentLifecycle:
         self.on_canonical_event = on_canonical_event
 
         self.state_store = StateStore(self.engine)
+        self.agent_store = AgentRecordStore(
+            vibrant_dir=self.vibrant_dir,
+            state_store=self.state_store,
+            engine=self.engine,
+        )
+        self.state_store.bind_agent_store(self.agent_store)
         self.roadmap_service = RoadmapService(self.roadmap_path, project_name=self.project_root.name)
         self.consensus_service = ConsensusService(self.consensus_path, state_store=self.state_store)
-        self.agent_registry = AgentRegistry(engine=self.engine, vibrant_dir=self.vibrant_dir)
+        self.agent_registry = AgentRegistry(agent_store=self.agent_store, vibrant_dir=self.vibrant_dir)
         self.question_service = QuestionService(state_store=self.state_store, gatekeeper=self.gatekeeper)
         self.git_service = GitWorkspaceService(project_root=self.project_root, git_manager=self.git_manager)
         self.prompt_service = PromptService(
@@ -210,6 +217,7 @@ class CodeAgentLifecycle:
     def reload_from_disk(self) -> RoadmapDocument:
         self.config = load_config(start_path=self.project_root)
         self.state_store.refresh()
+        self.agent_store.refresh()
         return self.roadmap_service.reload(
             project_name=self.project_root.name,
             concurrency_limit=self.engine.state.concurrency_limit,
