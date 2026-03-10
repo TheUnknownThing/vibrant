@@ -19,7 +19,11 @@ dev = [
     "pytest-asyncio>=0.24",
     "textual-dev>=1.0",
 ]
-
+mcp = [
+    "authlib>=1.6",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
 [project.scripts]
 vibrant = "vibrant.__main__:main"
 
