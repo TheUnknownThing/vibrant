@@ -4,8 +4,9 @@
 
 ## Service Migration
 
-[ ] Hook TUI events into real API calls, as is detailed in the [Orchestrator API documentation](../vibrant/orchestrator/STABLE_API.md).
-[ ] Remove remaining legacy multi-thread/session actions in `vibrant/tui/app.py`.
+[x] Hook TUI events into real API calls, as is detailed in the [Orchestrator API documentation](../vibrant/orchestrator/STABLE_API.md).
+[x] Remove remaining legacy multi-thread/session actions in `vibrant/tui/app.py`.
+[ ] (Defer) After reloading the application the session needs to be reloaded from the file system.
 
 ## Widget Improvements
 
@@ -23,11 +24,15 @@
 
 [ ] Implement stub in `vibrant/tui/widgets/task_status.py`.
 
-## Screen Improvements
+## Screen Fixes
 
 ### Initialization modal (select directory)
 
 [ ] When the dir input is not focused, pressing `Enter` should confirm the choice.
+
+### Planning Screen
+
+[ ] The second response from the agent does not render.
 
 ### Vibing Screen
 

@@ -174,11 +174,20 @@ class _WorkflowTransitionCompat:
             raise RuntimeError("Project lifecycle is not initialized")
 
         current = getattr(getattr(engine, "state", None), "status", None)
+        if current is next_status:
+            return
         if not self.can_transition_to(next_status):
             current_value = getattr(current, "value", str(current))
             raise ValueError(f"Invalid orchestrator state transition: {current_value} -> {next_status.value}")
 
         self._sync_consensus_status(next_status)
+
+        current = getattr(getattr(engine, "state", None), "status", None)
+        if current is next_status:
+            return
+        if not self.can_transition_to(next_status):
+            current_value = getattr(current, "value", str(current))
+            raise ValueError(f"Invalid orchestrator state transition: {current_value} -> {next_status.value}")
 
         state_store = getattr(self.lifecycle, "state_store", None)
         transition = getattr(state_store, "transition_to", None)

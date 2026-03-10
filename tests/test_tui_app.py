@@ -113,6 +113,18 @@ class PlanningLifecycle(ExecutingLifecycle):
         )
 
 
+class InitLifecycle:
+    def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
+        self.project_root = Path(project_root)
+        self.on_canonical_event = on_canonical_event
+        self.engine = OrchestratorEngine.load(self.project_root)
+        self.gatekeeper = object()
+
+    def reload_from_disk(self) -> RoadmapDocument:
+        self.engine.refresh_from_disk()
+        return RoadmapDocument(project=self.project_root.name, tasks=[])
+
+
 async def _shutdown_default_executor() -> None:
     loop = asyncio.get_running_loop()
     executor = getattr(loop, "_default_executor", None)
@@ -136,7 +148,7 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
@@ -164,7 +176,7 @@ async def test_uninitialized_workspace_shows_initialization_screen(tmp_path: Pat
     repo.mkdir()
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager())
+    app = VibrantApp(settings=settings, cwd=str(repo))
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -197,7 +209,7 @@ async def test_initialization_screen_can_initialize_current_workspace(tmp_path: 
     repo.mkdir()
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -220,7 +232,7 @@ async def test_initialization_screen_can_initialize_selected_workspace(tmp_path:
     target_repo.mkdir()
 
     settings = AppSettings(default_cwd=str(current_repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(current_repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(current_repo), lifecycle_factory=ExecutingLifecycle)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -248,7 +260,7 @@ async def test_directory_selection_screen_autocompletes_directories_only(tmp_pat
     ignored_file.write_text("ignore me", encoding="utf-8")
 
     settings = AppSettings(default_cwd=str(current_repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(current_repo), session_manager=FakeSessionManager())
+    app = VibrantApp(settings=settings, cwd=str(current_repo))
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -284,7 +296,7 @@ async def test_app_f2_toggles_pause_and_updates_consensus(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
 
     async with _run_test(app) as pilot:
         engine = app._lifecycle.engine  # noqa: SLF001 - verifying app wiring
@@ -307,7 +319,7 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=EscalationLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=EscalationLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
@@ -324,7 +336,7 @@ async def test_planning_mode_shows_consensus_building_screen(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=PlanningLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=PlanningLifecycle)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -341,6 +353,49 @@ async def test_planning_mode_shows_consensus_building_screen(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_vibe_command_transitions_init_through_planning_into_execution(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=InitLifecycle)
+
+    async with _run_test(app) as pilot:
+        await pilot.pause()
+
+        assert app.has_class("planning-mode") is True
+        assert app._lifecycle is not None  # noqa: SLF001 - verifies transition result
+        assert app._lifecycle.engine.state.status is OrchestratorStatus.INIT  # noqa: SLF001
+
+        await app.on_input_bar_slash_command(InputBar.SlashCommand("vibe", ""))
+        await pilot.pause()
+
+        assert app.has_class("vibing-mode") is True
+        assert app._lifecycle.engine.state.status is OrchestratorStatus.EXECUTING  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_transition_workflow_state_ignores_same_status_requests(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=PlanningLifecycle)
+
+    async with _run_test(app) as pilot:
+        await pilot.pause()
+
+        assert app._lifecycle is not None  # noqa: SLF001 - verifies lifecycle state
+        assert app._lifecycle.engine.state.status is OrchestratorStatus.PLANNING  # noqa: SLF001
+
+        app._transition_workflow_state(OrchestratorStatus.PLANNING)  # noqa: SLF001
+
+        assert app._lifecycle.engine.state.status is OrchestratorStatus.PLANNING  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -352,7 +407,6 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
     first_app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=FakeSessionManager(),
         lifecycle_factory=PlanningLifecycle,
     )
     async with _run_test(first_app):
@@ -369,7 +423,6 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
     reloaded_app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=FakeSessionManager(),
         lifecycle_factory=ExecutingLifecycle,
     )
     async with _run_test(reloaded_app) as pilot:
@@ -378,7 +431,7 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         gatekeeper_thread = panel.get_gatekeeper_thread()
         assert gatekeeper_thread is not None
         assert [turn.items[0].content for turn in gatekeeper_thread.turns] == ["Build an auth MVP.", "Plan drafted"]
-        assert reloaded_app._conversation_threads()[0].id == ChatPanel.GATEKEEPER_THREAD_ID  # noqa: SLF001
+        assert gatekeeper_thread.id == ChatPanel.GATEKEEPER_THREAD_ID
 
 
 @pytest.mark.asyncio
@@ -391,7 +444,6 @@ async def test_app_resolves_project_relative_history_dir(tmp_path: Path):
     app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=FakeSessionManager(),
         lifecycle_factory=PlanningLifecycle,
     )
 

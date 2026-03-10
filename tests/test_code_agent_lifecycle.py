@@ -15,7 +15,7 @@ from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
-from vibrant.orchestrator import CodeAgentLifecycle, OrchestratorEngine
+from vibrant.orchestrator import CodeAgentLifecycle, OrchestratorEngine, OrchestratorFacade
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -350,6 +350,20 @@ async def test_start_gatekeeper_message_returns_handle_before_result_is_applied(
     await asyncio.sleep(0)
 
     assert result.request.trigger is GatekeeperTrigger.PROJECT_START
+    assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
+
+
+def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(tmp_path):
+    repo = _init_repo(tmp_path)
+    initialize_project(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+    facade = OrchestratorFacade(lifecycle)
+
+    assert lifecycle.engine.state.status is OrchestratorStatus.INIT
+
+    facade.transition_workflow_state(OrchestratorStatus.PLANNING)
+
     assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
 
 
