@@ -9,7 +9,7 @@ from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
-from ..types import CodeAgentLifecycleResult, RuntimeExecutionResult
+from ..types import CodeAgentLifecycleResult
 from .agents import AgentRegistry
 from .git_workspace import GitWorkspaceService, format_merge_error
 from .prompts import PromptService
@@ -75,16 +75,16 @@ class TaskExecutionService:
 
             if result.outcome not in {"accepted", "retried"}:
                 break
-            if self.state_store.state.pending_questions:
+            if self.state_store.has_pending_questions():
                 break
-            if self.state_store.state.status.value in {"paused", "completed"}:
+            if self.state_store.status.value in {"paused", "completed"}:
                 break
 
         self.workflow_service.maybe_complete_workflow()
         return results
 
     async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
-        if self.state_store.state.pending_questions:
+        if self.state_store.has_pending_questions():
             return None
 
         dispatcher = self.roadmap_service.dispatcher

@@ -38,7 +38,7 @@ class ConsensusService:
 
     def write(self, document: ConsensusDocument) -> ConsensusDocument:
         written = self.writer.write(self.consensus_path, document)
-        self.state_store.engine.consensus = written
+        self.state_store.set_consensus(written)
         return written
 
     def set_status(self, status: ConsensusStatus) -> ConsensusDocument | None:

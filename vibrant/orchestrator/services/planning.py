@@ -36,12 +36,12 @@ class PlanningService:
         if not message:
             raise ValueError("Gatekeeper message cannot be empty")
 
-        if self.question_service.pending_questions():
+        if self.question_service.has_pending_questions():
             result = await self.question_service.answer(message)
         else:
             trigger = (
                 GatekeeperTrigger.PROJECT_START
-                if self.state_store.state.status is OrchestratorStatus.INIT
+                if self.state_store.status is OrchestratorStatus.INIT
                 else GatekeeperTrigger.USER_CONVERSATION
             )
             request = GatekeeperRequest(
