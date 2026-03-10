@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..config import DEFAULT_CONVERSATION_DIRECTORY
+
 
 class ApprovalMode(str, enum.Enum):
     SUGGEST = "suggest"
@@ -32,7 +34,7 @@ class AppSettings(BaseModel):
     default_cwd: str | None = None
     default_effort: str = "medium"
     codex_binary: str = "codex"
-    history_dir: str = "~/.vibrant/history"
+    history_dir: str = str(DEFAULT_CONVERSATION_DIRECTORY)
 
     def to_session_config(self, **overrides: Any) -> SessionConfig:
         base = {
@@ -44,4 +46,3 @@ class AppSettings(BaseModel):
         }
         base.update(overrides)
         return SessionConfig(**base)
-

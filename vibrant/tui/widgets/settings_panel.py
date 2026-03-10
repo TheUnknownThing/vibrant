@@ -126,6 +126,7 @@ class SettingsPanel(ModalScreen[AppSettings | None]):
                 default_effort=str(effort) if effort else self._settings.default_effort,
                 default_cwd=cwd or None,
                 codex_binary=self._settings.codex_binary,
+                history_dir=self._settings.history_dir,
             )
             self.dismiss(new_settings)
         elif event.button.id == "cancel-btn":

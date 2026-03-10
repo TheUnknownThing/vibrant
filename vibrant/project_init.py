@@ -111,6 +111,7 @@ def _render_default_config() -> str:
         f"concurrency-limit = {config.concurrency_limit}",
         f"agent-timeout-seconds = {config.agent_timeout_seconds}",
         f'worktree-directory = "{config.worktree_directory}"',
+        f'conversation-directory = "{config.conversation_directory}"',
         f'execution-mode = "{config.execution_mode.value}"',
         "",
         "[validation]",
