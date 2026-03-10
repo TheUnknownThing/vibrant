@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from uuid import uuid4
 
+from vibrant.agents import CodeAgent, MergeAgent
+from vibrant.agents.utils import maybe_forward_event
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, load_config
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument, RoadmapParser
 from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.gatekeeper.gatekeeper import _extract_error_message, _extract_text_from_progress_item, _stop_adapter_safely
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import GatekeeperStatus, OrchestratorStatus
 from vibrant.models.task import TaskInfo, TaskStatus
@@ -24,7 +24,7 @@ from vibrant.orchestrator.engine import OrchestratorEngine
 from vibrant.orchestrator.git_manager import GitManager, GitManagerError, GitMergeResult, GitWorktreeInfo
 from vibrant.orchestrator.task_dispatch import TaskDispatcher
 from vibrant.project_init import ensure_project_files
-from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
@@ -100,12 +100,29 @@ class CodeAgentLifecycle:
         self.dispatcher: TaskDispatcher | None = None
         self._active_gatekeeper_futures: set[asyncio.Future[Any]] = set()
 
+        self.code_agent = CodeAgent(
+            self.project_root,
+            config=self.config,
+            adapter_factory=self.adapter_factory,
+            on_canonical_event=on_canonical_event,
+            on_agent_record_updated=self._on_agent_record_updated,
+        )
+        self.merge_agent = MergeAgent(
+            self.project_root,
+            config=self.config,
+            adapter_factory=self.adapter_factory,
+            on_canonical_event=on_canonical_event,
+            on_agent_record_updated=self._on_agent_record_updated,
+        )
+
         self.reload_from_disk()
 
     def reload_from_disk(self) -> RoadmapDocument:
         """Refresh consensus, roadmap, and derived dispatcher state from disk."""
 
         self.config = load_config(start_path=self.project_root)
+        self.code_agent.config = self.config
+        self.merge_agent.config = self.config
         self.engine.refresh_from_disk()
         if self.roadmap_path.exists():
             incoming = self.roadmap_parser.parse_file(self.roadmap_path)
@@ -129,6 +146,11 @@ class CodeAgentLifecycle:
         """Return the configured roadmap execution strategy."""
 
         return self.config.execution_mode
+
+    def _on_agent_record_updated(self, agent_record: AgentRecord) -> None:
+        """Callback from AgentBase.run() for intermediate record updates."""
+
+        self.engine.upsert_agent_record(agent_record)
 
     async def _run_gatekeeper_request(
         self,
@@ -331,128 +353,36 @@ class CodeAgentLifecycle:
         self._persist_roadmap()
 
         prompt = self._build_task_prompt(task, worktree)
-        agent_record = self._build_agent_record(task=task, worktree=worktree, prompt=prompt)
-        events: list[CanonicalEvent] = []
-        transcript_chunks: list[str] = []
-        turn_finished = asyncio.Event()
-        runtime_error: str | None = None
-        adapter: Any | None = None
-
-        async def handle_event(event: CanonicalEvent) -> None:
-            nonlocal runtime_error, adapter
-
-            event_copy = dict(event)
-            events.append(event_copy)
-            event_type = str(event_copy.get("type") or "")
-            if event_type == "content.delta":
-                transcript_chunks.append(str(event_copy.get("delta", "")))
-            elif event_type == "task.progress":
-                text = _extract_text_from_progress_item(event_copy.get("item"))
-                if text:
-                    transcript_chunks.append(text)
-            elif event_type == "runtime.error":
-                runtime_error = _extract_error_message(event_copy)
-                turn_finished.set()
-            elif event_type == "turn.completed":
-                turn_finished.set()
-            elif event_type == "request.opened":
-                request_id = event_copy.get("request_id")
-                request_kind = str(event_copy.get("request_kind") or "request")
-                runtime_error = f"{self.REQUEST_ERROR_MESSAGE} ({request_kind})"
-                if adapter is not None and request_id is not None:
-                    await adapter.respond_to_request(
-                        request_id,
-                        error={"code": -32000, "message": runtime_error},
-                    )
-                turn_finished.set()
-
-            await _maybe_forward_event(self.on_canonical_event, event_copy)
-
+        agent_record = self.code_agent.build_agent_record(
+            task=task, worktree=worktree, prompt=prompt,
+        )
         agent_record.started_at = datetime.now(timezone.utc)
         self.engine.upsert_agent_record(agent_record, increment_spawn=True)
 
-        thread_runtime_mode = _parse_runtime_mode(self.config.sandbox_mode)
-        turn_runtime_mode = _parse_runtime_mode(self.config.turn_sandbox_policy or self.config.sandbox_mode)
-        turn_result: Any | None = None
+        run_result = await self.code_agent.run(
+            prompt=prompt,
+            agent_record=agent_record,
+            cwd=str(worktree.path),
+        )
 
-        try:
-            agent_record.transition_to(AgentStatus.CONNECTING)
-            self.engine.upsert_agent_record(agent_record)
+        self.engine.upsert_agent_record(run_result.agent_record)
 
-            adapter = self.adapter_factory(
-                cwd=str(worktree.path),
-                codex_binary=self.config.codex_binary,
-                launch_args=self.config.launch_args or None,
-                codex_home=self.config.codex_home,
-                agent_record=agent_record,
-                on_canonical_event=handle_event,
-            )
-            await adapter.start_session(cwd=str(worktree.path))
-            agent_record.pid = _extract_pid(adapter)
-            self.engine.upsert_agent_record(agent_record)
-
-            await adapter.start_thread(
-                model=self.config.model,
-                cwd=str(worktree.path),
-                runtime_mode=thread_runtime_mode,
-                approval_policy=self.config.approval_policy,
-                model_provider=self.config.model_provider,
-                reasoning_effort=self.config.reasoning_effort,
-                reasoning_summary=self.config.reasoning_summary,
-                extra_config=self.config.extra_config,
-            )
-
-            agent_record.transition_to(AgentStatus.RUNNING)
-            self.engine.upsert_agent_record(agent_record)
-
-            turn_result = await adapter.start_turn(
-                input_items=[{"type": "text", "text": prompt, "text_elements": []}],
-                runtime_mode=turn_runtime_mode,
-                approval_policy=self.config.approval_policy,
-            )
-            await asyncio.wait_for(turn_finished.wait(), timeout=float(self.config.agent_timeout_seconds))
-        except Exception as exc:
-            if runtime_error is None:
-                runtime_error = str(exc)
-        finally:
-            if adapter is not None:
-                await _stop_adapter_safely(adapter)
-
-        transcript = "".join(transcript_chunks).strip()
-        exit_code = _extract_exit_code(adapter)
-
-        if runtime_error:
-            agent_record.summary = transcript or agent_record.summary
-            _transition_terminal_agent(
-                agent_record,
-                AgentStatus.FAILED,
-                exit_code=exit_code if exit_code is not None else 1,
-                error=runtime_error,
-            )
-            self.engine.upsert_agent_record(agent_record)
+        if run_result.error:
             return await self._handle_failure(
                 task=task,
-                agent_record=agent_record,
+                agent_record=run_result.agent_record,
                 worktree=worktree,
-                events=events,
-                reason=runtime_error,
-                summary=transcript or None,
+                events=run_result.events,
+                reason=run_result.error,
+                summary=run_result.transcript or None,
                 notify_gatekeeper_on_retry=True,
             )
-
-        agent_record.summary = transcript or _extract_summary_from_turn_result(turn_result)
-        _transition_terminal_agent(
-            agent_record,
-            AgentStatus.COMPLETED,
-            exit_code=exit_code if exit_code is not None else 0,
-        )
-        self.engine.upsert_agent_record(agent_record)
 
         completed_task = self.dispatcher.mark_completed(task.id)
         self._persist_roadmap()
 
         gatekeeper_result = await self._run_gatekeeper_request(
-            self._build_gatekeeper_request_for_completion(completed_task, agent_record, worktree)
+            self._build_gatekeeper_request_for_completion(completed_task, run_result.agent_record, worktree)
         )
         self.engine.apply_gatekeeper_result(gatekeeper_result)
         self._merge_roadmap_from_result(gatekeeper_result)
@@ -464,10 +394,10 @@ class CodeAgentLifecycle:
                 task_id=completed_task.id,
                 outcome="awaiting_user",
                 task_status=completed_task.status,
-                agent_record=agent_record,
+                agent_record=run_result.agent_record,
                 gatekeeper_result=gatekeeper_result,
-                events=events,
-                summary=agent_record.summary,
+                events=run_result.events,
+                summary=run_result.agent_record.summary,
                 worktree_path=str(worktree.path),
             )
 
@@ -482,22 +412,34 @@ class CodeAgentLifecycle:
                     task_id=accepted_task.id,
                     outcome="accepted",
                     task_status=accepted_task.status,
-                    agent_record=agent_record,
+                    agent_record=run_result.agent_record,
                     gatekeeper_result=gatekeeper_result,
                     merge_result=merge_result,
-                    events=events,
-                    summary=agent_record.summary,
+                    events=run_result.events,
+                    summary=run_result.agent_record.summary,
                 )
 
+            # Merge conflict — attempt resolution via MergeAgent
+            merge_resolution = await self._attempt_merge_resolution(
+                task=completed_task,
+                agent_record=run_result.agent_record,
+                worktree=worktree,
+                failed_merge=merge_result,
+                gatekeeper_result=gatekeeper_result,
+            )
+            if merge_resolution is not None:
+                return merge_resolution
+
+            # MergeAgent failed — fall back to failure handling
             self._abort_merge_if_needed()
             merge_error = _format_merge_error(merge_result)
             return await self._handle_failure(
                 task=completed_task,
-                agent_record=agent_record,
+                agent_record=run_result.agent_record,
                 worktree=worktree,
-                events=events,
+                events=run_result.events,
                 reason=merge_error,
-                summary=agent_record.summary,
+                summary=run_result.agent_record.summary,
                 prior_gatekeeper_result=gatekeeper_result,
                 notify_gatekeeper_on_retry=True,
             )
@@ -505,13 +447,104 @@ class CodeAgentLifecycle:
         rejection_reason = gatekeeper_result.error or f"Gatekeeper verdict: {decision or 'rejected'}"
         return await self._handle_failure(
             task=completed_task,
-            agent_record=agent_record,
+            agent_record=run_result.agent_record,
             worktree=worktree,
-            events=events,
+            events=run_result.events,
             reason=rejection_reason,
-            summary=agent_record.summary,
+            summary=run_result.agent_record.summary,
             prior_gatekeeper_result=gatekeeper_result,
             notify_gatekeeper_on_retry=False,
+        )
+
+    async def _attempt_merge_resolution(
+        self,
+        *,
+        task: TaskInfo,
+        agent_record: AgentRecord,
+        worktree: GitWorktreeInfo,
+        failed_merge: GitMergeResult,
+        gatekeeper_result: GatekeeperRunResult,
+    ) -> CodeAgentLifecycleResult | None:
+        """Attempt to resolve merge conflicts via the MergeAgent.
+
+        Returns a ``CodeAgentLifecycleResult`` on success, or ``None`` if
+        the merge agent fails (caller should fall through to failure handling).
+        """
+
+        if not failed_merge.conflicted_files:
+            return None
+
+        conflict_diff = _run_git_capture(self.project_root, "diff")
+        merge_prompt = self.merge_agent.build_merge_prompt(
+            task_id=task.id,
+            task_title=task.title,
+            branch=task.branch or self.git_manager.branch_name(task.id),
+            main_branch=self.git_manager.main_branch,
+            conflicted_files=failed_merge.conflicted_files,
+            conflict_diff=conflict_diff or "No diff available.",
+            task_summary=agent_record.summary,
+        )
+        merge_record = self.merge_agent.build_agent_record(
+            task_id=task.id,
+            branch=task.branch,
+        )
+        merge_record.started_at = datetime.now(timezone.utc)
+        self.engine.upsert_agent_record(merge_record, increment_spawn=True)
+
+        merge_run = await self.merge_agent.run(
+            prompt=merge_prompt,
+            agent_record=merge_record,
+            cwd=str(self.project_root),
+        )
+        self.engine.upsert_agent_record(merge_run.agent_record)
+
+        if merge_run.error:
+            # MergeAgent could not resolve — caller handles fallback
+            return None
+
+        # Verify that all conflicts are resolved (no remaining conflict markers)
+        remaining = _run_git_capture(self.project_root, "diff", "--check")
+        unmerged = _run_git_capture(self.project_root, "diff", "--name-only", "--diff-filter=U")
+        if unmerged:
+            # Still has unmerged files — agent didn't fully resolve
+            return None
+
+        # Complete the merge commit
+        try:
+            subprocess.run(
+                ["git", "commit", "--no-edit"],
+                cwd=str(self.project_root),
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            return None
+
+        accepted_task = self.dispatcher.accept_task(task.id)
+        self._persist_roadmap()
+        self._cleanup_worktree(task.id)
+        self._maybe_complete_workflow()
+
+        # Re-use the original merge result but mark it as resolved
+        resolved_merge = GitMergeResult(
+            branch=failed_merge.branch,
+            merged=True,
+            has_conflicts=False,
+            conflicted_files=[],
+            stdout=f"Merge conflicts resolved by MergeAgent. Files: {', '.join(failed_merge.conflicted_files)}",
+            stderr="",
+        )
+
+        return CodeAgentLifecycleResult(
+            task_id=accepted_task.id,
+            outcome="accepted",
+            task_status=accepted_task.status,
+            agent_record=agent_record,
+            gatekeeper_result=gatekeeper_result,
+            merge_result=resolved_merge,
+            events=merge_run.events,
+            summary=merge_run.agent_record.summary or agent_record.summary,
         )
 
     async def _handle_failure(
@@ -606,26 +639,6 @@ class CodeAgentLifecycle:
                     rendered.append(candidate.read_text(encoding="utf-8").strip())
                     break
         return rendered or None
-
-    def _build_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRecord:
-        agent_id = f"agent-{task.id}-{uuid4().hex[:8]}"
-        native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{agent_id}.ndjson"
-        canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
-        return AgentRecord(
-            agent_id=agent_id,
-            task_id=task.id,
-            type=AgentType.CODE,
-            branch=task.branch,
-            worktree_path=str(worktree.path),
-            prompt_used=prompt,
-            skills_loaded=list(task.skills),
-            retry_count=task.retry_count,
-            max_retries=task.max_retries,
-            provider=AgentProviderMetadata(
-                native_event_log=str(native_log),
-                canonical_event_log=str(canonical_log),
-            ),
-        )
 
     def _build_gatekeeper_request_for_completion(
         self,
@@ -804,32 +817,7 @@ class CodeAgentLifecycle:
             "provider": "vibrant",
         }
         event.update(payload)
-        await _maybe_forward_event(self.on_canonical_event, event)
-
-
-def _transition_terminal_agent(
-    agent_record: AgentRecord,
-    status: AgentStatus,
-    *,
-    exit_code: int,
-    error: str | None = None,
-) -> None:
-    if agent_record.can_transition_to(status):
-        agent_record.transition_to(status, exit_code=exit_code, error=error)
-        return
-
-    agent_record.exit_code = exit_code
-    agent_record.error = error
-    if agent_record.finished_at is None:
-        agent_record.finished_at = datetime.now(timezone.utc)
-
-
-async def _maybe_forward_event(handler: CanonicalEventCallback | None, event: CanonicalEvent) -> None:
-    if handler is None:
-        return
-    callback_result = handler(event)
-    if inspect.isawaitable(callback_result):
-        await callback_result
+        await maybe_forward_event(self.on_canonical_event, event)
 
 
 @dataclass(slots=True)
@@ -853,61 +841,6 @@ def _apply_task_definition(existing: TaskInfo, incoming: TaskInfo) -> None:
     existing.dependencies = list(incoming.dependencies)
     existing.priority = incoming.priority
     existing.branch = incoming.branch or existing.branch
-
-
-def _parse_runtime_mode(value: str | None) -> RuntimeMode:
-    normalized = (value or RuntimeMode.WORKSPACE_WRITE.value).strip()
-    if not normalized:
-        return RuntimeMode.WORKSPACE_WRITE
-
-    key = normalized.replace("-", "_")
-    lowered = key.lower()
-    mapping = {
-        "read_only": RuntimeMode.READ_ONLY,
-        "readonly": RuntimeMode.READ_ONLY,
-        "workspace_write": RuntimeMode.WORKSPACE_WRITE,
-        "workspacewrite": RuntimeMode.WORKSPACE_WRITE,
-        "full_access": RuntimeMode.FULL_ACCESS,
-        "danger_full_access": RuntimeMode.FULL_ACCESS,
-        "dangerfullaccess": RuntimeMode.FULL_ACCESS,
-    }
-    try:
-        return mapping[lowered]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported runtime mode: {value}") from exc
-
-
-def _extract_pid(adapter: Any) -> int | None:
-    client = getattr(adapter, "client", None)
-    process = getattr(client, "_process", None)
-    pid = getattr(process, "pid", None)
-    return pid if isinstance(pid, int) else None
-
-
-def _extract_exit_code(adapter: Any | None) -> int | None:
-    client = getattr(adapter, "client", None)
-    process = getattr(client, "_process", None)
-    returncode = getattr(process, "returncode", None)
-    return returncode if isinstance(returncode, int) else None
-
-
-def _extract_summary_from_turn_result(turn_result: Any) -> str | None:
-    if not isinstance(turn_result, dict):
-        return None
-
-    candidates: list[Any] = [turn_result]
-    turn_payload = turn_result.get("turn")
-    if isinstance(turn_payload, dict):
-        candidates.append(turn_payload)
-
-    for candidate in candidates:
-        if isinstance(candidate.get("summary"), str) and candidate["summary"].strip():
-            return candidate["summary"].strip()
-        output_text = candidate.get("outputText") or candidate.get("output_text")
-        if isinstance(output_text, str) and output_text.strip():
-            return output_text.strip()
-
-    return None
 
 
 def _skill_candidates(skills_dir: Path, skill: str) -> tuple[Path, ...]:
