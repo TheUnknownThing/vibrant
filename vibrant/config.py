@@ -14,6 +14,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 DEFAULT_CONFIG_DIR = ".vibrant"
 DEFAULT_CONFIG_FILE = "vibrant.toml"
 DEFAULT_CONFIG_RELATIVE_PATH = Path(DEFAULT_CONFIG_DIR) / DEFAULT_CONFIG_FILE
+DEFAULT_CONVERSATION_DIRECTORY = Path(DEFAULT_CONFIG_DIR) / "conversations"
 DEFAULT_WORKTREE_DIRECTORY = "/tmp/vibrant-worktrees"
 
 
@@ -99,6 +100,16 @@ class VibrantConfig(BaseModel):
         validation_alias=AliasChoices("worktree_directory", "worktree-directory"),
         serialization_alias="worktree-directory",
     )
+    conversation_directory: str = Field(
+        default=str(DEFAULT_CONVERSATION_DIRECTORY),
+        validation_alias=AliasChoices(
+            "conversation_directory",
+            "conversation-directory",
+            "conversation_history_directory",
+            "conversation-history-directory",
+        ),
+        serialization_alias="conversation-directory",
+    )
     execution_mode: RoadmapExecutionMode = Field(
         default=RoadmapExecutionMode.AUTOMATIC,
         validation_alias=AliasChoices(
@@ -134,6 +145,11 @@ class VibrantConfig(BaseModel):
             else:
                 merged[key] = value
         return merged
+
+    def resolve_conversation_directory(self, project_root: str | Path) -> Path:
+        """Resolve the configured conversation directory against the project root."""
+
+        return resolve_project_path(self.conversation_directory, project_root=project_root)
 
 
 def find_project_root(start_path: str | Path | None = None) -> Path:
@@ -178,6 +194,16 @@ def resolve_config_path(path: str | Path | None = None, start_path: str | Path |
     return (candidate / DEFAULT_CONFIG_RELATIVE_PATH).resolve()
 
 
+def resolve_project_path(path: str | Path, *, project_root: str | Path) -> Path:
+    """Resolve a project-relative path against ``project_root``."""
+
+    root = Path(project_root).expanduser().resolve()
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    return candidate.resolve()
+
+
 def _read_toml(config_path: Path) -> dict[str, Any]:
     try:
         with config_path.open("rb") as handle:
@@ -213,6 +239,7 @@ def load_config(
 
 
 __all__ = [
+    "DEFAULT_CONVERSATION_DIRECTORY",
     "DEFAULT_CONFIG_RELATIVE_PATH",
     "DEFAULT_WORKTREE_DIRECTORY",
     "RoadmapExecutionMode",
@@ -220,5 +247,6 @@ __all__ = [
     "VibrantConfigError",
     "find_project_root",
     "load_config",
+    "resolve_project_path",
     "resolve_config_path",
 ]

@@ -7,6 +7,7 @@ import textwrap
 import pytest
 
 from vibrant.config import (
+    DEFAULT_CONVERSATION_DIRECTORY,
     DEFAULT_WORKTREE_DIRECTORY,
     RoadmapExecutionMode,
     VibrantConfigError,
@@ -41,6 +42,7 @@ class TestLoadConfig:
                 concurrency-limit = 8
                 agent-timeout-seconds = 2700
                 worktree-directory = "/var/tmp/vibrant-worktrees"
+                conversation-directory = ".vibrant/session-history"
                 execution-mode = "manual"
 
                 [validation]
@@ -66,6 +68,8 @@ class TestLoadConfig:
         assert config.concurrency_limit == 8
         assert config.agent_timeout_seconds == 2700
         assert config.worktree_directory == "/var/tmp/vibrant-worktrees"
+        assert config.conversation_directory == ".vibrant/session-history"
+        assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "session-history"
         assert config.execution_mode is RoadmapExecutionMode.MANUAL
         assert config.test_commands == ["pytest -q", "ruff check ."]
         assert config.extra_config == {"persistExtendedHistory": True}
@@ -87,6 +91,8 @@ class TestLoadConfig:
         assert config.concurrency_limit == 4
         assert config.agent_timeout_seconds == 1500
         assert config.worktree_directory == DEFAULT_WORKTREE_DIRECTORY
+        assert config.conversation_directory == str(DEFAULT_CONVERSATION_DIRECTORY)
+        assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "conversations"
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
         assert config.test_commands == []
 

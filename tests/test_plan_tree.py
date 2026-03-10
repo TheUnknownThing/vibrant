@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -67,6 +69,7 @@ class FakeLifecycle:
         self.project_root = Path(project_root)
         self.roadmap_path = self.project_root / ".vibrant" / "roadmap.md"
         self.on_canonical_event = on_canonical_event
+        self.task_completed = asyncio.Event()
         self.engine = SimpleNamespace(
             agents={},
             USER_INPUT_BANNER="⚠ Gatekeeper needs your input — see Chat panel",
@@ -94,6 +97,7 @@ class FakeLifecycle:
         if self.on_canonical_event is not None:
             await self.on_canonical_event({"type": "turn.completed", "task_id": task.id})
 
+        self.task_completed.set()
         return CodeAgentLifecycleResult(
             task_id=task.id,
             outcome="accepted",
@@ -109,6 +113,30 @@ def _write_roadmap(repo: Path) -> None:
     RoadmapParser().write(repo / ".vibrant" / "roadmap.md", RoadmapParser().parse(SAMPLE_ROADMAP))
 
 
+async def _wait_for(assertion, *, attempts: int = 50) -> None:
+    for _ in range(attempts):
+        if assertion():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("Timed out waiting for plan tree update")
+
+
+async def _shutdown_default_executor() -> None:
+    loop = asyncio.get_running_loop()
+    executor = getattr(loop, "_default_executor", None)
+    if executor is None:
+        return
+    executor.shutdown(wait=True, cancel_futures=True)
+    loop._default_executor = None
+
+
+@asynccontextmanager
+async def _run_test(app):
+    async with app.run_test() as pilot:
+        yield pilot
+    await _shutdown_default_executor()
+
+
 @pytest.mark.asyncio
 async def test_plan_tree_displays_icons_and_priority_styling():
     tasks = RoadmapParser().parse(SAMPLE_ROADMAP).tasks
@@ -116,8 +144,7 @@ async def test_plan_tree_displays_icons_and_priority_styling():
     tasks[1].status = TaskStatus.FAILED
 
     app = PlanTreeHarness(tasks)
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(app) as pilot:
         tree = app.query_one(Tree)
         first_node = tree.root.children[0]
         second_node = first_node.children[0]
@@ -145,14 +172,12 @@ async def test_plan_tree_live_updates_when_task_status_changes():
     tasks = RoadmapParser().parse(SAMPLE_ROADMAP).tasks
     app = PlanTreeHarness(tasks)
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(app):
         assert _task_label(app, "task-001").startswith("○ task-001")
 
         updated_tasks = RoadmapParser().parse(SAMPLE_ROADMAP).tasks
         updated_tasks[0].status = TaskStatus.ACCEPTED
         app.query_one(PlanTree).update_tasks(updated_tasks)
-        await pilot.pause()
 
         assert _task_label(app, "task-001").startswith("✓ task-001")
 
@@ -165,13 +190,18 @@ async def test_app_wires_plan_tree_and_run_next_task_into_gui(tmp_path):
     _write_roadmap(repo)
 
     app = VibrantApp(cwd=str(repo), lifecycle_factory=FakeLifecycle)
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(app) as pilot:
         assert _task_label(app, "task-001").startswith("○ task-001")
 
         await pilot.press("f6")
-        await pilot.pause()
-        await pilot.pause()
+        lifecycle = app._lifecycle  # noqa: SLF001 - verify fake lifecycle signaling
+        assert isinstance(lifecycle, FakeLifecycle)
+        await asyncio.wait_for(lifecycle.task_completed.wait(), timeout=1.0)
+        await _wait_for(
+            lambda: _task_label(app, "task-001").startswith("✓ task-001")
+            and not app._task_execution_in_progress  # noqa: SLF001 - verify runner cleanup
+            and app._roadmap_runner_task is None,  # noqa: SLF001 - verify runner cleanup
+        )
 
         assert _task_label(app, "task-001").startswith("✓ task-001")
         roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")

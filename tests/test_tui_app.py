@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -104,7 +106,26 @@ class PlanningLifecycle(ExecutingLifecycle):
 
     async def submit_gatekeeper_message(self, text: str):
         self.engine.state.status = OrchestratorStatus.PLANNING
-        return SimpleNamespace(transcript="Plan drafted")
+        return SimpleNamespace(
+            transcript="Plan drafted",
+            agent_record=SimpleNamespace(agent_id="gatekeeper-project_start-test"),
+        )
+
+
+async def _shutdown_default_executor() -> None:
+    loop = asyncio.get_running_loop()
+    executor = getattr(loop, "_default_executor", None)
+    if executor is None:
+        return
+    executor.shutdown(wait=True, cancel_futures=True)
+    loop._default_executor = None
+
+
+@asynccontextmanager
+async def _run_test(app):
+    async with app.run_test() as pilot:
+        yield pilot
+    await _shutdown_default_executor()
 
 
 @pytest.mark.asyncio
@@ -116,8 +137,7 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(app) as pilot:
         assert app.query_one("#plan-panel") is not None
         assert app.query_one("#agent-output-panel") is not None
         assert app.query_one("#consensus-panel") is not None
@@ -131,7 +151,6 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
         assert keymap["f10"] == "quit_app"
 
         await pilot.press("f1")
-        await pilot.pause()
         assert isinstance(app.screen, HelpScreen)
 
 
@@ -259,19 +278,16 @@ async def test_app_f2_toggles_pause_and_updates_consensus(tmp_path: Path):
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(app) as pilot:
         engine = app._lifecycle.engine  # noqa: SLF001 - verifying app wiring
         assert engine.state.status is OrchestratorStatus.EXECUTING
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.EXECUTING
 
         await pilot.press("f2")
-        await pilot.pause()
         assert engine.state.status is OrchestratorStatus.PAUSED
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.PAUSED
 
         await pilot.press("f2")
-        await pilot.pause()
         assert engine.state.status is OrchestratorStatus.EXECUTING
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.EXECUTING
 
@@ -285,8 +301,7 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=EscalationLifecycle)
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(app):
         banner = app.query_one("#notification-banner", Static)
         assert banner.display is True
         assert "Gatekeeper needs your input" in (app.get_banner_text() or "")
@@ -328,13 +343,15 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         session_manager=FakeSessionManager(),
         lifecycle_factory=PlanningLifecycle,
     )
-    async with first_app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(first_app):
         await first_app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
-        await pilot.pause()
 
-    stored_gatekeeper = HistoryStore(str(history_dir)).load_thread(ChatPanel.GATEKEEPER_THREAD_ID)
+    stored_gatekeeper = next(
+        thread for thread in HistoryStore(str(history_dir)).list_threads() if thread.model == "gatekeeper"
+    )
     assert stored_gatekeeper is not None
+    assert stored_gatekeeper.id == "gatekeeper-project_start-test"
+    assert (history_dir / "gatekeeper-project_start-test.json").is_file()
     assert [turn.items[0].content for turn in stored_gatekeeper.turns] == ["Build an auth MVP.", "Plan drafted"]
 
     reloaded_app = VibrantApp(
@@ -343,10 +360,37 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         session_manager=FakeSessionManager(),
         lifecycle_factory=ExecutingLifecycle,
     )
-    async with reloaded_app.run_test() as pilot:
-        await pilot.pause()
+    async with _run_test(reloaded_app):
         panel = reloaded_app.query_one(ChatPanel)
         gatekeeper_thread = panel.get_gatekeeper_thread()
         assert gatekeeper_thread is not None
         assert [turn.items[0].content for turn in gatekeeper_thread.turns] == ["Build an auth MVP.", "Plan drafted"]
         assert reloaded_app._conversation_threads()[0].id == ChatPanel.GATEKEEPER_THREAD_ID  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_app_resolves_project_relative_history_dir(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=".vibrant/conversations")
+    app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=FakeSessionManager(),
+        lifecycle_factory=PlanningLifecycle,
+    )
+
+    async with _run_test(app):
+        await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+
+    stored_gatekeeper = next(
+        thread
+        for thread in HistoryStore(str(repo / ".vibrant" / "conversations")).list_threads()
+        if thread.model == "gatekeeper"
+    )
+    assert stored_gatekeeper is not None
+    assert stored_gatekeeper.id == "gatekeeper-project_start-test"
+    assert (repo / ".vibrant" / "conversations" / "gatekeeper-project_start-test.json").is_file()
+    assert [turn.items[0].content for turn in stored_gatekeeper.turns] == ["Build an auth MVP.", "Plan drafted"]

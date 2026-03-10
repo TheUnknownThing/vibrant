@@ -10,16 +10,18 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import sys
 from collections.abc import Sequence
 
+from .config import find_project_root, load_config
 from .project_init import initialize_project
 
 
-def _check_codex() -> str | None:
+def _check_codex(binary: str = "codex") -> str | None:
     """Return the path to the codex binary, or ``None`` if not found."""
-    return shutil.which("codex")
+    return shutil.which(binary)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -61,10 +63,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"Initialized Vibrant project in {vibrant_dir}")
         return
 
-    codex_path = _check_codex()
+    start_path = args.cwd or os.getcwd()
+    project_root = find_project_root(start_path)
+    config = load_config(start_path=start_path)
+
+    codex_path = _check_codex(config.codex_binary)
     if not codex_path:
         print(
-            "❌ Error: 'codex' CLI not found in PATH.\n"
+            f"❌ Error: '{config.codex_binary}' CLI not found in PATH.\n"
             "Install it: npm install -g @openai/codex\n"
             "Then run: codex auth",
             file=sys.stderr,
@@ -87,11 +93,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     from .models.settings import AppSettings
     from .tui.app import VibrantApp
 
-    settings = AppSettings(codex_binary=codex_path)
-    if args.model:
-        settings.default_model = args.model
-    if args.cwd:
-        settings.default_cwd = args.cwd
+    settings = AppSettings(
+        default_model=args.model or config.model,
+        default_cwd=args.cwd,
+        codex_binary=codex_path,
+        history_dir=str(config.resolve_conversation_directory(project_root)),
+    )
 
     app = VibrantApp(settings=settings, cwd=args.cwd)
     app.run()
