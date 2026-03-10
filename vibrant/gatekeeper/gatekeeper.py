@@ -4,24 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import logging
 import os
 import re
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
-from vibrant.models.consensus import ConsensusDocument
+from vibrant.models.consensus import ConsensusDocument, ConsensusStatus, DecisionAuthor
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
 PLANNING_COMPLETE_MCP_TOOL = "vibrant.end_planning_phase"
 PLANNING_COMPLETE_MCP_SENTINEL = f"MCP: {PLANNING_COMPLETE_MCP_TOOL}"
+logger = logging.getLogger(__name__)
 
 
 class GatekeeperTrigger(str, enum.Enum):
@@ -63,6 +65,22 @@ class GatekeeperRunResult:
     turn_result: Any | None = None
 
 
+@dataclass(slots=True)
+class GatekeeperRunHandle:
+    """Handle for an in-flight Gatekeeper run."""
+
+    request: GatekeeperRequest
+    prompt: str
+    agent_record: AgentRecord
+    result_future: asyncio.Future[GatekeeperRunResult]
+
+    def done(self) -> bool:
+        return self.result_future.done()
+
+    async def wait(self) -> GatekeeperRunResult:
+        return await self.result_future
+
+
 class Gatekeeper:
     """Spawn and supervise the Gatekeeper agent through the provider adapter."""
 
@@ -82,6 +100,7 @@ class Gatekeeper:
         project_root: str | Path,
         *,
         adapter_factory: Any | None = None,
+        on_canonical_event: Callable[[CanonicalEvent], Any] | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
         self.project_root = find_project_root(project_root)
@@ -92,6 +111,7 @@ class Gatekeeper:
 
         self.config = load_config(start_path=self.project_root)
         self.adapter_factory = adapter_factory or CodexProviderAdapter
+        self.on_canonical_event = on_canonical_event
         self.timeout_seconds = timeout_seconds or float(self.config.agent_timeout_seconds)
         self.consensus_parser = ConsensusParser()
         self.consensus_writer = ConsensusWriter(parser=self.consensus_parser)
@@ -105,6 +125,18 @@ class Gatekeeper:
     ) -> GatekeeperRunResult:
         """Run the Gatekeeper for a single trigger and return the parsed outcome."""
 
+        handle = await self.start_run(request, resume_latest_thread=resume_latest_thread)
+        return await handle.wait()
+
+    async def start_run(
+        self,
+        request: GatekeeperRequest,
+        *,
+        resume_latest_thread: bool | None = None,
+        on_result: Callable[[GatekeeperRunResult], Any] | None = None,
+    ) -> GatekeeperRunHandle:
+        """Start a Gatekeeper run and return once the provider turn has been started."""
+
         agent_record = self._build_agent_record(request)
         prompt = self.render_prompt(request)
         before_consensus = _read_text(self.consensus_path)
@@ -114,29 +146,43 @@ class Gatekeeper:
         transcript_chunks: list[str] = []
         turn_finished = asyncio.Event()
         runtime_error: str | None = None
+        adapter: Any | None = None
 
-        async def on_canonical_event(event: CanonicalEvent) -> None:
+        async def handle_canonical_event(event: CanonicalEvent) -> None:
             nonlocal runtime_error
-            events.append(dict(event))
-            event_type = event.get("type")
+            event_copy = dict(event)
+            event_copy.setdefault("agent_id", agent_record.agent_id)
+            event_copy.setdefault("task_id", agent_record.task_id)
+            provider_thread_id = (
+                getattr(adapter, "provider_thread_id", None)
+                or agent_record.provider.provider_thread_id
+                or _extract_provider_thread_id(agent_record.provider.resume_cursor)
+            )
+            if provider_thread_id:
+                event_copy.setdefault("provider_thread_id", provider_thread_id)
+
+            events.append(event_copy)
+            event_type = event_copy.get("type")
             if event_type == "content.delta":
-                transcript_chunks.append(str(event.get("delta", "")))
+                transcript_chunks.append(str(event_copy.get("delta", "")))
             elif event_type == "task.progress":
-                text = _extract_text_from_progress_item(event.get("item"))
+                text = _extract_text_from_progress_item(event_copy.get("item"))
                 if text:
                     transcript_chunks.append(text)
             elif event_type == "runtime.error":
-                runtime_error = _extract_error_message(event)
+                runtime_error = _extract_error_message(event_copy)
                 turn_finished.set()
             elif event_type == "turn.completed":
                 turn_finished.set()
+
+            await _maybe_forward_event(self.on_canonical_event, dict(event_copy))
 
         adapter = self.adapter_factory(
             cwd=str(self.project_root),
             codex_binary=self.config.codex_binary,
             codex_home=self.config.codex_home,
             agent_record=agent_record,
-            on_canonical_event=on_canonical_event,
+            on_canonical_event=handle_canonical_event,
         )
 
         turn_result: Any | None = None
@@ -155,7 +201,6 @@ class Gatekeeper:
                 "cwd": str(self.project_root),
                 "runtime_mode": RuntimeMode.FULL_ACCESS,
                 "approval_policy": self.config.approval_policy,
-                "model_provider": self.config.model_provider,
                 "reasoning_effort": self.config.reasoning_effort,
                 "reasoning_summary": self.config.reasoning_summary,
                 "extra_config": self.config.extra_config,
@@ -173,7 +218,6 @@ class Gatekeeper:
                 runtime_mode=RuntimeMode.FULL_ACCESS,
                 approval_policy=self.config.approval_policy,
             )
-            await asyncio.wait_for(turn_finished.wait(), timeout=self.timeout_seconds)
         except Exception as exc:
             error_text = runtime_error or str(exc)
             if agent_record.status not in AgentRecord.TERMINAL_STATUSES:
@@ -197,33 +241,84 @@ class Gatekeeper:
                 turn_result=turn_result,
             )
             await _stop_adapter_safely(adapter)
+            future: asyncio.Future[GatekeeperRunResult] = asyncio.get_running_loop().create_future()
+            future.set_result(result)
+            return GatekeeperRunHandle(
+                request=request,
+                prompt=prompt,
+                agent_record=agent_record,
+                result_future=future,
+            )
+
+        async def finalize_run() -> GatekeeperRunResult:
+            try:
+                await asyncio.wait_for(turn_finished.wait(), timeout=self.timeout_seconds)
+
+                transcript = "".join(transcript_chunks).strip()
+                if runtime_error:
+                    agent_record.transition_to(AgentStatus.FAILED, error=runtime_error)
+                else:
+                    agent_record.summary = transcript or None
+                    agent_record.transition_to(AgentStatus.COMPLETED)
+                self._persist_agent_record(agent_record)
+
+                after_consensus = _read_text(self.consensus_path)
+                after_roadmap = _read_text(self.roadmap_path)
+                result = self.parse_run_artifacts(
+                    request=request,
+                    prompt=prompt,
+                    transcript=transcript,
+                    before_consensus_text=before_consensus,
+                    after_consensus_text=after_consensus,
+                    before_roadmap_text=before_roadmap,
+                    after_roadmap_text=after_roadmap,
+                    events=events,
+                    agent_record=agent_record,
+                    error=runtime_error,
+                    turn_result=turn_result,
+                )
+            except Exception as exc:
+                error_text = runtime_error or str(exc)
+                if agent_record.status not in AgentRecord.TERMINAL_STATUSES:
+                    agent_record.transition_to(AgentStatus.FAILED, error=error_text)
+                else:
+                    agent_record.error = error_text
+                self._persist_agent_record(agent_record)
+                after_consensus = _read_text(self.consensus_path)
+                after_roadmap = _read_text(self.roadmap_path)
+                result = self.parse_run_artifacts(
+                    request=request,
+                    prompt=prompt,
+                    transcript="".join(transcript_chunks).strip(),
+                    before_consensus_text=before_consensus,
+                    after_consensus_text=after_consensus,
+                    before_roadmap_text=before_roadmap,
+                    after_roadmap_text=after_roadmap,
+                    events=events,
+                    agent_record=agent_record,
+                    error=error_text,
+                    turn_result=turn_result,
+                )
+            finally:
+                await _stop_adapter_safely(adapter)
+
+            await self._emit_run_finished_event(result)
+            try:
+                await _maybe_forward_result(on_result, result)
+            except Exception:
+                logger.exception("Gatekeeper result callback failed")
             return result
 
-        transcript = "".join(transcript_chunks).strip()
-        if runtime_error:
-            agent_record.transition_to(AgentStatus.FAILED, error=runtime_error)
-        else:
-            agent_record.summary = transcript or None
-            agent_record.transition_to(AgentStatus.COMPLETED)
-        self._persist_agent_record(agent_record)
-
-        after_consensus = _read_text(self.consensus_path)
-        after_roadmap = _read_text(self.roadmap_path)
-        result = self.parse_run_artifacts(
+        result_future = asyncio.create_task(
+            finalize_run(),
+            name=f"gatekeeper-run-{request.trigger.value}-{agent_record.agent_id}",
+        )
+        return GatekeeperRunHandle(
             request=request,
             prompt=prompt,
-            transcript=transcript,
-            before_consensus_text=before_consensus,
-            after_consensus_text=after_consensus,
-            before_roadmap_text=before_roadmap,
-            after_roadmap_text=after_roadmap,
-            events=events,
             agent_record=agent_record,
-            error=runtime_error,
-            turn_result=turn_result,
+            result_future=result_future,
         )
-        await _stop_adapter_safely(adapter)
-        return result
 
     async def answer_question(self, question: str, answer: str) -> GatekeeperRunResult:
         """Forward a user answer back into the Gatekeeper conversation."""
@@ -235,10 +330,27 @@ class Gatekeeper:
         )
         return await self.run(request, resume_latest_thread=True)
 
+    async def start_answer_question(
+        self,
+        question: str,
+        answer: str,
+        *,
+        on_result: Callable[[GatekeeperRunResult], Any] | None = None,
+    ) -> GatekeeperRunHandle:
+        """Start forwarding a user answer back into the Gatekeeper conversation."""
+
+        request = GatekeeperRequest(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description=f"Question: {question}\nUser Answer: {answer}",
+            agent_summary=answer,
+        )
+        return await self.start_run(request, resume_latest_thread=True, on_result=on_result)
+
     def render_prompt(self, request: GatekeeperRequest) -> str:
         """Render the Gatekeeper prompt template from the spec."""
 
         consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
+        consensus_contract_text = _render_consensus_contract()
         skills_text = self._render_available_skills()
         summary_text = request.agent_summary.strip() if request.agent_summary else "N/A"
 
@@ -250,8 +362,12 @@ class Gatekeeper:
                 "2. Update .vibrant/consensus.md when tasks are completed or when the plan needs adjustment.",
                 "3. If an agent failed, analyze the failure and modify the task's prompt or acceptance criteria.",
                 "4. If you encounter a high-level decision (product direction, UX, architecture), ask the user",
-                '   by adding a question to the Questions section of consensus.md with priority "blocking".',
+                "   by adding a question to the Questions section of consensus.md.",
+                "   Questions will block progress on their own, so only use a blocking question when the work truly cannot proceed",
+                "   without a user-level decision.",
                 "5. If the decision is purely technical, make it yourself and log it in the Decisions section.",
+                "## Consensus Contract",
+                consensus_contract_text,
                 "## Current Consensus",
                 consensus_text,
                 "## Trigger",
@@ -413,6 +529,30 @@ class Gatekeeper:
             return None
         return latest_record.provider.provider_thread_id or _extract_provider_thread_id(latest_record.provider.resume_cursor)
 
+    async def _emit_run_finished_event(self, result: GatekeeperRunResult) -> None:
+        event: CanonicalEvent = {
+            "type": "gatekeeper.run.finished",
+            "timestamp": _timestamp_now(),
+            "provider": "codex",
+            "request_trigger": result.request.trigger.value,
+            "verdict": result.verdict,
+            "questions": list(result.questions),
+            "consensus_updated": result.consensus_updated,
+            "roadmap_updated": result.roadmap_updated,
+            "plan_modified": result.plan_modified,
+            "error": result.error,
+        }
+        if result.agent_record is not None:
+            event["agent_id"] = result.agent_record.agent_id
+            event["task_id"] = result.agent_record.task_id
+            provider_thread_id = (
+                result.agent_record.provider.provider_thread_id
+                or _extract_provider_thread_id(result.agent_record.provider.resume_cursor)
+            )
+            if provider_thread_id:
+                event["provider_thread_id"] = provider_thread_id
+        await _maybe_forward_event(self.on_canonical_event, event)
+
 
 async def _stop_adapter_safely(adapter: Any) -> None:
     try:
@@ -428,6 +568,22 @@ def _extract_skill_description(path: Path) -> str:
             continue
         return line
     return "No description provided."
+
+
+def _render_consensus_contract() -> str:
+    status_values = ", ".join(status.value for status in ConsensusStatus)
+    decision_authors = ", ".join(author.value for author in DecisionAuthor)
+    return "\n".join(
+        [
+            "- `ConsensusDocument` fields: `project`, `created_at`, `updated_at`, `version`, `status`, `objectives`, `decisions`, `getting_started`, `questions`.",
+            f"- `status` must be one of: {status_values}.",
+            "- `decisions` must be a list of structured entries with: `title`, `date`, `made_by`, `context`, `resolution`, `impact`.",
+            f"- `made_by` must be one of: {decision_authors}.",
+            "- `questions` must contain only the user questions that still require an answer.",
+            "- A blocking question is not a workflow state. It blocks execution by being unresolved, so use it only when necessary.",
+            "- `ConsensusPool` is just a backward-compatible alias of `ConsensusDocument`; keep writing the same structure to `consensus.md`.", # TODO: maybe remove the alias and update the spec to just refer to ConsensusDocument
+        ]
+    )
 
 
 def _read_text(path: Path) -> str | None:
@@ -479,3 +635,29 @@ def _extract_provider_thread_id(resume_cursor: object) -> str | None:
         return None
     thread_id = resume_cursor.get("threadId")
     return thread_id if isinstance(thread_id, str) and thread_id else None
+
+
+async def _maybe_forward_event(
+    callback: Callable[[CanonicalEvent], Any] | None,
+    event: CanonicalEvent,
+) -> None:
+    if callback is None:
+        return
+    result = callback(event)
+    if asyncio.iscoroutine(result):
+        await result
+
+
+async def _maybe_forward_result(
+    callback: Callable[[GatekeeperRunResult], Any] | None,
+    result: GatekeeperRunResult,
+) -> None:
+    if callback is None:
+        return
+    callback_result = callback(result)
+    if asyncio.iscoroutine(callback_result):
+        await callback_result
+
+
+def _timestamp_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

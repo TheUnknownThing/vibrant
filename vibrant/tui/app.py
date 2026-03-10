@@ -559,6 +559,8 @@ class VibrantApp(App):
         self._lifecycle: CodeAgentLifecycle | None = None
         self._task_execution_in_progress = False
         self._task_refresh_loop: asyncio.Task[None] | None = None
+        self._roadmap_runner_task: asyncio.Task[None] | None = None
+        self._gatekeeper_request_task: asyncio.Task[None] | None = None
         self._known_pending_questions: tuple[str, ...] = ()
         self._paused_return_status: OrchestratorStatus | None = None
         self._banner_text: str | None = None
@@ -594,6 +596,9 @@ class VibrantApp(App):
         saved_threads = self._history.list_threads()
         if saved_threads:
             for thread in saved_threads:
+                if thread.id == ChatPanel.GATEKEEPER_THREAD_ID:
+                    self.query_one(ChatPanel).restore_gatekeeper_thread(thread)
+                    continue
                 self._session_manager._threads[thread.id] = thread
             self._set_status(f"Loaded {len(saved_threads)} saved thread(s)")
 
@@ -608,6 +613,11 @@ class VibrantApp(App):
         self.query_one(InputBar).focus_input()
 
     async def on_unmount(self) -> None:
+        for task in (self._gatekeeper_request_task, self._roadmap_runner_task):
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
         if self._task_refresh_loop is not None:
             self._task_refresh_loop.cancel()
             with suppress(asyncio.CancelledError):
@@ -740,12 +750,14 @@ class VibrantApp(App):
             self.notify("A roadmap task is already running.", severity="warning")
             return
 
-        await self._run_roadmap_tasks(notify_when_idle=True)
+        self._launch_roadmap_runner(notify_when_idle=True)
 
     async def _run_roadmap_tasks(self, *, notify_when_idle: bool) -> None:
         assert self._lifecycle is not None
 
         automatic = self._roadmap_execution_mode() is RoadmapExecutionMode.AUTOMATIC
+        if automatic and not callable(getattr(self._lifecycle, "execute_until_blocked", None)):
+            automatic = False
         self._task_execution_in_progress = True
         self._set_status("Running roadmap workflow…" if automatic else "Running next roadmap task…")
         self._start_project_refresh_loop()
@@ -781,6 +793,7 @@ class VibrantApp(App):
             self._set_status(f"Task execution failed: {exc}")
         finally:
             self._task_execution_in_progress = False
+            self._roadmap_runner_task = None
             await self._stop_project_refresh_loop()
             self._refresh_project_views()
 
@@ -796,7 +809,40 @@ class VibrantApp(App):
         if engine.state.pending_questions or engine.state.status in {OrchestratorStatus.PAUSED, OrchestratorStatus.COMPLETED}:
             return
 
-        asyncio.create_task(self._run_roadmap_tasks(notify_when_idle=False), name="vibrant-auto-roadmap")
+        self._launch_roadmap_runner(notify_when_idle=False)
+
+    def _launch_roadmap_runner(self, *, notify_when_idle: bool) -> None:
+        if self._roadmap_runner_task is not None and not self._roadmap_runner_task.done():
+            return
+        self._roadmap_runner_task = asyncio.create_task(
+            self._run_roadmap_tasks(notify_when_idle=notify_when_idle),
+            name="vibrant-roadmap-runner",
+        )
+
+    def _launch_gatekeeper_message(self, text: str) -> None:
+        if self._gatekeeper_request_task is not None and not self._gatekeeper_request_task.done():
+            self.notify("Gatekeeper is already running.", severity="warning")
+            return
+        self._gatekeeper_request_task = asyncio.create_task(
+            self._start_gatekeeper_message(text),
+            name="vibrant-gatekeeper-message",
+        )
+
+    async def _start_gatekeeper_message(self, text: str) -> None:
+        assert self._lifecycle is not None
+        try:
+            start_message = getattr(self._lifecycle, "start_gatekeeper_message", None)
+            if callable(start_message):
+                await start_message(text)
+                self._set_status("Gatekeeper is responding…")
+            else:
+                raise AttributeError("Lifecycle does not support async Gatekeeper messages")
+        except Exception as exc:
+            self.notify(f"Error: {exc}", severity="error")
+            self._set_status(f"Gatekeeper start failed: {exc}")
+            self._sync_chat_panel_state()
+        finally:
+            self._gatekeeper_request_task = None
 
     def _roadmap_execution_mode(self) -> RoadmapExecutionMode:
         if self._lifecycle is None:
@@ -834,6 +880,7 @@ class VibrantApp(App):
     async def action_quit_app(self) -> None:
         for thread in self._session_manager.list_threads():
             self._history.save_thread(thread)
+        self._persist_gatekeeper_thread()
         await self._session_manager.stop_all()
         self.exit()
 
@@ -854,37 +901,51 @@ class VibrantApp(App):
         pending_question = self._current_pending_gatekeeper_question()
         input_bar = self.query_one(InputBar)
         if self._should_route_input_to_gatekeeper() and self._lifecycle is not None:
+            if self._gatekeeper_request_task is not None and not self._gatekeeper_request_task.done():
+                self.notify("Gatekeeper is already running.", severity="warning")
+                return
+            if bool(getattr(self._lifecycle, "gatekeeper_busy", False)):
+                self.notify("Gatekeeper is already running.", severity="warning")
+                return
             input_bar.set_enabled(False)
             input_bar.set_context("gatekeeper", "sending…")
             self._set_status("Sending message to Gatekeeper…")
             chat_panel = self.query_one(ChatPanel)
             chat_panel.record_gatekeeper_user_message(event.text, question=pending_question)
+            self._persist_gatekeeper_thread()
 
-            try:
-                submit_message = getattr(self._lifecycle, "submit_gatekeeper_message", None)
-                if callable(submit_message):
-                    result = await submit_message(event.text)
-                elif pending_question is not None:
-                    result = await self._lifecycle.engine.answer_pending_question(
-                        self._lifecycle.gatekeeper,
-                        answer=event.text,
-                        question=pending_question,
-                    )
-                else:
-                    raise AttributeError("Lifecycle does not support Gatekeeper planning messages")
-            except Exception as exc:
-                self.notify(f"Error: {exc}", severity="error")
+            start_message = getattr(self._lifecycle, "start_gatekeeper_message", None)
+            if callable(start_message):
+                self._launch_gatekeeper_message(event.text)
+                self._refresh_thread_list()
                 self._sync_chat_panel_state()
             else:
-                gatekeeper_text = _render_gatekeeper_result_text(result)
-                if gatekeeper_text:
-                    chat_panel.record_gatekeeper_response(gatekeeper_text)
-                if self._maybe_handle_planning_completion_request(result):
-                    return
-                self._refresh_project_views()
-                self.notify("Message sent to Gatekeeper.")
-                self._set_status("Gatekeeper updated the plan")
-                self._start_automatic_workflow_if_needed()
+                try:
+                    submit_message = getattr(self._lifecycle, "submit_gatekeeper_message", None)
+                    if callable(submit_message):
+                        result = await submit_message(event.text)
+                    elif pending_question is not None:
+                        result = await self._lifecycle.engine.answer_pending_question(
+                            self._lifecycle.gatekeeper,
+                            answer=event.text,
+                            question=pending_question,
+                        )
+                    else:
+                        raise AttributeError("Lifecycle does not support Gatekeeper planning messages")
+                except Exception as exc:
+                    self.notify(f"Error: {exc}", severity="error")
+                    self._sync_chat_panel_state()
+                else:
+                    gatekeeper_text = _render_gatekeeper_result_text(result)
+                    if gatekeeper_text:
+                        chat_panel.record_gatekeeper_response(gatekeeper_text)
+                        self._persist_gatekeeper_thread()
+                    if self._maybe_handle_planning_completion_request(result):
+                        return
+                    self._refresh_project_views()
+                    self.notify("Message sent to Gatekeeper.")
+                    self._set_status("Gatekeeper updated the plan")
+                    self._start_automatic_workflow_if_needed()
             return
 
         if not self._active_thread_id:
@@ -1012,8 +1073,17 @@ class VibrantApp(App):
         except Exception:
             logger.exception("Failed to update agent output panel")
 
+        self._handle_gatekeeper_canonical_event(event)
+
         event_type = str(event.get("type") or "")
-        if event_type in {"turn.started", "turn.completed", "runtime.error", "task.progress", "user-input.requested"}:
+        if event_type in {
+            "turn.started",
+            "turn.completed",
+            "runtime.error",
+            "task.progress",
+            "user-input.requested",
+            "gatekeeper.result.applied",
+        }:
             self._refresh_project_views()
         if event_type == "turn.started":
             self._set_status(f"Running {event.get('task_id', 'task')}…")
@@ -1023,6 +1093,56 @@ class VibrantApp(App):
             self._set_status(str(event.get("error") or "Task failed"))
         elif event_type == "user-input.requested":
             self._sync_chat_panel_state(force_flash=True)
+        elif event_type == "gatekeeper.result.applied":
+            gatekeeper_text = _render_gatekeeper_event_text(event)
+            if gatekeeper_text:
+                self.query_one(ChatPanel).record_gatekeeper_response(gatekeeper_text)
+                self._persist_gatekeeper_thread()
+            self._sync_chat_panel_state(force_flash=bool(event.get("questions")))
+            if event.get("error"):
+                self.notify(f"Gatekeeper error: {event['error']}", severity="error")
+                self._set_status(str(event["error"]))
+            else:
+                self.notify("Gatekeeper updated the plan.")
+                self._set_status("Gatekeeper updated the plan")
+            self._start_automatic_workflow_if_needed()
+
+    def _handle_gatekeeper_canonical_event(self, event: dict[str, Any]) -> None:
+        if not _is_gatekeeper_event(event):
+            return
+
+        chat_panel = self.query_one(ChatPanel)
+        event_type = str(event.get("type") or "")
+
+        if event_type == "turn.started":
+            chat_panel.clear_gatekeeper_streaming_text()
+            return
+
+        if event_type == "turn.completed":
+            return
+
+        if event_type == "runtime.error":
+            streamed_text = chat_panel.get_gatekeeper_streaming_text().strip()
+            if not streamed_text:
+                error_text = _error_text_from_event(event)
+                if error_text:
+                    chat_panel.record_gatekeeper_response(f"Error: {error_text}")
+                    self._persist_gatekeeper_thread()
+            chat_panel.clear_gatekeeper_streaming_text()
+            return
+
+        if event_type != "content.delta":
+            return
+
+        delta = str(event.get("delta") or "")
+        if not delta:
+            return
+
+        previous = chat_panel.get_gatekeeper_streaming_text()
+        chat_panel.update_gatekeeper_streaming_text(f"{previous}{delta}")
+        if not previous:
+            self._refresh_thread_list()
+        self._set_status("Gatekeeper is responding…")
 
     def _initialize_project_lifecycle(self) -> None:
         project_root = find_project_root(self._settings.default_cwd or os.getcwd())
@@ -1127,6 +1247,7 @@ class VibrantApp(App):
             gatekeeper_text = _render_gatekeeper_result_text(result.gatekeeper_result)
             if gatekeeper_text:
                 self.query_one(ChatPanel).record_gatekeeper_response(gatekeeper_text)
+                self._persist_gatekeeper_thread()
 
         if result.outcome == "accepted":
             completed = bool(self._lifecycle and self._lifecycle.engine.state.status is OrchestratorStatus.COMPLETED)
@@ -1195,6 +1316,14 @@ class VibrantApp(App):
             return threads
         return [gatekeeper_thread, *threads]
 
+    def _persist_gatekeeper_thread(self) -> None:
+        if not self.is_mounted:
+            return
+        gatekeeper_thread = self.query_one(ChatPanel).get_gatekeeper_thread()
+        if gatekeeper_thread is None or not gatekeeper_thread.turns:
+            return
+        self._history.save_thread(gatekeeper_thread)
+
     def _find_conversation_thread(self, thread_id: str) -> ThreadInfo | None:
         if thread_id == ChatPanel.GATEKEEPER_THREAD_ID:
             if not self.is_mounted:
@@ -1240,6 +1369,9 @@ class VibrantApp(App):
         chat_panel = self.query_one(ChatPanel)
         input_bar = self.query_one(InputBar)
         questions = self._pending_gatekeeper_questions()
+        gatekeeper_busy = bool(
+            self._gatekeeper_request_task is not None and not self._gatekeeper_request_task.done()
+        ) or bool(getattr(self._lifecycle, "gatekeeper_busy", False))
 
         status = None
         if self._lifecycle is not None:
@@ -1274,7 +1406,7 @@ class VibrantApp(App):
         except Exception:
             pass
 
-        if questions:
+        if questions and not gatekeeper_busy:
             banner = getattr(
                 getattr(self._lifecycle, "engine", None),
                 "USER_INPUT_BANNER",
@@ -1289,9 +1421,16 @@ class VibrantApp(App):
                 if bool(getattr(getattr(self._lifecycle, "engine", None), "notification_bell_enabled", False)):
                     with suppress(Exception):
                         self.bell()
+        elif questions and gatekeeper_busy:
+            self._set_banner("Gatekeeper is responding…")
+            input_bar.set_enabled(False)
+            input_bar.set_context("gatekeeper", "running…")
         else:
             self._set_banner(None)
-            if self._active_thread_id == ChatPanel.GATEKEEPER_THREAD_ID:
+            if self._active_thread_id == ChatPanel.GATEKEEPER_THREAD_ID and gatekeeper_busy:
+                input_bar.set_enabled(False)
+                input_bar.set_context("gatekeeper", "running…")
+            elif self._active_thread_id == ChatPanel.GATEKEEPER_THREAD_ID:
                 input_bar.set_enabled(True)
                 input_bar.set_context("gatekeeper", "conversation")
             elif normalized_status is OrchestratorStatus.INIT:
@@ -1451,6 +1590,34 @@ def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
         except ValueError:
             return None
     return None
+
+
+def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
+    agent_id = event.get("agent_id")
+    if isinstance(agent_id, str) and agent_id.startswith("gatekeeper-"):
+        return True
+
+    task_id = event.get("task_id")
+    return isinstance(task_id, str) and task_id.startswith("gatekeeper-")
+
+
+def _error_text_from_event(event: dict[str, Any]) -> str:
+    error = event.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error)
+    return str(error or "").strip()
+
+
+def _render_gatekeeper_event_text(event: dict[str, Any]) -> str:
+    transcript = event.get("transcript")
+    if isinstance(transcript, str) and transcript.strip():
+        return transcript.strip()
+
+    verdict = event.get("verdict")
+    if isinstance(verdict, str) and verdict.strip():
+        return f"Verdict: {verdict.strip()}"
+
+    return ""
 
 
 def _render_gatekeeper_result_text(result: object) -> str:

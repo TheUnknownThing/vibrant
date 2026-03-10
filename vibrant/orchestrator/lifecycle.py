@@ -18,7 +18,7 @@ from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResul
 from vibrant.gatekeeper.gatekeeper import _extract_error_message, _extract_text_from_progress_item, _stop_adapter_safely
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
-from vibrant.models.state import OrchestratorStatus
+from vibrant.models.state import GatekeeperStatus, OrchestratorStatus
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.engine import OrchestratorEngine
 from vibrant.orchestrator.git_manager import GitManager, GitManagerError, GitMergeResult, GitWorktreeInfo
@@ -83,7 +83,10 @@ class CodeAgentLifecycle:
         ensure_project_files(self.project_root)
         self.config = load_config(start_path=self.project_root)
         self.engine = engine or OrchestratorEngine.load(self.project_root)
-        self.gatekeeper = gatekeeper or Gatekeeper(self.project_root)
+        self.gatekeeper = gatekeeper or Gatekeeper(
+            self.project_root,
+            on_canonical_event=on_canonical_event,
+        )
         self.git_manager = git_manager or GitManager(
             repo_root=self.project_root,
             worktree_root=_scoped_worktree_root(self.project_root, self.config.worktree_directory),
@@ -95,6 +98,7 @@ class CodeAgentLifecycle:
         self.roadmap_parser = RoadmapParser()
         self.roadmap_document: RoadmapDocument | None = None
         self.dispatcher: TaskDispatcher | None = None
+        self._active_gatekeeper_futures: set[asyncio.Future[Any]] = set()
 
         self.reload_from_disk()
 
@@ -134,6 +138,54 @@ class CodeAgentLifecycle:
     ) -> GatekeeperRunResult:
         """Run the Gatekeeper with optional resume support when available."""
 
+        handle = await self._start_gatekeeper_request(
+            request,
+            resume_latest_thread=resume_latest_thread,
+        )
+        return await handle.wait()
+
+    async def _start_gatekeeper_request(
+        self,
+        request: GatekeeperRequest,
+        *,
+        resume_latest_thread: bool | None = None,
+        on_result: Callable[[GatekeeperRunResult], Any] | None = None,
+    ) -> Any:
+        """Start a Gatekeeper request and return after the provider turn has started."""
+
+        start_gatekeeper = getattr(self.gatekeeper, "start_run", None)
+        if callable(start_gatekeeper):
+            kwargs: dict[str, Any] = {}
+            try:
+                signature = inspect.signature(start_gatekeeper)
+            except (TypeError, ValueError):
+                signature = None
+
+            if signature is not None:
+                if "resume_latest_thread" in signature.parameters:
+                    kwargs["resume_latest_thread"] = resume_latest_thread
+                if "on_result" in signature.parameters:
+                    kwargs["on_result"] = on_result
+
+            handle = await start_gatekeeper(request, **kwargs)
+            self._track_gatekeeper_future(handle.result_future)
+            return handle
+
+        result_future = asyncio.create_task(
+            self._await_gatekeeper_request_legacy(request, resume_latest_thread=resume_latest_thread),
+            name=f"gatekeeper-legacy-{request.trigger.value}",
+        )
+        self._track_gatekeeper_future(result_future)
+        return _LegacyGatekeeperHandle(result_future)
+
+    async def _await_gatekeeper_request_legacy(
+        self,
+        request: GatekeeperRequest,
+        *,
+        resume_latest_thread: bool | None = None,
+    ) -> GatekeeperRunResult:
+        """Fallback for Gatekeeper implementations that only expose ``run``."""
+
         run_gatekeeper = self.gatekeeper.run
         try:
             signature = inspect.signature(run_gatekeeper)
@@ -144,16 +196,38 @@ class CodeAgentLifecycle:
             return await run_gatekeeper(request, resume_latest_thread=resume_latest_thread)
         return await run_gatekeeper(request)
 
-    async def submit_gatekeeper_message(self, text: str) -> GatekeeperRunResult:
-        """Route planning or escalation input to the Gatekeeper and refresh state."""
+    def _track_gatekeeper_future(self, future: asyncio.Future[Any]) -> None:
+        self._active_gatekeeper_futures.add(future)
+
+        def _discard(_: asyncio.Future[Any]) -> None:
+            self._active_gatekeeper_futures.discard(future)
+
+        future.add_done_callback(_discard)
+
+    @property
+    def gatekeeper_busy(self) -> bool:
+        return any(not future.done() for future in self._active_gatekeeper_futures)
+
+    async def start_gatekeeper_message(self, text: str) -> Any:
+        """Start a Gatekeeper planning or Q&A turn and return immediately after the turn starts."""
 
         self.reload_from_disk()
         message = text.strip()
         if not message:
             raise ValueError("Gatekeeper message cannot be empty")
+        if self.gatekeeper_busy:
+            raise RuntimeError("Gatekeeper is already running")
 
         if self.engine.state.pending_questions:
-            result = await self.engine.answer_pending_question(self.gatekeeper, answer=message)
+            selected_question = self.engine.state.pending_questions[0]
+            self.engine.state.gatekeeper_status = GatekeeperStatus.RUNNING
+            self.engine.persist_state()
+            request = GatekeeperRequest(
+                trigger=GatekeeperTrigger.USER_CONVERSATION,
+                trigger_description=f"Question: {selected_question}\nUser Answer: {message}",
+                agent_summary=message,
+            )
+            resume_latest_thread = True
         else:
             trigger = (
                 GatekeeperTrigger.PROJECT_START
@@ -165,17 +239,44 @@ class CodeAgentLifecycle:
                 trigger_description=message,
                 agent_summary=message,
             )
-            result = await self._run_gatekeeper_request(
-                request,
-                resume_latest_thread=trigger is GatekeeperTrigger.USER_CONVERSATION,
-            )
-            self.engine.apply_gatekeeper_result(result)
+            resume_latest_thread = trigger is GatekeeperTrigger.USER_CONVERSATION
 
+        return await self._start_gatekeeper_request(
+            request,
+            resume_latest_thread=resume_latest_thread,
+            on_result=self._apply_gatekeeper_result_async,
+        )
+
+    async def submit_gatekeeper_message(self, text: str) -> GatekeeperRunResult:
+        """Route planning or escalation input to the Gatekeeper and refresh state."""
+
+        handle = await self.start_gatekeeper_message(text)
+        result = await handle.wait()
+        if not callable(getattr(self.gatekeeper, "start_run", None)):
+            await self._apply_gatekeeper_result_async(result)
+        return result
+
+    async def _apply_gatekeeper_result_async(self, result: GatekeeperRunResult) -> None:
+        """Apply a completed Gatekeeper result and notify UI consumers."""
+
+        self.engine.apply_gatekeeper_result(result)
         self._merge_roadmap_from_result(result)
         self._persist_roadmap()
         self._maybe_complete_workflow()
         self.engine.refresh_from_disk()
-        return result
+        await self._emit_lifecycle_event(
+            "gatekeeper.result.applied",
+            agent_id=result.agent_record.agent_id if result.agent_record is not None else None,
+            task_id=result.agent_record.task_id if result.agent_record is not None else None,
+            request_trigger=result.request.trigger.value,
+            verdict=result.verdict,
+            questions=list(result.questions),
+            error=result.error,
+            consensus_updated=result.consensus_updated,
+            roadmap_updated=result.roadmap_updated,
+            plan_modified=result.plan_modified,
+            transcript=result.transcript,
+        )
 
     async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
         """Keep executing ready tasks until user input, pause, completion, or exhaustion."""
@@ -349,7 +450,9 @@ class CodeAgentLifecycle:
         completed_task = self.dispatcher.mark_completed(task.id)
         self._persist_roadmap()
 
-        gatekeeper_result = await self.gatekeeper.run(self._build_gatekeeper_request_for_completion(completed_task, agent_record, worktree))
+        gatekeeper_result = await self._run_gatekeeper_request(
+            self._build_gatekeeper_request_for_completion(completed_task, agent_record, worktree)
+        )
         self.engine.apply_gatekeeper_result(gatekeeper_result)
         self._merge_roadmap_from_result(gatekeeper_result)
 
@@ -426,14 +529,14 @@ class CodeAgentLifecycle:
 
         gatekeeper_result = prior_gatekeeper_result
         if updated_task.status is TaskStatus.ESCALATED:
-            gatekeeper_result = await self.gatekeeper.run(
+            gatekeeper_result = await self._run_gatekeeper_request(
                 self._build_gatekeeper_request_for_escalation(updated_task, agent_record, worktree, reason)
             )
             self.engine.apply_gatekeeper_result(gatekeeper_result)
             self._merge_roadmap_from_result(gatekeeper_result)
             outcome = "escalated"
         elif notify_gatekeeper_on_retry:
-            gatekeeper_result = await self.gatekeeper.run(
+            gatekeeper_result = await self._run_gatekeeper_request(
                 self._build_gatekeeper_request_for_failure(updated_task, agent_record, worktree, reason)
             )
             self.engine.apply_gatekeeper_result(gatekeeper_result)
@@ -693,6 +796,15 @@ class CodeAgentLifecycle:
             self.engine.transition_to(OrchestratorStatus.COMPLETED)
         return True
 
+    async def _emit_lifecycle_event(self, event_type: str, **payload: Any) -> None:
+        event: CanonicalEvent = {
+            "type": event_type,
+            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "provider": "vibrant",
+        }
+        event.update(payload)
+        await _maybe_forward_event(self.on_canonical_event, event)
+
 
 def _transition_terminal_agent(
     agent_record: AgentRecord,
@@ -717,6 +829,19 @@ async def _maybe_forward_event(handler: CanonicalEventCallback | None, event: Ca
     callback_result = handler(event)
     if inspect.isawaitable(callback_result):
         await callback_result
+
+
+@dataclass(slots=True)
+class _LegacyGatekeeperHandle:
+    """Compatibility handle for Gatekeeper implementations without ``start_run``."""
+
+    result_future: asyncio.Future[GatekeeperRunResult]
+
+    def done(self) -> bool:
+        return self.result_future.done()
+
+    async def wait(self) -> GatekeeperRunResult:
+        return await self.result_future
 
 
 def _apply_task_definition(existing: TaskInfo, incoming: TaskInfo) -> None:

@@ -3,6 +3,7 @@
 from .gatekeeper import (
     Gatekeeper,
     GatekeeperRequest,
+    GatekeeperRunHandle,
     GatekeeperRunResult,
     GatekeeperTrigger,
     PLANNING_COMPLETE_MCP_SENTINEL,
@@ -12,6 +13,7 @@ from .gatekeeper import (
 __all__ = [
     "Gatekeeper",
     "GatekeeperRequest",
+    "GatekeeperRunHandle",
     "GatekeeperRunResult",
     "GatekeeperTrigger",
     "PLANNING_COMPLETE_MCP_SENTINEL",

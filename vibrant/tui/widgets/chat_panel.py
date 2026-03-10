@@ -88,6 +88,7 @@ class ChatPanel(Static):
         self._status: OrchestratorStatus | str | None = None
         self._notification_token = 0
         self._gatekeeper_history: list[GatekeeperExchange] = []
+        self._gatekeeper_streaming_text = ""
         self._gatekeeper_thread = ThreadInfo(
             id=self.GATEKEEPER_THREAD_ID,
             title="Gatekeeper",
@@ -115,12 +116,42 @@ class ChatPanel(Static):
 
         if self._conversation is not None:
             self._conversation.show_thread(self._gatekeeper_thread)
+            if self._gatekeeper_streaming_text:
+                self._conversation.update_streaming_text(self._gatekeeper_streaming_text)
 
     def update_streaming_text(self, text: str) -> None:
         """Forward live assistant text into the conversation history view."""
 
         if self._conversation is not None:
             self._conversation.update_streaming_text(text)
+
+    def update_gatekeeper_streaming_text(self, text: str) -> None:
+        """Store and render the live Gatekeeper assistant response."""
+
+        self._gatekeeper_streaming_text = text
+        self._gatekeeper_thread.status = _gatekeeper_thread_status(
+            self._status,
+            self._pending_questions,
+            is_streaming=bool(text),
+        )
+        self._gatekeeper_thread.updated_at = datetime.now(timezone.utc)
+        if self.current_thread_id == self.GATEKEEPER_THREAD_ID:
+            if text:
+                if self._conversation is not None:
+                    self._conversation.update_streaming_text(text)
+            else:
+                self.show_gatekeeper_thread()
+        self._refresh_widgets()
+
+    def clear_gatekeeper_streaming_text(self) -> None:
+        """Remove any in-progress Gatekeeper assistant response."""
+
+        self.update_gatekeeper_streaming_text("")
+
+    def get_gatekeeper_streaming_text(self) -> str:
+        """Return the current live Gatekeeper assistant text."""
+
+        return self._gatekeeper_streaming_text
 
     def clear(self) -> None:
         """Clear the active conversation while preserving Gatekeeper state."""
@@ -152,7 +183,7 @@ class ChatPanel(Static):
         """Return whether the synthetic Gatekeeper conversation should be visible."""
 
         normalized = self._normalized_status()
-        return bool(self._gatekeeper_thread.turns) or bool(self._pending_questions) or normalized in {
+        return bool(self._gatekeeper_thread.turns) or bool(self._gatekeeper_streaming_text) or bool(self._pending_questions) or normalized in {
             OrchestratorStatus.INIT.value,
             OrchestratorStatus.PLANNING.value,
         }
@@ -163,6 +194,17 @@ class ChatPanel(Static):
         if not self.has_gatekeeper_history:
             return None
         return self._gatekeeper_thread.model_copy(deep=True)
+
+    def restore_gatekeeper_thread(self, thread: ThreadInfo) -> None:
+        """Restore a previously persisted Gatekeeper conversation thread."""
+
+        restored = thread.model_copy(deep=True)
+        restored.id = self.GATEKEEPER_THREAD_ID
+        restored.title = restored.title or "Gatekeeper"
+        restored.model = restored.model or "gatekeeper"
+        self._gatekeeper_thread = restored
+        self._refresh_active_gatekeeper_conversation()
+        self._refresh_widgets()
 
     def set_gatekeeper_state(
         self,
@@ -175,7 +217,11 @@ class ChatPanel(Static):
 
         self._status = status
         self._pending_questions = tuple(question for question in pending_questions if question)
-        self._gatekeeper_thread.status = _gatekeeper_thread_status(status, self._pending_questions)
+        self._gatekeeper_thread.status = _gatekeeper_thread_status(
+            status,
+            self._pending_questions,
+            is_streaming=bool(self._gatekeeper_streaming_text),
+        )
         self._gatekeeper_thread.updated_at = datetime.now(timezone.utc)
 
         known_questions = {exchange.question for exchange in self._gatekeeper_history}
@@ -219,6 +265,7 @@ class ChatPanel(Static):
             )
 
         self._append_gatekeeper_turn(TurnRole.USER, normalized)
+        self._refresh_active_gatekeeper_conversation()
         self._refresh_widgets()
 
     def record_gatekeeper_response(self, text: str) -> None:
@@ -227,7 +274,9 @@ class ChatPanel(Static):
         normalized = text.strip()
         if not normalized:
             return
+        self._gatekeeper_streaming_text = ""
         self._append_gatekeeper_turn(TurnRole.ASSISTANT, normalized)
+        self._refresh_active_gatekeeper_conversation()
         self._refresh_widgets()
 
     def flash_question_notification(self) -> None:
@@ -269,6 +318,10 @@ class ChatPanel(Static):
         self._gatekeeper_thread.turns.append(turn)
         self._gatekeeper_thread.updated_at = timestamp
 
+    def _refresh_active_gatekeeper_conversation(self) -> None:
+        if self.current_thread_id == self.GATEKEEPER_THREAD_ID:
+            self.show_gatekeeper_thread()
+
     def _normalized_status(self) -> str:
         if isinstance(self._status, OrchestratorStatus):
             return self._status.value
@@ -293,10 +346,14 @@ def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_que
 def _gatekeeper_thread_status(
     status: OrchestratorStatus | str | None,
     pending_questions: Sequence[str],
+    *,
+    is_streaming: bool = False,
 ) -> ThreadStatus:
     normalized = status.value if isinstance(status, OrchestratorStatus) else str(status or "").strip().lower()
     if pending_questions:
         return ThreadStatus.IDLE
+    if is_streaming:
+        return ThreadStatus.RUNNING
     if normalized in {OrchestratorStatus.INIT.value, OrchestratorStatus.PLANNING.value}:
         return ThreadStatus.RUNNING
     if normalized == OrchestratorStatus.PAUSED.value:
