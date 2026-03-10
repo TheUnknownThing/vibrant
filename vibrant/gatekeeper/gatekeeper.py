@@ -178,6 +178,7 @@ class Gatekeeper:
         adapter = self.adapter_factory(
             cwd=str(self.project_root),
             codex_binary=self.config.codex_binary,
+            launch_args=self.config.launch_args or None,
             codex_home=self.config.codex_home,
             agent_record=agent_record,
             on_canonical_event=handle_canonical_event,

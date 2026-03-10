@@ -382,6 +382,7 @@ class CodeAgentLifecycle:
             adapter = self.adapter_factory(
                 cwd=str(worktree.path),
                 codex_binary=self.config.codex_binary,
+                launch_args=self.config.launch_args or None,
                 codex_home=self.config.codex_home,
                 agent_record=agent_record,
                 on_canonical_event=handle_event,
