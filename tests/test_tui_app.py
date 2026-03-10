@@ -109,7 +109,6 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         assert app.query_one("#plan-panel") is not None
         assert app.query_one("#agent-output-panel") is not None
         assert app.query_one("#consensus-panel") is not None
@@ -123,7 +122,6 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
         assert keymap["f10"] == "quit_app"
 
         await pilot.press("f1")
-        await pilot.pause()
         assert isinstance(app.screen, HelpScreen)
 
 
@@ -137,18 +135,15 @@ async def test_app_f2_toggles_pause_and_updates_consensus(tmp_path: Path):
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         engine = app._lifecycle.engine  # noqa: SLF001 - verifying app wiring
         assert engine.state.status is OrchestratorStatus.EXECUTING
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.EXECUTING
 
         await pilot.press("f2")
-        await pilot.pause()
         assert engine.state.status is OrchestratorStatus.PAUSED
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.PAUSED
 
         await pilot.press("f2")
-        await pilot.pause()
         assert engine.state.status is OrchestratorStatus.EXECUTING
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.EXECUTING
 
@@ -163,7 +158,6 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=EscalationLifecycle)
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         banner = app.query_one("#notification-banner", Static)
         assert banner.display is True
         assert "Gatekeeper needs your input" in (app.get_banner_text() or "")
@@ -185,9 +179,7 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         lifecycle_factory=PlanningLifecycle,
     )
     async with first_app.run_test() as pilot:
-        await pilot.pause()
         await first_app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
-        await pilot.pause()
 
     stored_gatekeeper = HistoryStore(str(history_dir)).load_thread(ChatPanel.GATEKEEPER_THREAD_ID)
     assert stored_gatekeeper is not None
@@ -200,7 +192,6 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         lifecycle_factory=ExecutingLifecycle,
     )
     async with reloaded_app.run_test() as pilot:
-        await pilot.pause()
         panel = reloaded_app.query_one(ChatPanel)
         gatekeeper_thread = panel.get_gatekeeper_thread()
         assert gatekeeper_thread is not None

@@ -156,42 +156,36 @@ class FakeLifecycle:
         return self._roadmap_parser.parse_file(self.roadmap_path)
 
 
-@pytest.mark.asyncio
-async def test_consensus_view_summary_shows_counts_and_recent_decisions():
+def test_consensus_view_summary_shows_counts_and_recent_decisions():
     tasks = [
         TaskInfo(id="task-001", title="Accepted task", status=TaskStatus.ACCEPTED),
         TaskInfo(id="task-002", title="Completed task", status=TaskStatus.COMPLETED),
         TaskInfo(id="task-003", title="Pending task", status=TaskStatus.PENDING),
         TaskInfo(id="task-004", title="Failed task", status=TaskStatus.FAILED, retry_count=1),
     ]
-    app = ConsensusHarness(markdown=SAMPLE_CONSENSUS, tasks=tasks)
+    widget = ConsensusView()
+    document = ConsensusParser().parse(SAMPLE_CONSENSUS)
+    widget.update_consensus(document, tasks=tasks, raw_markdown=SAMPLE_CONSENSUS)
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        widget = app.query_one(ConsensusView)
+    assert "Status: EXECUTING" in widget.get_summary_text()
+    assert "Version: 7" in widget.get_summary_text()
+    assert "Tasks: 2/4" in widget.get_summary_text()
 
-        assert "Status: EXECUTING" in widget.get_summary_text()
-        assert "Version: 7" in widget.get_summary_text()
-        assert "Tasks: 2/4" in widget.get_summary_text()
-
-        recent_decisions = widget.get_recent_decisions_text()
-        assert "Highlight blocking questions" in recent_decisions
-        assert "Use isolated worktrees" in recent_decisions
-        assert "Pause support in state machine" in recent_decisions
-        assert "Use Markdown sections" not in recent_decisions
+    recent_decisions = widget.get_recent_decisions_text()
+    assert "Highlight blocking questions" in recent_decisions
+    assert "Use isolated worktrees" in recent_decisions
+    assert "Pause support in state machine" in recent_decisions
+    assert "Use Markdown sections" not in recent_decisions
 
 
-@pytest.mark.asyncio
-async def test_consensus_view_highlights_pending_questions_when_present():
+def test_consensus_view_highlights_pending_questions_when_present():
     tasks = [TaskInfo(id="task-001", title="Accepted task", status=TaskStatus.ACCEPTED)]
-    app = ConsensusHarness(markdown=SAMPLE_CONSENSUS, tasks=tasks)
+    widget = ConsensusView()
+    document = ConsensusParser().parse(SAMPLE_CONSENSUS)
+    widget.update_consensus(document, tasks=tasks, raw_markdown=SAMPLE_CONSENSUS)
 
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        widget = app.query_one(ConsensusView)
-
-        assert "Pending Questions: 1" in widget.get_summary_text()
-        assert widget.pending_questions_highlighted is True
+    assert "Pending Questions: 1" in widget.get_summary_text()
+    assert widget.pending_questions_highlighted is True
 
 
 @pytest.mark.asyncio
@@ -204,13 +198,10 @@ async def test_app_f3_opens_full_consensus_markdown_overlay(tmp_path: Path):
 
     app = VibrantApp(cwd=str(repo), lifecycle_factory=FakeLifecycle)
     async with app.run_test() as pilot:
-        await pilot.pause()
-
         panel = app.query_one(ConsensusView)
         assert "Tasks: 2/4" in panel.get_summary_text()
 
         await pilot.press("f3")
-        await pilot.pause()
 
         assert isinstance(app.screen, ConsensusMarkdownScreen)
         assert "# Consensus Pool — Project Vibrant" in app.screen.markdown_text

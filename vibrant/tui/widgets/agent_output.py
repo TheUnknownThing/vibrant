@@ -260,6 +260,15 @@ class AgentOutput(Static):
         self._debug_view_enabled = not self._debug_view_enabled
         self._refresh_view(active_agent_changed=True)
 
+    def poll_native_logs_now(self) -> None:
+        """Synchronously poll native logs once.
+
+        Exposed for deterministic tests and manual refresh points that should
+        not wait for the periodic interval timer.
+        """
+
+        self._poll_native_logs()
+
     def get_rendered_text(self, agent_id: str | None = None, *, debug: bool | None = None) -> str:
         """Return the rendered text for tests and diagnostics."""
 

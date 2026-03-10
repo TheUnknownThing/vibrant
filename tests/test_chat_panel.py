@@ -138,6 +138,11 @@ class FakeAutomaticPlanningLifecycle(FakePlanningLifecycle):
 
 
 class FakeStreamingPlanningLifecycle(FakePlanningLifecycle):
+    def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
+        super().__init__(project_root, on_canonical_event=on_canonical_event)
+        self.stream_started = asyncio.Event()
+        self.allow_completion = asyncio.Event()
+
     async def submit_gatekeeper_message(self, text: str):
         self.messages.append(text)
         self.engine.state.status = OrchestratorStatus.PLANNING
@@ -158,7 +163,8 @@ class FakeStreamingPlanningLifecycle(FakePlanningLifecycle):
                     "delta": "Plan draft in progress",
                 }
             )
-            await asyncio.sleep(0.05)
+            self.stream_started.set()
+            await self.allow_completion.wait()
             await self.on_canonical_event(
                 {
                     "type": "turn.completed",
@@ -190,47 +196,48 @@ def _thread(thread_id: str, user_text: str, assistant_text: str) -> ThreadInfo:
     )
 
 
+async def _wait_for(assertion, pilot, *, attempts: int = 10) -> None:
+    for _ in range(attempts):
+        if assertion():
+            return
+        await pilot.pause()
+    raise AssertionError("Timed out waiting for chat panel update")
+
+
+def test_chat_panel_gatekeeper_messages_include_sender_labels():
+    panel = ChatPanel()
+    panel.set_gatekeeper_state(
+        status=OrchestratorStatus.EXECUTING,
+        pending_questions=["Should auth use OAuth or API keys?"],
+    )
+    panel.record_gatekeeper_answer(
+        "Should auth use OAuth or API keys?",
+        "Use API keys for v1.",
+    )
+
+    summary = panel.get_question_summary_text()
+    assert "Gatekeeper → User" in summary
+    assert "Q: Should auth use OAuth or API keys?" in summary
+    assert "You → Gatekeeper" in summary
+    assert "A: Use API keys for v1." in summary
+
+
 @pytest.mark.asyncio
-async def test_chat_panel_gatekeeper_messages_include_sender_labels():
+async def test_chat_panel_question_notification_flashes_panel(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(ChatPanel, "FLASH_DURATION_SECONDS", 0.01)
     app = ChatPanelHarness()
 
     async with app.run_test() as pilot:
-        await pilot.pause()
-        panel = app.query_one(ChatPanel)
-        panel.set_gatekeeper_state(
-            status=OrchestratorStatus.EXECUTING,
-            pending_questions=["Should auth use OAuth or API keys?"],
-        )
-        panel.record_gatekeeper_answer(
-            "Should auth use OAuth or API keys?",
-            "Use API keys for v1.",
-        )
-        await pilot.pause()
-
-        summary = panel.get_question_summary_text()
-        assert "Gatekeeper → User" in summary
-        assert "Q: Should auth use OAuth or API keys?" in summary
-        assert "You → Gatekeeper" in summary
-        assert "A: Use API keys for v1." in summary
-
-
-@pytest.mark.asyncio
-async def test_chat_panel_question_notification_flashes_panel():
-    app = ChatPanelHarness()
-
-    async with app.run_test() as pilot:
-        await pilot.pause()
         panel = app.query_one(ChatPanel)
         panel.set_gatekeeper_state(
             status=OrchestratorStatus.EXECUTING,
             pending_questions=["Should auth use OAuth or API keys?"],
             flash=True,
         )
-        await pilot.pause()
 
         assert panel.notification_active is True
 
-        await pilot.pause(ChatPanel.FLASH_DURATION_SECONDS + 0.2)
+        await pilot.pause(0.05)
         assert panel.notification_active is False
 
 
@@ -250,12 +257,10 @@ async def test_app_forwards_pending_question_answer_to_gatekeeper(tmp_path: Path
     )
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         panel = app.query_one(ChatPanel)
         assert "Gatekeeper → User" in panel.get_question_summary_text()
 
         await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Use API keys for v1."))
-        await pilot.pause()
 
         engine = app._lifecycle.engine  # noqa: SLF001 - test inspects wiring
         assert engine.answer_calls == [
@@ -283,15 +288,12 @@ async def test_app_thread_switching_updates_chat_panel(tmp_path: Path):
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=session_manager)
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         panel = app.query_one(ChatPanel)
 
         await pilot.press("ctrl+t")
-        await pilot.pause()
         assert panel.current_thread_id == "thread-1"
 
         await pilot.press("ctrl+t")
-        await pilot.pause()
         assert panel.current_thread_id == "thread-2"
 
 
@@ -313,11 +315,15 @@ async def test_app_routes_initial_prompt_to_gatekeeper_on_init(tmp_path: Path):
     )
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         panel = app.query_one(ChatPanel)
         assert panel.current_thread_id == ChatPanel.GATEKEEPER_THREAD_ID
 
         await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+        await _wait_for(
+            lambda: panel.get_gatekeeper_thread() is not None
+            and [turn.items[0].content for turn in panel.get_gatekeeper_thread().turns] == ["Build an auth MVP.", "Plan drafted"],
+            pilot,
+        )
         await pilot.pause()
 
         lifecycle = app._lifecycle  # noqa: SLF001 - verify wiring
@@ -345,9 +351,15 @@ async def test_app_automatic_mode_runs_workflow_after_gatekeeper_update(tmp_path
     )
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
-        await pilot.pause(0.2)
+        await _wait_for(
+            lambda: app._lifecycle is not None
+            and app._lifecycle.execute_until_blocked_calls == 1  # noqa: SLF001 - verify automatic mode
+            and not app._task_execution_in_progress  # noqa: SLF001 - verify runner cleanup
+            and app._roadmap_runner_task is None,  # noqa: SLF001 - verify runner cleanup
+            pilot,
+        )
+        await pilot.pause()
 
         lifecycle = app._lifecycle  # noqa: SLF001 - verify wiring
         assert lifecycle is not None
@@ -369,21 +381,22 @@ async def test_app_streams_gatekeeper_response_live_during_planning(tmp_path: Pa
     )
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         panel = app.query_one(ChatPanel)
+        lifecycle = app._lifecycle  # noqa: SLF001 - verify test lifecycle hooks
+        assert isinstance(lifecycle, FakeStreamingPlanningLifecycle)
 
         task = asyncio.create_task(
             app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
         )
-        await pilot.pause(0.02)
+        await lifecycle.stream_started.wait()
 
         assert panel.get_gatekeeper_streaming_text() == "Plan draft in progress"
         gatekeeper_thread = panel.get_gatekeeper_thread()
         assert gatekeeper_thread is not None
         assert [turn.items[0].content for turn in gatekeeper_thread.turns] == ["Build an auth MVP."]
 
+        lifecycle.allow_completion.set()
         await task
-        await pilot.pause()
 
         assert panel.get_gatekeeper_streaming_text() == ""
         gatekeeper_thread = panel.get_gatekeeper_thread()

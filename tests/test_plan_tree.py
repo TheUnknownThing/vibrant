@@ -109,6 +109,14 @@ def _write_roadmap(repo: Path) -> None:
     RoadmapParser().write(repo / ".vibrant" / "roadmap.md", RoadmapParser().parse(SAMPLE_ROADMAP))
 
 
+async def _wait_for(assertion, pilot, *, attempts: int = 10) -> None:
+    for _ in range(attempts):
+        if assertion():
+            return
+        await pilot.pause()
+    raise AssertionError("Timed out waiting for plan tree update")
+
+
 @pytest.mark.asyncio
 async def test_plan_tree_displays_icons_and_priority_styling():
     tasks = RoadmapParser().parse(SAMPLE_ROADMAP).tasks
@@ -117,7 +125,6 @@ async def test_plan_tree_displays_icons_and_priority_styling():
 
     app = PlanTreeHarness(tasks)
     async with app.run_test() as pilot:
-        await pilot.pause()
         tree = app.query_one(Tree)
         first_node = tree.root.children[0]
         second_node = first_node.children[0]
@@ -146,13 +153,11 @@ async def test_plan_tree_live_updates_when_task_status_changes():
     app = PlanTreeHarness(tasks)
 
     async with app.run_test() as pilot:
-        await pilot.pause()
         assert _task_label(app, "task-001").startswith("○ task-001")
 
         updated_tasks = RoadmapParser().parse(SAMPLE_ROADMAP).tasks
         updated_tasks[0].status = TaskStatus.ACCEPTED
         app.query_one(PlanTree).update_tasks(updated_tasks)
-        await pilot.pause()
 
         assert _task_label(app, "task-001").startswith("✓ task-001")
 
@@ -166,11 +171,15 @@ async def test_app_wires_plan_tree_and_run_next_task_into_gui(tmp_path):
 
     app = VibrantApp(cwd=str(repo), lifecycle_factory=FakeLifecycle)
     async with app.run_test() as pilot:
-        await pilot.pause()
         assert _task_label(app, "task-001").startswith("○ task-001")
 
         await pilot.press("f6")
-        await pilot.pause()
+        await _wait_for(
+            lambda: _task_label(app, "task-001").startswith("✓ task-001")
+            and not app._task_execution_in_progress  # noqa: SLF001 - verify runner cleanup
+            and app._roadmap_runner_task is None,  # noqa: SLF001 - verify runner cleanup
+            pilot,
+        )
         await pilot.pause()
 
         assert _task_label(app, "task-001").startswith("✓ task-001")
