@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -156,6 +158,22 @@ class FakeLifecycle:
         return self._roadmap_parser.parse_file(self.roadmap_path)
 
 
+async def _shutdown_default_executor() -> None:
+    loop = asyncio.get_running_loop()
+    executor = getattr(loop, "_default_executor", None)
+    if executor is None:
+        return
+    executor.shutdown(wait=True, cancel_futures=True)
+    loop._default_executor = None
+
+
+@asynccontextmanager
+async def _run_test(app):
+    async with app.run_test() as pilot:
+        yield pilot
+    await _shutdown_default_executor()
+
+
 def test_consensus_view_summary_shows_counts_and_recent_decisions():
     tasks = [
         TaskInfo(id="task-001", title="Accepted task", status=TaskStatus.ACCEPTED),
@@ -197,7 +215,7 @@ async def test_app_f3_opens_full_consensus_markdown_overlay(tmp_path: Path):
     RoadmapParser().write(repo / ".vibrant" / "roadmap.md", RoadmapParser().parse(SAMPLE_ROADMAP))
 
     app = VibrantApp(cwd=str(repo), lifecycle_factory=FakeLifecycle)
-    async with app.run_test() as pilot:
+    async with _run_test(app) as pilot:
         panel = app.query_one(ConsensusView)
         assert "Tasks: 2/4" in panel.get_summary_text()
 

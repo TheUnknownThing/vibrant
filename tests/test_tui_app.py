@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -102,6 +104,22 @@ class PlanningLifecycle:
         )
 
 
+async def _shutdown_default_executor() -> None:
+    loop = asyncio.get_running_loop()
+    executor = getattr(loop, "_default_executor", None)
+    if executor is None:
+        return
+    executor.shutdown(wait=True, cancel_futures=True)
+    loop._default_executor = None
+
+
+@asynccontextmanager
+async def _run_test(app):
+    async with app.run_test() as pilot:
+        yield pilot
+    await _shutdown_default_executor()
+
+
 @pytest.mark.asyncio
 async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     repo = tmp_path / "repo"
@@ -111,7 +129,7 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
 
-    async with app.run_test() as pilot:
+    async with _run_test(app) as pilot:
         assert app.query_one("#plan-panel") is not None
         assert app.query_one("#agent-output-panel") is not None
         assert app.query_one("#consensus-panel") is not None
@@ -137,7 +155,7 @@ async def test_app_f2_toggles_pause_and_updates_consensus(tmp_path: Path):
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
 
-    async with app.run_test() as pilot:
+    async with _run_test(app) as pilot:
         engine = app._lifecycle.engine  # noqa: SLF001 - verifying app wiring
         assert engine.state.status is OrchestratorStatus.EXECUTING
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.EXECUTING
@@ -160,7 +178,7 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=EscalationLifecycle)
 
-    async with app.run_test() as pilot:
+    async with _run_test(app):
         banner = app.query_one("#notification-banner", Static)
         assert banner.display is True
         assert "Gatekeeper needs your input" in (app.get_banner_text() or "")
@@ -181,7 +199,7 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         session_manager=FakeSessionManager(),
         lifecycle_factory=PlanningLifecycle,
     )
-    async with first_app.run_test() as pilot:
+    async with _run_test(first_app):
         await first_app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
 
     stored_gatekeeper = next(
@@ -198,7 +216,7 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         session_manager=FakeSessionManager(),
         lifecycle_factory=ExecutingLifecycle,
     )
-    async with reloaded_app.run_test() as pilot:
+    async with _run_test(reloaded_app):
         panel = reloaded_app.query_one(ChatPanel)
         gatekeeper_thread = panel.get_gatekeeper_thread()
         assert gatekeeper_thread is not None
@@ -220,7 +238,7 @@ async def test_app_resolves_project_relative_history_dir(tmp_path: Path):
         lifecycle_factory=PlanningLifecycle,
     )
 
-    async with app.run_test() as pilot:
+    async with _run_test(app):
         await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
 
     stored_gatekeeper = next(
