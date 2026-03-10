@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from vibrant.agents.code_agent import CodeAgent
+from vibrant.agents.runtime import AgentRuntime, BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, load_config
 from vibrant.consensus import RoadmapDocument, RoadmapParser
 from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
@@ -65,6 +67,7 @@ class CodeAgentLifecycle:
         git_manager: GitManager | None = None,
         adapter_factory: Any | None = None,
         on_canonical_event: CanonicalEventCallback | None = None,
+        agent_runtime: AgentRuntime | None = None,
     ) -> None:
         self.project_root = find_project_root(project_root)
         self.vibrant_dir = self.project_root / DEFAULT_CONFIG_DIR
@@ -115,11 +118,29 @@ class CodeAgentLifecycle:
             roadmap_service=self.roadmap_service,
             workflow_service=self.workflow_service,
         )
+
+        # Build the protocol-based agent runtime.
+        # Callers can supply a pre-built AgentRuntime (e.g. for testing or
+        # remote agents).  Otherwise we construct a BaseAgentRuntime wrapping
+        # a CodeAgent so the orchestrator drives execution through the
+        # protocol boundary rather than inline adapter logic.
+        self._agent_runtime: AgentRuntime | None = agent_runtime
+        if self._agent_runtime is None:
+            code_agent = CodeAgent(
+                self.project_root,
+                self.config,
+                adapter_factory=self.adapter_factory,
+                on_canonical_event=self.on_canonical_event,
+                on_agent_record_updated=self.agent_registry.make_record_callback(),
+            )
+            self._agent_runtime = BaseAgentRuntime(code_agent)
+
         self.runtime_service = AgentRuntimeService(
             agent_registry=self.agent_registry,
             adapter_factory=self.adapter_factory,
             config_getter=lambda: self.config,
             on_canonical_event=self.on_canonical_event,
+            agent_runtime=self._agent_runtime,
         )
         self.retry_service = RetryPolicyService(
             roadmap_service=self.roadmap_service,

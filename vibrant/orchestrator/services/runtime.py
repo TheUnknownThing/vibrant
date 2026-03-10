@@ -2,24 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from vibrant.agents.utils import (
-    extract_error_message,
-    extract_exit_code,
-    extract_pid,
-    extract_summary_from_turn_result,
-    extract_text_from_progress_item,
-    maybe_forward_event,
-    parse_runtime_mode,
-    stop_adapter_safely,
-    transition_terminal_agent,
+from vibrant.agents.runtime import (
+    AgentHandle,
+    AgentRecordCallback,
+    AgentRuntime,
+    NormalizedRunResult,
 )
-from vibrant.models.agent import AgentRecord, AgentStatus
+from vibrant.models.agent import AgentRecord
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
-from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.providers.base import CanonicalEvent
 
 from ..types import RuntimeExecutionResult
 from .agents import AgentRegistry
@@ -28,7 +22,17 @@ CanonicalEventCallback = Callable[[CanonicalEvent], Any]
 
 
 class AgentRuntimeService:
-    """Own provider adapter session/thread/turn execution details."""
+    """Own provider adapter session/thread/turn execution details.
+
+    This service is the orchestrator's entry point for running agents.
+    It programs against the ``AgentRuntime`` protocol rather than
+    driving adapter internals directly, giving the orchestrator a clean
+    service boundary for agent execution.
+
+    When a protocol-based ``AgentRuntime`` is supplied, all execution
+    is delegated through it.  When only a legacy ``adapter_factory`` is
+    supplied, backwards-compatible inline execution is used.
+    """
 
     REQUEST_ERROR_MESSAGE = "Interactive provider requests are not supported during autonomous task execution."
 
@@ -36,16 +40,129 @@ class AgentRuntimeService:
         self,
         *,
         agent_registry: AgentRegistry,
-        adapter_factory: Any,
-        config_getter: Callable[[], Any],
+        adapter_factory: Any = None,
+        config_getter: Callable[[], Any] | None = None,
         on_canonical_event: CanonicalEventCallback | None = None,
+        agent_runtime: AgentRuntime | None = None,
     ) -> None:
         self.agent_registry = agent_registry
         self.adapter_factory = adapter_factory
         self.config_getter = config_getter
         self.on_canonical_event = on_canonical_event
+        self._agent_runtime = agent_runtime
 
-    async def run_task(self, *, worktree: GitWorktreeInfo, prompt: str, agent_record: AgentRecord) -> RuntimeExecutionResult:
+    def _make_record_callback(self) -> AgentRecordCallback:
+        """Build a callback that persists record mutations through the registry."""
+        registry = self.agent_registry
+
+        def _persist(record: AgentRecord) -> None:
+            registry.upsert(record)
+
+        return _persist
+
+    async def run_task(
+        self,
+        *,
+        worktree: GitWorktreeInfo,
+        prompt: str,
+        agent_record: AgentRecord,
+        resume_thread_id: str | None = None,
+    ) -> RuntimeExecutionResult:
+        """Run a task using the protocol runtime or the legacy path."""
+        if self._agent_runtime is not None:
+            return await self._run_via_protocol(
+                worktree=worktree,
+                prompt=prompt,
+                agent_record=agent_record,
+                resume_thread_id=resume_thread_id,
+            )
+        return await self._run_legacy(
+            worktree=worktree,
+            prompt=prompt,
+            agent_record=agent_record,
+        )
+
+    async def start_task(
+        self,
+        *,
+        worktree: GitWorktreeInfo,
+        prompt: str,
+        agent_record: AgentRecord,
+        resume_thread_id: str | None = None,
+    ) -> AgentHandle:
+        """Start an agent and return the durable handle immediately.
+
+        This is the preferred entry point for callers that want to
+        observe run-state, await completion asynchronously, or inspect
+        the provider-thread handle for resume/recovery.
+
+        Requires a protocol-based ``AgentRuntime``.
+        """
+        if self._agent_runtime is None:
+            raise RuntimeError(
+                "start_task() requires a protocol-based AgentRuntime; "
+                "configure agent_runtime on AgentRuntimeService"
+            )
+        agent_record.started_at = datetime.now(timezone.utc)
+        self.agent_registry.upsert(agent_record, increment_spawn=True)
+
+        return await self._agent_runtime.start(
+            agent_record=agent_record,
+            prompt=prompt,
+            cwd=str(worktree.path),
+            resume_thread_id=resume_thread_id,
+            on_record_updated=self._make_record_callback(),
+        )
+
+    # ------------------------------------------------------------------
+    # Protocol-based execution
+    # ------------------------------------------------------------------
+
+    async def _run_via_protocol(
+        self,
+        *,
+        worktree: GitWorktreeInfo,
+        prompt: str,
+        agent_record: AgentRecord,
+        resume_thread_id: str | None = None,
+    ) -> RuntimeExecutionResult:
+        handle = await self.start_task(
+            worktree=worktree,
+            prompt=prompt,
+            agent_record=agent_record,
+            resume_thread_id=resume_thread_id,
+        )
+        result = await handle.wait()
+        return _normalized_to_execution_result(result)
+
+    # ------------------------------------------------------------------
+    # Legacy inline execution (adapter_factory path)
+    # ------------------------------------------------------------------
+
+    async def _run_legacy(
+        self,
+        *,
+        worktree: GitWorktreeInfo,
+        prompt: str,
+        agent_record: AgentRecord,
+    ) -> RuntimeExecutionResult:
+        """Original inline adapter lifecycle — kept for backwards compat."""
+        import asyncio
+
+        from vibrant.agents.utils import (
+            extract_error_message,
+            extract_exit_code,
+            extract_pid,
+            extract_summary_from_turn_result,
+            extract_text_from_progress_item,
+            maybe_forward_event,
+            parse_runtime_mode,
+            stop_adapter_safely,
+            transition_terminal_agent,
+        )
+        from vibrant.models.agent import AgentStatus
+
+        assert self.config_getter is not None
         config = self.config_getter()
         events: list[CanonicalEvent] = []
         transcript_chunks: list[str] = []
@@ -165,3 +282,14 @@ class AgentRuntimeService:
             summary=agent_record.summary,
             turn_result=turn_result,
         )
+
+
+def _normalized_to_execution_result(result: NormalizedRunResult) -> RuntimeExecutionResult:
+    """Bridge a ``NormalizedRunResult`` to the orchestrator's existing type."""
+    return RuntimeExecutionResult(
+        agent_record=result.agent_record,
+        events=result.events,
+        summary=result.summary,
+        error=result.error,
+        turn_result=result.turn_result,
+    )
