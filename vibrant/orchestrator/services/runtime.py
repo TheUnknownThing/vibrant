@@ -10,6 +10,7 @@ from vibrant.agents.runtime import (
     AgentRecordCallback,
     AgentRuntime,
     NormalizedRunResult,
+    ProviderThreadHandle,
 )
 from vibrant.models.agent import AgentRecord
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
@@ -111,6 +112,34 @@ class AgentRuntimeService:
             prompt=prompt,
             cwd=str(worktree.path),
             resume_thread_id=resume_thread_id,
+            on_record_updated=self._make_record_callback(),
+        )
+
+    async def resume_task(
+        self,
+        *,
+        worktree: GitWorktreeInfo,
+        prompt: str,
+        agent_record: AgentRecord,
+        provider_thread: ProviderThreadHandle,
+    ) -> AgentHandle:
+        """Resume a previously interrupted agent via its durable thread handle.
+
+        Requires a protocol-based ``AgentRuntime`` that supports
+        ``resume_run()``.
+        """
+        if self._agent_runtime is None:
+            raise RuntimeError(
+                "resume_task() requires a protocol-based AgentRuntime; "
+                "configure agent_runtime on AgentRuntimeService"
+            )
+        self.agent_registry.upsert(agent_record)
+
+        return await self._agent_runtime.resume_run(
+            agent_record=agent_record,
+            prompt=prompt,
+            provider_thread=provider_thread,
+            cwd=str(worktree.path),
             on_record_updated=self._make_record_callback(),
         )
 

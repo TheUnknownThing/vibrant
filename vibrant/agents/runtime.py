@@ -8,14 +8,17 @@ instead.
 Key types
 ---------
 ``AgentRuntime``
-    Protocol that any agent implementation must satisfy.  It exposes a
-    single ``start()`` coroutine that returns an ``AgentHandle``.
+    Protocol that any agent implementation must satisfy.  It exposes
+    ``start()`` and ``resume_run()`` coroutines that return an
+    ``AgentHandle``.
 
 ``AgentHandle``
     Durable handle to a running or finished agent.  It exposes the
     provider-thread id for resume/recovery, explicit awaiting-input
-    state with request metadata, and a ``wait()`` coroutine that
-    resolves to a ``NormalizedRunResult``.
+    state with request metadata, ``respond_to_request()`` to answer
+    pending provider requests, ``interrupt()`` for graceful turn
+    cancellation, ``kill()`` for forceful teardown, and a ``wait()``
+    coroutine that resolves to a ``NormalizedRunResult``.
 
 ``NormalizedRunResult``
     Canonical result the orchestrator can persist, expose to callbacks,
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -118,6 +122,12 @@ AgentRecordCallback = Callable[[AgentRecord], Any]
 can persist / broadcast without the runtime knowing about state stores."""
 
 
+# ── Adapter accessor type ────────────────────────────────────────────
+
+AdapterAccessor = Callable[[], Any | None]
+"""Returns the live adapter from the underlying AgentBase, or None."""
+
+
 # ── AgentHandle ──────────────────────────────────────────────────────
 
 
@@ -127,14 +137,23 @@ class AgentHandle:
     The orchestrator holds onto this object to:
     * observe the current run-state and awaiting-input metadata
     * obtain the provider-thread handle for resume/recovery
+    * respond to interactive provider requests via ``respond_to_request``
+    * gracefully interrupt via ``interrupt``
+    * forcefully tear down via ``kill``
     * ``await wait()`` for the final ``NormalizedRunResult``
     """
 
-    def __init__(self, result_future: asyncio.Future[NormalizedRunResult]) -> None:
+    def __init__(
+        self,
+        result_future: asyncio.Future[NormalizedRunResult],
+        *,
+        adapter_accessor: AdapterAccessor | None = None,
+    ) -> None:
         self._future = result_future
         self._state: RunState = RunState.STARTING
         self._provider_thread = ProviderThreadHandle()
         self._input_requests: list[InputRequest] = []
+        self._adapter_accessor = adapter_accessor
 
     # -- read accessors ------------------------------------------------
 
@@ -164,6 +183,53 @@ class AgentHandle:
     def done(self) -> bool:
         return self._future.done()
 
+    # -- control methods (orchestrator-facing) -------------------------
+
+    async def respond_to_request(
+        self,
+        request_id: int | str,
+        *,
+        result: Any | None = None,
+        error: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Respond to a pending interactive provider request.
+
+        Delegates to the live adapter's ``respond_to_request``.
+        Raises ``RuntimeError`` if the adapter is no longer available
+        (agent already finished / torn down).
+        """
+        adapter = self._get_adapter("respond_to_request")
+        await adapter.respond_to_request(request_id, result=result, error=error)
+        # Clear the awaiting-input state for the responded request.
+        self._input_requests = [
+            r for r in self._input_requests if r.request_id != str(request_id)
+        ]
+        if not self._input_requests and self._state is RunState.AWAITING_INPUT:
+            self._state = RunState.RUNNING
+
+    async def interrupt(self) -> None:
+        """Gracefully interrupt the running turn.
+
+        Sends ``turn/interrupt`` to the provider, which will cause the
+        current turn to complete early.  The run task will still finish
+        and the future will resolve normally.
+        """
+        adapter = self._get_adapter("interrupt")
+        await adapter.interrupt_turn()
+
+    async def kill(self) -> None:
+        """Forcefully tear down the adapter session.
+
+        Stops the adapter session immediately.  The run task will
+        observe the teardown and resolve the future with a FAILED
+        result.
+        """
+        adapter = self._get_adapter("kill")
+        try:
+            await adapter.stop_session()
+        except Exception:
+            logger.debug("AgentHandle.kill: stop_session raised", exc_info=True)
+
     # -- mutators (used by the runtime, not the orchestrator) ----------
 
     def _set_state(self, state: RunState) -> None:
@@ -181,6 +247,23 @@ class AgentHandle:
     async def wait(self) -> NormalizedRunResult:
         """Block until the agent run completes and return the result."""
         return await self._future
+
+    # -- internal ------------------------------------------------------
+
+    def _get_adapter(self, method_name: str) -> Any:
+        """Obtain the live adapter or raise."""
+        if self._adapter_accessor is None:
+            raise RuntimeError(
+                f"AgentHandle.{method_name}() is not supported: "
+                "no adapter accessor was provided"
+            )
+        adapter = self._adapter_accessor()
+        if adapter is None:
+            raise RuntimeError(
+                f"AgentHandle.{method_name}() cannot be called: "
+                "the adapter is no longer available (agent finished or not yet started)"
+            )
+        return adapter
 
 
 # ── AgentRuntime protocol ────────────────────────────────────────────
@@ -226,6 +309,40 @@ class AgentRuntime(Protocol):
         """
         ...
 
+    async def resume_run(
+        self,
+        *,
+        agent_record: AgentRecord,
+        prompt: str,
+        provider_thread: ProviderThreadHandle,
+        cwd: str | None = None,
+        on_record_updated: AgentRecordCallback | None = None,
+    ) -> AgentHandle:
+        """Resume a previously interrupted or awaiting-input agent.
+
+        This re-attaches to the durable provider thread referenced by
+        ``provider_thread`` and starts a new turn with the given prompt.
+        The returned handle supports the same control surface as
+        ``start()`` — ``respond_to_request``, ``interrupt``, ``kill``,
+        ``wait``.
+
+        Parameters
+        ----------
+        agent_record:
+            The existing agent record (may carry state from the prior
+            run).
+        prompt:
+            New prompt / follow-up input for the resumed turn.
+        provider_thread:
+            Durable thread handle obtained from a prior
+            ``AgentHandle.provider_thread`` or ``NormalizedRunResult``.
+        cwd:
+            Working directory override.
+        on_record_updated:
+            Persistence callback, same semantics as ``start()``.
+        """
+        ...
+
 
 # ── Concrete runtime wrapping AgentBase ──────────────────────────────
 
@@ -241,6 +358,8 @@ class BaseAgentRuntime:
       ``NormalizedRunResult``.
     * Populates the durable ``ProviderThreadHandle`` for resume/recovery.
     * Tracks ``InputRequest`` metadata when the provider surfaces requests.
+    * Exposes the live adapter through the handle for ``respond_to_request``,
+      ``interrupt``, and ``kill``.
     """
 
     def __init__(self, agent: Any) -> None:
@@ -257,9 +376,59 @@ class BaseAgentRuntime:
         resume_thread_id: str | None = None,
         on_record_updated: AgentRecordCallback | None = None,
     ) -> AgentHandle:
+        return await self._launch(
+            agent_record=agent_record,
+            prompt=prompt,
+            cwd=cwd,
+            resume_thread_id=resume_thread_id,
+            on_record_updated=on_record_updated,
+        )
+
+    async def resume_run(
+        self,
+        *,
+        agent_record: AgentRecord,
+        prompt: str,
+        provider_thread: ProviderThreadHandle,
+        cwd: str | None = None,
+        on_record_updated: AgentRecordCallback | None = None,
+    ) -> AgentHandle:
+        if not provider_thread.resumable:
+            raise ValueError(
+                "Cannot resume: provider_thread has no thread_id"
+            )
+        return await self._launch(
+            agent_record=agent_record,
+            prompt=prompt,
+            cwd=cwd,
+            resume_thread_id=provider_thread.thread_id,
+            on_record_updated=on_record_updated,
+        )
+
+    # ------------------------------------------------------------------
+    # Internal launch implementation
+    # ------------------------------------------------------------------
+
+    async def _launch(
+        self,
+        *,
+        agent_record: AgentRecord,
+        prompt: str,
+        cwd: str | None,
+        resume_thread_id: str | None,
+        on_record_updated: AgentRecordCallback | None,
+    ) -> AgentHandle:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[NormalizedRunResult] = loop.create_future()
-        handle = AgentHandle(future)
+
+        # Build the adapter accessor so the handle can delegate control
+        # methods to the live adapter held by AgentBase._live_adapter.
+        agent = self._agent
+
+        def _adapter_accessor() -> Any | None:
+            return getattr(agent, "_live_adapter", None)
+
+        handle = AgentHandle(future, adapter_accessor=_adapter_accessor)
 
         # Wire the record callback so the orchestrator can persist every
         # mutation without coupling to a specific store.
@@ -316,9 +485,9 @@ class BaseAgentRuntime:
                 )
 
                 provider_thread = ProviderThreadHandle(
-                    thread_id=agent_record.provider.provider_thread_id,
-                    thread_path=agent_record.provider.thread_path,
-                    resume_cursor=agent_record.provider.resume_cursor,
+                    thread_id=getattr(agent_record.provider, "provider_thread_id", None),
+                    thread_path=getattr(agent_record.provider, "thread_path", None),
+                    resume_cursor=getattr(agent_record.provider, "resume_cursor", None),
                 )
                 handle._set_provider_thread(provider_thread)
 
