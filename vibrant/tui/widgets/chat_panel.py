@@ -81,8 +81,8 @@ class ChatPanel(Static):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._header_text = "[b]Chat / Q&A[/b]"
-        self._subtitle_text = "Conversation threads"
+        self._header_text = "[b]Gatekeeper[/b]"
+        self._subtitle_text = "Gatekeeper conversation"
         self._question_summary_text = ""
         self._pending_questions: tuple[str, ...] = ()
         self._status: OrchestratorStatus | str | None = None
@@ -355,12 +355,12 @@ def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_que
     if normalized == OrchestratorStatus.PLANNING.value:
         return "Planning · User ↔ Gatekeeper"
     if normalized == OrchestratorStatus.EXECUTING.value:
-        return "Executing · Gatekeeper escalation" if has_pending_questions else "Executing · Conversation threads"
+        return "Executing · Gatekeeper escalation" if has_pending_questions else "Executing · Gatekeeper history"
     if normalized == OrchestratorStatus.PAUSED.value:
         return "Paused · Review history"
     if normalized == OrchestratorStatus.COMPLETED.value:
         return "Completed · Review history"
-    return "Conversation threads"
+    return "Gatekeeper conversation"
 
 
 def _gatekeeper_thread_status(

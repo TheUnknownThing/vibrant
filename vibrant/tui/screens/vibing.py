@@ -139,7 +139,7 @@ class VibingScreen(Static):
             button.set_class(candidate_tab == tab_id, "-active")
 
         for candidate_tab, selector in self._TAB_TO_PANEL.items():
-            panel = self.query_one(selector, Static)
+            panel = self.query_one(selector)
             panel.display = candidate_tab == tab_id
 
     def set_roadmap_loading(self, is_loading: bool) -> None:
@@ -148,3 +148,59 @@ class VibingScreen(Static):
         chat_panel = self.query_one(ChatPanel)
         chat_notice.display = is_loading
         chat_panel.display = not is_loading
+
+    @property
+    def agent_output(self) -> AgentOutput:
+        """Return the agent output widget."""
+
+        return self.query_one(AgentOutput)
+
+    @property
+    def chat_panel(self) -> ChatPanel:
+        """Return the Gatekeeper chat panel."""
+
+        return self.query_one(ChatPanel)
+
+    @property
+    def consensus_view(self) -> ConsensusView:
+        """Return the consensus view widget."""
+
+        return self.query_one(ConsensusView)
+
+    @property
+    def input_bar(self) -> InputBar:
+        """Return the vibing input bar."""
+
+        return self.query_one(InputBar)
+
+    @property
+    def plan_tree(self) -> PlanTree:
+        """Return the roadmap tree widget."""
+
+        return self.query_one(PlanTree)
+
+    @property
+    def task_status(self) -> TaskStatusView:
+        """Return the task status widget."""
+
+        return self.query_one(TaskStatusView)
+
+    def focus_primary_input(self) -> None:
+        """Focus the vibing input."""
+
+        self.input_bar.focus_input()
+
+    def set_input_placeholder(self, text: str) -> None:
+        """Update the vibing input placeholder."""
+
+        self.input_bar.set_placeholder(text)
+
+    def show_agent_logs(self) -> None:
+        """Switch to the agent logs tab."""
+
+        self.set_active_tab("agent-logs")
+
+    def show_chat_history(self) -> None:
+        """Switch to the chat history tab."""
+
+        self.set_active_tab("chat-history")

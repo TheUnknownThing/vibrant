@@ -54,3 +54,25 @@ class PlanningScreen(Static):
             )
             yield ChatPanel(id="conversation-panel")
             yield InputBar(id="input-panel")
+
+    @property
+    def chat_panel(self) -> ChatPanel:
+        """Return the planning chat panel."""
+
+        return self.query_one(ChatPanel)
+
+    @property
+    def input_bar(self) -> InputBar:
+        """Return the planning input bar."""
+
+        return self.query_one(InputBar)
+
+    def focus_primary_input(self) -> None:
+        """Focus the planning input."""
+
+        self.input_bar.focus_input()
+
+    def set_input_placeholder(self, text: str) -> None:
+        """Update the planning input placeholder."""
+
+        self.input_bar.set_placeholder(text)

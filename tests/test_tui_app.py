@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from textual.css.query import NoMatches
 from textual.widgets import Input, OptionList, Static
 
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
@@ -138,6 +139,8 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=ExecutingLifecycle)
 
     async with _run_test(app) as pilot:
+        await pilot.pause()
+
         assert app.query_one("#plan-panel") is not None
         assert app.query_one("#agent-output-panel") is not None
         assert app.query_one("#consensus-panel") is not None
@@ -151,7 +154,8 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
         assert keymap["f10"] == "quit_app"
 
         await pilot.press("f1")
-        assert isinstance(app.screen, HelpScreen)
+        await pilot.pause()
+        assert isinstance(app.screen_stack[-1], HelpScreen)
 
 
 @pytest.mark.asyncio
@@ -164,8 +168,9 @@ async def test_uninitialized_workspace_shows_initialization_screen(tmp_path: Pat
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert isinstance(app.screen, InitializationScreen)
-        keymap = {binding.key: binding for binding in app.screen.BINDINGS}
+        init_screen = app.screen_stack[-1]
+        assert isinstance(init_screen, InitializationScreen)
+        keymap = {binding.key: binding for binding in init_screen.BINDINGS}
         assert keymap["f10"].action == "exit_app"
         assert keymap["ctrl+q"].action == "exit_app"
         assert keymap["up"].action == "cursor_up"
@@ -176,7 +181,7 @@ async def test_uninitialized_workspace_shows_initialization_screen(tmp_path: Pat
         assert keymap["up"].show is True
         assert keymap["down"].show is True
         assert keymap["enter"].show is True
-        options = app.screen.query_one("#initialization-options", Multiselect)
+        options = init_screen.query_one("#initialization-options", Multiselect)
         assert options.show_frame is True
         assert options.active_style.startswith("bold ")
         assert options.entries == [
@@ -196,13 +201,14 @@ async def test_initialization_screen_can_initialize_current_workspace(tmp_path: 
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert isinstance(app.screen, InitializationScreen)
+        init_screen = app.screen_stack[-1]
+        assert isinstance(init_screen, InitializationScreen)
 
-        await app.screen.action_initialize_here()
+        await init_screen.action_initialize_here()
         await pilot.pause()
 
         assert (repo / ".vibrant").is_dir()
-        assert not isinstance(app.screen, InitializationScreen)
+        assert not isinstance(app.screen_stack[-1], InitializationScreen)
         assert app._lifecycle is not None  # noqa: SLF001 - verifies app reloaded lifecycle
 
 
@@ -218,14 +224,15 @@ async def test_initialization_screen_can_initialize_selected_workspace(tmp_path:
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert isinstance(app.screen, InitializationScreen)
+        init_screen = app.screen_stack[-1]
+        assert isinstance(init_screen, InitializationScreen)
 
-        app.screen._on_directory_selected(target_repo)  # noqa: SLF001 - verifies callback wiring
+        init_screen._on_directory_selected(target_repo)  # noqa: SLF001 - verifies callback wiring
         await pilot.pause()
         await pilot.pause()
 
         assert (target_repo / ".vibrant").is_dir()
-        assert not isinstance(app.screen, InitializationScreen)
+        assert not isinstance(app.screen_stack[-1], InitializationScreen)
         assert app._project_root == target_repo  # noqa: SLF001 - verifies selected directory became active
 
 
@@ -245,12 +252,13 @@ async def test_directory_selection_screen_autocompletes_directories_only(tmp_pat
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert isinstance(app.screen, InitializationScreen)
+        init_screen = app.screen_stack[-1]
+        assert isinstance(init_screen, InitializationScreen)
 
-        await app.screen.action_select_directory()
+        await init_screen.action_select_directory()
         await pilot.pause()
 
-        path_input = app.screen.query_one("#directory-selection-input", PathAutocomplete)
+        path_input = app.screen_stack[-1].query_one("#directory-selection-input", PathAutocomplete)
         input_widget = path_input.query_one(Input)
         option_list = path_input.query_one(OptionList)
 
@@ -321,10 +329,12 @@ async def test_planning_mode_shows_consensus_building_screen(tmp_path: Path):
 
         assert app.has_class("planning-mode") is True
         assert app.query_one("#planning-hero", Static).display is True
-        assert app.query_one("#plan-panel").display is False
-        assert app.query_one("#agent-output-panel").display is False
-        assert app.query_one("#consensus-panel").display is False
-        assert app.query_one("#thread-panel").display is False
+        with pytest.raises(NoMatches):
+            app.query_one("#plan-panel")
+        with pytest.raises(NoMatches):
+            app.query_one("#agent-output-panel")
+        with pytest.raises(NoMatches):
+            app.query_one("#consensus-panel")
         assert app.query_one("#message-input", Input).placeholder == "Tell me what you want to build"
 
 
@@ -360,7 +370,8 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         session_manager=FakeSessionManager(),
         lifecycle_factory=ExecutingLifecycle,
     )
-    async with _run_test(reloaded_app):
+    async with _run_test(reloaded_app) as pilot:
+        await pilot.pause()
         panel = reloaded_app.query_one(ChatPanel)
         gatekeeper_thread = panel.get_gatekeeper_thread()
         assert gatekeeper_thread is not None
