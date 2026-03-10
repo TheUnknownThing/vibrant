@@ -13,7 +13,13 @@ from vibrant.consensus.parser import ConsensusParser
 from vibrant.gatekeeper.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
-from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, ProviderRuntimeState
+from vibrant.models.state import (
+    GatekeeperStatus,
+    OrchestratorState,
+    OrchestratorStatus,
+    ProviderRuntimeState,
+    reconcile_question_records,
+)
 from vibrant.project_init import ensure_project_files
 
 
@@ -283,13 +289,25 @@ class OrchestratorEngine:
 
         if self.consensus is not None:
             self.state.last_consensus_version = self.consensus.version
-            self.state.pending_questions = list(self.consensus.questions)
+            self.state.replace_questions(
+                reconcile_question_records(
+                    self.state.questions,
+                    list(self.consensus.questions),
+                    source_role="gatekeeper",
+                )
+            )
             if self.state.status is OrchestratorStatus.INIT:
                 inferred_status = _consensus_to_orchestrator_status(self.consensus.status)
                 if inferred_status is not None:
                     self.state.status = inferred_status
         else:
-            self.state.pending_questions = []
+            self.state.replace_questions(
+                reconcile_question_records(
+                    self.state.questions,
+                    [],
+                    source_role="gatekeeper",
+                )
+            )
 
         if self.state.pending_questions:
             self.state.gatekeeper_status = GatekeeperStatus.AWAITING_USER

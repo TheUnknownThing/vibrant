@@ -4,6 +4,7 @@ from .engine import OrchestratorEngine
 from .facade import OrchestratorFacade, OrchestratorSnapshot
 from .git_manager import GitManager
 from .lifecycle import CodeAgentLifecycle, CodeAgentLifecycleResult
+from .mcp import OrchestratorMCPServer
 from .task_dispatch import TaskDispatcher
 
 __all__ = [
@@ -11,6 +12,7 @@ __all__ = [
     "CodeAgentLifecycleResult",
     "GitManager",
     "OrchestratorFacade",
+    "OrchestratorMCPServer",
     "OrchestratorSnapshot",
     "OrchestratorEngine",
     "TaskDispatcher",

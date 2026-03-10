@@ -22,7 +22,8 @@ from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
 from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.consensus import ConsensusStatus
-from vibrant.models.state import OrchestratorStatus
+from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
+from vibrant.models.task import TaskInfo
 
 from .lifecycle import CodeAgentLifecycle
 from .types import CodeAgentLifecycleResult
@@ -42,6 +43,7 @@ class OrchestratorSnapshot:
 
     status: OrchestratorStatus
     pending_questions: tuple[str, ...]
+    question_records: tuple[QuestionRecord, ...]
     roadmap: RoadmapDocument | None
     consensus: ConsensusDocument | None
     consensus_path: Path | None
@@ -65,6 +67,10 @@ class LegacyOrchestratorStateView:
     @property
     def pending_questions(self) -> list[str]:
         return list(self._snapshot.pending_questions)
+
+    @property
+    def questions(self) -> list[QuestionRecord]:
+        return list(self._snapshot.question_records)
 
     def __getattr__(self, name: str) -> Any:
         if self._fallback_state is None:
@@ -265,6 +271,14 @@ class OrchestratorFacade:
             return []
         return [question for question in questions if isinstance(question, str) and question]
 
+    def _question_records_from_engine(self) -> tuple[QuestionRecord, ...]:
+        engine = self._engine()
+        state = getattr(engine, "state", None)
+        records = getattr(state, "questions", None)
+        if not isinstance(records, list):
+            return ()
+        return tuple(record for record in records if isinstance(record, QuestionRecord))
+
     def _agent_records_from_engine(self) -> tuple[AgentRecord, ...]:
         engine = self._engine()
         agents = getattr(engine, "agents", None)
@@ -339,6 +353,7 @@ class OrchestratorFacade:
         return OrchestratorSnapshot(
             status=self._normalize_status(status),
             pending_questions=tuple(self.pending_questions()),
+            question_records=tuple(self.question_records()),
             roadmap=roadmap_document,
             consensus=consensus_document if isinstance(consensus_document, ConsensusDocument) else None,
             consensus_path=consensus_path if isinstance(consensus_path, Path) else None,
@@ -356,11 +371,96 @@ class OrchestratorFacade:
     def consensus_document(self) -> ConsensusDocument | None:
         return self.snapshot().consensus
 
+    def roadmap(self) -> RoadmapDocument | None:
+        return self.snapshot().roadmap
+
     def consensus_source_path(self) -> Path | None:
         return self.snapshot().consensus_path
 
     def agent_records(self) -> list[AgentRecord]:
         return list(self.snapshot().agent_records)
+
+    def question_records(self) -> list[QuestionRecord]:
+        if self.questions is not None:
+            records = getattr(self.questions, "records", None)
+            if callable(records):
+                return list(records())
+        return list(self._question_records_from_engine())
+
+    def pending_question_records(self) -> list[QuestionRecord]:
+        if self.questions is not None:
+            pending_records = getattr(self.questions, "pending_records", None)
+            if callable(pending_records):
+                return list(pending_records())
+        records = self._question_records_from_engine()
+        if records:
+            return [record for record in records if record.is_pending()]
+        return []
+
+    def task(self, task_id: str) -> TaskInfo | None:
+        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        get_task = getattr(roadmap_service, "get_task", None)
+        if callable(get_task):
+            return get_task(task_id)
+        roadmap = self.roadmap()
+        if roadmap is None:
+            return None
+        for task in roadmap.tasks:
+            if task.id == task_id:
+                return task
+        return None
+
+    def add_task(self, task: TaskInfo | dict[str, Any], *, index: int | None = None) -> TaskInfo:
+        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        add_task = getattr(roadmap_service, "add_task", None)
+        if not callable(add_task):
+            raise AttributeError("Lifecycle does not support roadmap task creation")
+        task_info = task if isinstance(task, TaskInfo) else TaskInfo.model_validate(task)
+        return add_task(task_info, index=index)
+
+    def update_task(self, task_id: str, **updates: Any) -> TaskInfo:
+        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        update_task = getattr(roadmap_service, "update_task", None)
+        if not callable(update_task):
+            raise AttributeError("Lifecycle does not support roadmap task updates")
+        return update_task(task_id, **updates)
+
+    def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
+        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        reorder_tasks = getattr(roadmap_service, "reorder_tasks", None)
+        if not callable(reorder_tasks):
+            raise AttributeError("Lifecycle does not support roadmap reordering")
+        return reorder_tasks(ordered_task_ids)
+
+    def update_consensus(self, **updates: Any) -> ConsensusDocument:
+        consensus_service = getattr(self.lifecycle, "consensus_service", None)
+        update = getattr(consensus_service, "update", None)
+        if not callable(update):
+            raise AttributeError("Lifecycle does not support consensus updates")
+        return update(**updates)
+
+    def ask_question(
+        self,
+        text: str,
+        *,
+        source_agent_id: str | None = None,
+        source_role: str = "gatekeeper",
+        priority: QuestionPriority = QuestionPriority.BLOCKING,
+    ) -> QuestionRecord:
+        if self.questions is None:
+            raise AttributeError("Lifecycle does not support question creation")
+        ask = getattr(self.questions, "ask", None)
+        if not callable(ask):
+            raise AttributeError("Lifecycle does not support question creation")
+        return ask(text, source_agent_id=source_agent_id, source_role=source_role, priority=priority)
+
+    def resolve_question(self, question_id: str, *, answer: str | None = None) -> QuestionRecord:
+        if self.questions is None:
+            raise AttributeError("Lifecycle does not support question resolution")
+        resolve = getattr(self.questions, "resolve", None)
+        if not callable(resolve):
+            raise AttributeError("Lifecycle does not support question resolution")
+        return resolve(question_id, answer=answer)
 
     def task_summaries(self) -> dict[str, str]:
         by_task: dict[str, tuple[float, str]] = {}
@@ -431,7 +531,9 @@ class OrchestratorFacade:
 
     def pending_questions(self) -> list[str]:
         if self.questions is not None:
-            return self.questions.pending_questions()
+            pending_questions = getattr(self.questions, "pending_questions", None)
+            if callable(pending_questions):
+                return pending_questions()
         return self._pending_questions_from_engine()
 
     def current_pending_question(self) -> str | None:

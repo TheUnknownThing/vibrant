@@ -7,6 +7,7 @@ This document defines the **current stable public API** for the orchestrator pac
 As of March 10, 2026, the stable API for external consumers is:
 
 - `OrchestratorFacade`
+- `OrchestratorMCPServer`
 - `OrchestratorSnapshot`
 - `CodeAgentLifecycleResult`
 
@@ -40,6 +41,7 @@ Fields:
 
 - `status: OrchestratorStatus`
 - `pending_questions: tuple[str, ...]`
+- `question_records: tuple[QuestionRecord, ...]`
 - `roadmap: RoadmapDocument | None`
 - `consensus: ConsensusDocument | None`
 - `consensus_path: Path | None`
@@ -57,10 +59,14 @@ Stable read methods:
 - `snapshot()`
 - `workflow_status()`
 - `consensus_document()`
+- `roadmap()`
+- `task(task_id)`
 - `consensus_source_path()`
 - `agent_records()`
 - `task_summaries()`
 - `pending_questions()`
+- `question_records()`
+- `pending_question_records()`
 - `current_pending_question()`
 - `user_input_banner()`
 - `notification_bell_enabled()`
@@ -75,6 +81,12 @@ Stable action methods on `OrchestratorFacade`:
 
 - `submit_gatekeeper_message(text)`
 - `answer_pending_question(answer, *, question=None)`
+- `update_consensus(...)`
+- `add_task(task, *, index=None)`
+- `update_task(task_id, **updates)`
+- `reorder_tasks(ordered_task_ids)`
+- `ask_question(text, ...)`
+- `resolve_question(question_id, *, answer=None)`
 - `pause_workflow()`
 - `resume_workflow()`
 
@@ -113,6 +125,17 @@ Likewise, `CodeAgentLifecycleResult` remains export-stable for compatibility,
 but new code should avoid depending on detailed execution internals such as raw
 Gatekeeper results, merge results, runtime events, or worktree paths unless
 that data is explicitly promoted into a future stable read model.
+
+## MCP Surface
+
+`OrchestratorMCPServer` is the typed in-process MCP registry for the document
+and workflow control plane. It currently exposes role-scoped resources and tools
+for:
+
+- consensus reads and updates
+- roadmap reads and task mutations
+- structured question reads and resolution
+- workflow pause/resume
 
 ## Not Stable
 

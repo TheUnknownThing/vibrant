@@ -25,6 +25,9 @@ class StateStore:
     def refresh(self) -> None:
         self.engine.refresh_from_disk()
 
+    def persist(self) -> None:
+        self.engine.persist_state()
+
     def apply_gatekeeper_result(self, result: GatekeeperRunResult) -> list[dict[str, object]]:
         return self.engine.apply_gatekeeper_result(result)
 
