@@ -126,3 +126,25 @@ def test_facade_falls_back_to_agent_records_when_agent_manager_is_absent() -> No
     assert completed_snapshot.done is True
     assert completed_snapshot.active is False
     assert completed_snapshot.summary == "Done"
+
+
+def test_facade_engine_preserves_legacy_agent_view() -> None:
+    running = _record("agent-legacy", task_id="task-legacy", status=AgentStatus.RUNNING, summary="Legacy")
+    lifecycle = SimpleNamespace(
+        engine=SimpleNamespace(
+            state=OrchestratorState(session_id="session-legacy"),
+            agents={running.agent_id: running},
+            consensus=None,
+            consensus_path=None,
+            notification_bell_enabled=False,
+            USER_INPUT_BANNER="banner",
+        ),
+        execution_mode="manual",
+    )
+
+    facade = OrchestratorFacade(lifecycle)
+
+    engine_view = facade.engine
+    assert engine_view is not lifecycle.engine
+    assert engine_view.agents[running.agent_id].summary == "Legacy"
+    assert engine_view.state.pending_questions == []

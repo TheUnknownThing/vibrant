@@ -296,6 +296,9 @@ class CodeAgentLifecycle:
         handle = await self.start_gatekeeper_message(text)
         return await handle.wait()
 
+    async def answer_pending_question(self, answer: str, *, question: str | None = None) -> GatekeeperRunResult:
+        return await self.question_service.answer(answer, question=question)
+
     async def _apply_gatekeeper_result_async(self, result: GatekeeperRunResult) -> None:
         self.state_store.apply_gatekeeper_result(result)
         self.roadmap_service.merge_result(result.roadmap_document)

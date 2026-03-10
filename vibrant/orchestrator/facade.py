@@ -429,10 +429,8 @@ class OrchestratorFacade:
     @property
     def engine(self):
         engine = self._engine()
-        if engine is not None:
-            return engine
         snapshot = self.snapshot()
-        return LegacyOrchestratorEngineView(self, snapshot, fallback_engine=None)
+        return LegacyOrchestratorEngineView(self, snapshot, fallback_engine=engine)
 
     @property
     def roadmap_document(self) -> RoadmapDocument | None:
