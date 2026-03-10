@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from vibrant.agents.utils import (
+    extract_error_message as _shared_extract_error_message,
+    extract_text_from_progress_item as _shared_extract_text_from_progress_item,
+    maybe_forward_event as _shared_maybe_forward_event,
+    stop_adapter_safely as _shared_stop_adapter_safely,
+)
 from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
@@ -555,11 +561,33 @@ class Gatekeeper:
         await _maybe_forward_event(self.on_canonical_event, event)
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+# Functions shared with vibrant.agents.utils are delegated to the canonical
+# implementations there. Gatekeeper-specific helpers remain below.
+
 async def _stop_adapter_safely(adapter: Any) -> None:
-    try:
-        await adapter.stop_session()
-    except Exception:
-        return
+    """Delegate to shared implementation."""
+    await _shared_stop_adapter_safely(adapter)
+
+
+def _extract_text_from_progress_item(item: Any) -> str:
+    """Delegate to shared implementation."""
+    return _shared_extract_text_from_progress_item(item)
+
+
+def _extract_error_message(event: CanonicalEvent) -> str:
+    """Delegate to shared implementation."""
+    return _shared_extract_error_message(event)
+
+
+async def _maybe_forward_event(
+    callback: Callable[[CanonicalEvent], Any] | None,
+    event: CanonicalEvent,
+) -> None:
+    """Delegate to shared implementation."""
+    await _shared_maybe_forward_event(callback, event)
 
 
 def _extract_skill_description(path: Path) -> str:
@@ -608,66 +636,11 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def _extract_text_from_progress_item(item: Any) -> str:
-    if not isinstance(item, dict):
-        return ""
-    if not _is_assistant_progress_item(item):
-        return ""
-    if isinstance(item.get("text"), str):
-        return item["text"]
-    content = item.get("content")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = [entry.get("text", "") for entry in content if isinstance(entry, dict)]
-        return "".join(part for part in parts if part)
-    return ""
-
-
-def _is_assistant_progress_item(item: dict[str, Any]) -> bool:
-    item_type = _normalize_progress_item_token(item.get("type"))
-    if item_type in {"agentmessage", "assistantmessage"}:
-        return True
-
-    role = _normalize_progress_item_token(item.get("role"))
-    if role in {"assistant", "agent", "model"}:
-        return True
-
-    author = _normalize_progress_item_token(item.get("author"))
-    return author in {"assistant", "agent", "model"}
-
-
-def _normalize_progress_item_token(value: Any) -> str:
-    if not isinstance(value, str):
-        return ""
-    return re.sub(r"[^a-z0-9]+", "", value.lower())
-
-
-def _extract_error_message(event: CanonicalEvent) -> str:
-    error = event.get("error")
-    if isinstance(error, dict):
-        return str(error.get("message") or error)
-    if error is None:
-        return "Gatekeeper runtime error"
-    return str(error)
-
-
 def _extract_provider_thread_id(resume_cursor: object) -> str | None:
     if not isinstance(resume_cursor, dict):
         return None
     thread_id = resume_cursor.get("threadId")
     return thread_id if isinstance(thread_id, str) and thread_id else None
-
-
-async def _maybe_forward_event(
-    callback: Callable[[CanonicalEvent], Any] | None,
-    event: CanonicalEvent,
-) -> None:
-    if callback is None:
-        return
-    result = callback(event)
-    if asyncio.iscoroutine(result):
-        await result
 
 
 async def _maybe_forward_result(
