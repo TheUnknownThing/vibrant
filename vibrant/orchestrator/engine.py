@@ -9,8 +9,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
+from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.consensus.parser import ConsensusParser
-from vibrant.gatekeeper.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, ProviderRuntimeState
@@ -197,24 +197,27 @@ class OrchestratorEngine:
         self.persist_state()
 
     def apply_gatekeeper_result(self, result: GatekeeperRunResult) -> list[dict[str, object]]:
-        """Persist Gatekeeper outputs into durable orchestrator state."""
+        """Persist Gatekeeper runtime outputs into durable orchestrator state."""
 
         if result.agent_record is not None:
             self.upsert_agent_record(
                 result.agent_record,
                 increment_spawn=result.agent_record.agent_id not in self.agents,
             )
-        if result.consensus_document is not None:
-            self.consensus = result.consensus_document
+        self.consensus = self._load_consensus(self.consensus_path)
 
         self._reconstruct_state()
         self._sync_status_from_consensus()
         events: list[dict[str, object]] = []
-        if result.questions:
-            event = self._build_user_input_requested_event(result.questions)
+        pending_messages = _input_request_messages(result)
+        if pending_messages:
+            self.state.pending_questions = pending_messages
+            self.state.gatekeeper_status = GatekeeperStatus.AWAITING_USER
+            event = self._build_user_input_requested_event(pending_messages)
             events.append(event)
             self.emitted_events.append(event)
-        else:
+        elif self.state.gatekeeper_status is not GatekeeperStatus.RUNNING:
+            self.state.pending_questions = []
             self.state.gatekeeper_status = GatekeeperStatus.IDLE
 
         self.persist_state()
@@ -281,13 +284,28 @@ class OrchestratorEngine:
         self.state.failed_tasks = _dedupe_preserving_order(failed_tasks)
         self.state.provider_runtime = provider_runtime
 
+        existing_pending_questions = list(self.state.pending_questions)
         if self.consensus is not None:
             self.state.last_consensus_version = self.consensus.version
-            self.state.pending_questions = list(self.consensus.questions)
+            consensus_questions = list(self.consensus.questions)
+            if consensus_questions:
+                self.state.pending_questions = consensus_questions
+            elif any(
+                record.type is AgentType.GATEKEEPER and record.status is AgentStatus.AWAITING_INPUT
+                for record in self.agents.values()
+            ):
+                self.state.pending_questions = existing_pending_questions
+            else:
+                self.state.pending_questions = []
             if self.state.status is OrchestratorStatus.INIT:
                 inferred_status = _consensus_to_orchestrator_status(self.consensus.status)
                 if inferred_status is not None:
                     self.state.status = inferred_status
+        elif any(
+            record.type is AgentType.GATEKEEPER and record.status is AgentStatus.AWAITING_INPUT
+            for record in self.agents.values()
+        ):
+            self.state.pending_questions = existing_pending_questions
         else:
             self.state.pending_questions = []
 
@@ -353,6 +371,16 @@ def _extract_provider_thread_id(resume_cursor: object) -> str | None:
         return None
     thread_id = resume_cursor.get("threadId")
     return thread_id if isinstance(thread_id, str) and thread_id else None
+
+
+def _input_request_messages(result: GatekeeperRunResult) -> list[str]:
+    messages: list[str] = []
+    for request in result.input_requests:
+        if request.message:
+            messages.append(request.message)
+            continue
+        messages.append(f"Gatekeeper request: {request.request_kind}")
+    return messages
 
 
 def _timestamp_now() -> str:

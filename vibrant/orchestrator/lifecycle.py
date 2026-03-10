@@ -237,7 +237,7 @@ class CodeAgentLifecycle:
 
             handle = await start_run(request, **kwargs)
             if supports_on_result:
-                self._track_gatekeeper_future(handle.result_future)
+                self._track_gatekeeper_future(asyncio.create_task(handle.wait(), name=f"gatekeeper-wait-{trigger.value}"))
                 return handle
 
             async def wait_and_apply() -> GatekeeperRunResult:
@@ -265,7 +265,6 @@ class CodeAgentLifecycle:
 
     async def _apply_gatekeeper_result_async(self, result: GatekeeperRunResult) -> None:
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
         self.roadmap_service.persist()
         self.workflow_service.maybe_complete_workflow()
         self.state_store.refresh()

@@ -55,7 +55,6 @@ class PlanningService:
             )
             self.state_store.apply_gatekeeper_result(result)
 
-        self.roadmap_service.merge_result(result.roadmap_document)
         self.roadmap_service.persist()
         self.workflow_service.maybe_complete_workflow()
         self.state_store.refresh()

@@ -57,7 +57,6 @@ class ReviewService:
     ) -> tuple[GatekeeperRunResult, str]:
         result = await self.gatekeeper.run(self.build_completion_request(task, agent_record, worktree))
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
         return result, self.resolve_decision(result, task.id)
 
     async def review_failure(
@@ -69,7 +68,6 @@ class ReviewService:
     ) -> GatekeeperRunResult:
         result = await self.gatekeeper.run(self.build_failure_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
         return result
 
     async def review_escalation(
@@ -81,7 +79,6 @@ class ReviewService:
     ) -> GatekeeperRunResult:
         result = await self.gatekeeper.run(self.build_escalation_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
         return result
 
     def build_completion_request(
@@ -157,13 +154,11 @@ class ReviewService:
         )
 
     def resolve_decision(self, result: GatekeeperRunResult, task_id: str) -> str:
-        verdict = (result.verdict or "").strip().lower()
-        if verdict:
-            return verdict
-        if result.questions:
+        if result.awaiting_input or result.input_requests:
             return "needs_input"
-        if result.roadmap_document is not None:
-            task = next((item for item in result.roadmap_document.tasks if item.id == task_id), None)
-            if task is not None and task.status is TaskStatus.ACCEPTED:
-                return "accepted"
-        return "rejected"
+        if result.error:
+            return "rejected"
+        current_task = self.roadmap_service.dispatcher.get_task(task_id) if self.roadmap_service.dispatcher else None
+        if current_task is not None and current_task.status is TaskStatus.ACCEPTED:
+            return "accepted"
+        return "accepted"
