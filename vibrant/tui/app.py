@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Grid, Vertical
+from textual.containers import Grid, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, Markdown, Static
 
@@ -35,6 +35,7 @@ from .widgets.agent_output import AgentOutput
 from .widgets.chat_panel import ChatPanel
 from .widgets.consensus_view import ConsensusView
 from .widgets.input_bar import InputBar
+from .widgets.multiselect import Multiselect
 from .widgets.path_autocomplete import PathAutocomplete
 from .widgets.plan_tree import PlanTree
 from .widgets.settings_panel import SettingsPanel
@@ -140,9 +141,18 @@ class DirectorySelectionScreen(ModalScreen[Path | None]):
         margin-bottom: 1;
     }
 
+    #directory-selection-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+
     .directory-selection-button {
         width: 1fr;
-        margin-top: 1;
+        margin-right: 2;
+    }
+
+    #directory-selection-cancel {
+        margin-left: 1;
     }
     """
 
@@ -169,8 +179,9 @@ class DirectorySelectionScreen(ModalScreen[Path | None]):
                 directories_only=True,
                 id="directory-selection-input",
             )
-            yield Button("Initialize", variant="primary", id="directory-selection-confirm", classes="directory-selection-button")
-            yield Button("Cancel", id="directory-selection-cancel", classes="directory-selection-button")
+            with Horizontal(id="directory-selection-buttons"):
+                yield Button("Initialize", variant="primary", id="directory-selection-confirm", classes="directory-selection-button")
+                yield Button("Cancel", id="directory-selection-cancel", classes="directory-selection-button")
 
     def on_mount(self) -> None:
         self.query_one("#directory-selection-input", PathAutocomplete).focus_input()
@@ -236,7 +247,7 @@ class InitializationScreen(ModalScreen[None]):
         margin-bottom: 2;
     }
 
-    .initialization-option {
+    #initialization-options {
         width: 1fr;
         margin-top: 1;
     }
@@ -262,6 +273,7 @@ class InitializationScreen(ModalScreen[None]):
         self._current_directory = Path(current_directory).expanduser().resolve()
 
     def compose(self) -> ComposeResult:
+        accent_color = self.app.theme_variables.get("accent", "yellow")
         with Vertical(id="initialization-shell"):
             yield Static(self._LOGO, id="initialization-logo")
             yield Static("This workspace is not initialized yet.", id="initialization-title")
@@ -269,25 +281,30 @@ class InitializationScreen(ModalScreen[None]):
                 f"Workspace: {self._current_directory}",
                 id="initialization-path",
             )
-            yield Button(
-                "Initialize Project Here",
-                variant="primary",
-                id="initialize-here-button",
-                classes="initialization-option",
+            yield Multiselect(
+                entries=[
+                    "Initialize Project Here",
+                    "Initialize Project (Select Directory)",
+                    "Exit",
+                ],
+                show_frame=True,
+                active_style=f"bold {accent_color}",
+                inactive_style="dim bold",
+                active_prefix="> ",
+                inactive_prefix="  ",
+                id="initialization-options",
+                padding=1,
             )
-            yield Button(
-                "Initialize Project (Select Directory)",
-                id="initialize-select-button",
-                classes="initialization-option",
-            )
-            yield Button("Exit", variant="error", id="initialize-exit-button", classes="initialization-option")
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "initialize-here-button":
+    def on_mount(self) -> None:
+        self.query_one("#initialization-options", Multiselect).focus()
+
+    async def on_multiselect_selected(self, event: Multiselect.Selected) -> None:
+        if event.index == 0:
             await self.action_initialize_here()
-        elif event.button.id == "initialize-select-button":
+        elif event.index == 1:
             await self.action_select_directory()
-        elif event.button.id == "initialize-exit-button":
+        else:
             self.action_exit_app()
 
     async def action_initialize_here(self) -> None:
@@ -522,6 +539,7 @@ class VibrantApp(App):
     async def on_mount(self) -> None:
         """Wire up event listeners and load persisted project/thread state."""
 
+        self.theme = "catppuccin-mocha"
         self._session_manager.add_listener(self._on_session_event)
 
         saved_threads = self._history.list_threads()

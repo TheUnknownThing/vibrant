@@ -13,6 +13,7 @@ from vibrant.models import AppSettings, ConsensusStatus, OrchestratorStatus
 from vibrant.orchestrator import OrchestratorEngine
 from vibrant.project_init import initialize_project
 from vibrant.tui.app import HelpScreen, InitializationScreen, VibrantApp
+from vibrant.tui.widgets.multiselect import Multiselect
 from vibrant.tui.widgets.path_autocomplete import PathAutocomplete
 
 
@@ -120,8 +121,14 @@ async def test_uninitialized_workspace_shows_initialization_screen(tmp_path: Pat
     async with app.run_test() as pilot:
         await pilot.pause()
         assert isinstance(app.screen, InitializationScreen)
-        assert app.screen.query_one("#initialize-here-button") is not None
-        assert app.screen.query_one("#initialize-select-button") is not None
+        options = app.screen.query_one("#initialization-options", Multiselect)
+        assert options.show_frame is True
+        assert options.active_style == "bold yellow"
+        assert options.entries == [
+            "Initialize Project Here",
+            "Initialize Project (Select Directory)",
+            "Exit",
+        ]
 
 
 @pytest.mark.asyncio

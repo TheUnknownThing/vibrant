@@ -15,11 +15,8 @@ class Multiselect(Widget, can_focus=True):
     DEFAULT_CSS = """
     Multiselect {
         height: auto;
-        padding: 0 1;
+        padding: 0 2;
         background: $surface;
-    }
-    Multiselect:focus {
-        background: $surface-light;
     }
     /* Applied conditionally via the watch_show_frame method */
     Multiselect.-framed {
@@ -55,17 +52,20 @@ class Multiselect(Widget, can_focus=True):
         entries: list[str],
         show_frame: bool = False,
         active_style: str = "bold cyan",
-        active_prefix: str = "> ",
+        inactive_style: str = "dim",
+        active_prefix: str = ">  ",
         inactive_prefix: str = "  ",
+        padding: int = 0,
         **kwargs
     ) -> None:
         super().__init__(**kwargs)
         self.entries = entries
         self.show_frame = show_frame
         self.active_style = active_style
+        self.inactive_style = inactive_style
         self.active_prefix = active_prefix
         self.inactive_prefix = inactive_prefix
-
+        self.padding = padding
     def on_mount(self) -> None:
         """Called when the widget is added to the app."""
         # Initialize the frame class based on the reactive state
@@ -90,11 +90,11 @@ class Multiselect(Widget, can_focus=True):
                 text.append(f"{self.active_prefix}{entry}", style=self.active_style)
             else:
                 # Inactive logic
-                text.append(f"{self.inactive_prefix}{entry}")
+                text.append(f"{self.inactive_prefix}{entry}", style=self.inactive_style)
             
             # Add a newline except for the very last item
             if i < len(self.entries) - 1:
-                text.append("\n")
+                text.append("\n" * (self.padding + 1))
                 
         return text
 

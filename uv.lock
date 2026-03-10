@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 
 [[package]]
@@ -993,6 +993,11 @@ dev = [
     { name = "textual-dev" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "textual-dev" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
@@ -1003,6 +1008,9 @@ requires-dist = [
     { name = "textual-dev", marker = "extra == 'dev'", specifier = ">=1.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "textual-dev", specifier = ">=1.8.0" }]
 
 [[package]]
 name = "yarl"
