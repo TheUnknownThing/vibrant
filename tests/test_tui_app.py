@@ -309,7 +309,9 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
     app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=EscalationLifecycle)
 
-    async with _run_test(app):
+    async with _run_test(app) as pilot:
+        await pilot.pause()
+
         banner = app.query_one("#notification-banner", Static)
         assert banner.display is True
         assert "Gatekeeper needs your input" in (app.get_banner_text() or "")
