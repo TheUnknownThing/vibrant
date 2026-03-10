@@ -15,7 +15,7 @@ from textual.containers import Grid, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Markdown, Static
 
-from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
+from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, resolve_project_path
 from ..consensus import ConsensusParser, ConsensusWriter
 from ..history import HistoryStore
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo, ThreadStatus
@@ -286,9 +286,9 @@ class VibrantApp(App):
         if cwd:
             self._settings.default_cwd = cwd
         self._session_manager = session_manager or SessionManager()
-        self._history = HistoryStore(self._settings.history_dir)
         self._active_thread_id: str | None = None
         self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        self._history = HistoryStore(self._resolve_history_dir(self._settings.history_dir))
         self._lifecycle_factory = lifecycle_factory or CodeAgentLifecycle
         self._lifecycle: CodeAgentLifecycle | None = None
         self._task_execution_in_progress = False
@@ -381,6 +381,7 @@ class VibrantApp(App):
         if result:
             self._settings = result
             self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+            self._history = HistoryStore(self._resolve_history_dir(self._settings.history_dir))
             self._initialize_project_lifecycle()
             self._refresh_project_views()
             self._set_status("Settings updated")
@@ -834,6 +835,9 @@ class VibrantApp(App):
             self._lifecycle = None
             self._gatekeeper_focus_initialized = False
             self.notify(f"Failed to load project state: {exc}", severity="error")
+
+    def _resolve_history_dir(self, history_dir: str) -> str:
+        return str(resolve_project_path(history_dir, project_root=self._project_root))
 
     def _refresh_project_views(self) -> None:
         plan_tree = self.query_one(PlanTree)

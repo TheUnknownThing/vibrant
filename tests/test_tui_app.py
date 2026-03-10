@@ -197,3 +197,27 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
         assert gatekeeper_thread is not None
         assert [turn.items[0].content for turn in gatekeeper_thread.turns] == ["Build an auth MVP.", "Plan drafted"]
         assert reloaded_app._conversation_threads()[0].id == ChatPanel.GATEKEEPER_THREAD_ID  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_app_resolves_project_relative_history_dir(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=".vibrant/conversations")
+    app = VibrantApp(
+        settings=settings,
+        cwd=str(repo),
+        session_manager=FakeSessionManager(),
+        lifecycle_factory=PlanningLifecycle,
+    )
+
+    async with app.run_test() as pilot:
+        await app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
+
+    stored_gatekeeper = HistoryStore(str(repo / ".vibrant" / "conversations")).load_thread(
+        ChatPanel.GATEKEEPER_THREAD_ID
+    )
+    assert stored_gatekeeper is not None
+    assert [turn.items[0].content for turn in stored_gatekeeper.turns] == ["Build an auth MVP.", "Plan drafted"]
