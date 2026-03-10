@@ -89,6 +89,7 @@ class ChatPanel(Static):
         self._notification_token = 0
         self._gatekeeper_history: list[GatekeeperExchange] = []
         self._gatekeeper_streaming_text = ""
+        self._gatekeeper_storage_thread_id: str | None = None
         self._gatekeeper_thread = ThreadInfo(
             id=self.GATEKEEPER_THREAD_ID,
             title="Gatekeeper",
@@ -195,10 +196,29 @@ class ChatPanel(Static):
             return None
         return self._gatekeeper_thread.model_copy(deep=True)
 
+    def get_persisted_gatekeeper_thread(self) -> ThreadInfo | None:
+        """Return a copy of the Gatekeeper thread using its persisted storage id."""
+
+        if not self.has_gatekeeper_history or not self._gatekeeper_storage_thread_id:
+            return None
+        persisted = self._gatekeeper_thread.model_copy(deep=True)
+        persisted.id = self._gatekeeper_storage_thread_id
+        return persisted
+
+    def set_gatekeeper_storage_thread_id(self, thread_id: str | None) -> bool:
+        """Update the persisted Gatekeeper thread id when a real agent id is known."""
+
+        normalized = str(thread_id or "").strip()
+        if not normalized or normalized == self._gatekeeper_storage_thread_id:
+            return False
+        self._gatekeeper_storage_thread_id = normalized
+        return True
+
     def restore_gatekeeper_thread(self, thread: ThreadInfo) -> None:
         """Restore a previously persisted Gatekeeper conversation thread."""
 
         restored = thread.model_copy(deep=True)
+        self._gatekeeper_storage_thread_id = restored.id
         restored.id = self.GATEKEEPER_THREAD_ID
         restored.title = restored.title or "Gatekeeper"
         restored.model = restored.model or "gatekeeper"

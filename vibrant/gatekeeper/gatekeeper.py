@@ -605,6 +605,8 @@ def _atomic_write_text(path: Path, content: str) -> None:
 def _extract_text_from_progress_item(item: Any) -> str:
     if not isinstance(item, dict):
         return ""
+    if not _is_assistant_progress_item(item):
+        return ""
     if isinstance(item.get("text"), str):
         return item["text"]
     content = item.get("content")
@@ -614,6 +616,25 @@ def _extract_text_from_progress_item(item: Any) -> str:
         parts = [entry.get("text", "") for entry in content if isinstance(entry, dict)]
         return "".join(part for part in parts if part)
     return ""
+
+
+def _is_assistant_progress_item(item: dict[str, Any]) -> bool:
+    item_type = _normalize_progress_item_token(item.get("type"))
+    if item_type in {"agentmessage", "assistantmessage"}:
+        return True
+
+    role = _normalize_progress_item_token(item.get("role"))
+    if role in {"assistant", "agent", "model"}:
+        return True
+
+    author = _normalize_progress_item_token(item.get("author"))
+    return author in {"assistant", "agent", "model"}
+
+
+def _normalize_progress_item_token(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
 def _extract_error_message(event: CanonicalEvent) -> str:

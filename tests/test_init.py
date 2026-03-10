@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from vibrant.config import RoadmapExecutionMode, load_config
+from vibrant.config import DEFAULT_CONVERSATION_DIRECTORY, RoadmapExecutionMode, load_config
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
 from vibrant.project_init import ensure_project_files
@@ -87,8 +87,13 @@ class TestVibrantInit:
 
         config = load_config(start_path=tmp_path)
         assert config.codex_binary == "codex"
+        assert config.conversation_directory == str(DEFAULT_CONVERSATION_DIRECTORY)
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
         assert 'execution-mode = "automatic"' in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
+        assert (
+            'conversation-directory = ".vibrant/conversations"'
+            in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
+        )
 
         state = OrchestratorState.model_validate_json((tmp_path / ".vibrant/state.json").read_text(encoding="utf-8"))
         assert state.status is OrchestratorStatus.INIT

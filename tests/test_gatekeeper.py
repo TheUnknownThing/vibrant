@@ -62,6 +62,8 @@ class FakeGatekeeperAdapter:
         )
         if FakeGatekeeperAdapter.scenario == "project_start":
             await self._simulate_project_start()
+        elif FakeGatekeeperAdapter.scenario == "project_start_progress_items":
+            await self._simulate_project_start_progress_items()
         elif FakeGatekeeperAdapter.scenario == "task_completion":
             await self._simulate_task_completion()
         return {"turn": {"id": "turn-gatekeeper-1"}}
@@ -77,6 +79,17 @@ class FakeGatekeeperAdapter:
             await self.on_canonical_event(event)
 
     async def _simulate_project_start(self) -> None:
+        self._write_project_start_files()
+        await self._emit({"type": "content.delta", "delta": "Verdict: planned\n"})
+        await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-1"}})
+
+    async def _simulate_project_start_progress_items(self) -> None:
+        self._write_project_start_files()
+        await self._emit({"type": "task.progress", "item": {"type": "userMessage", "text": "Create the initial plan."}})
+        await self._emit({"type": "task.progress", "item": {"type": "agentMessage", "text": "Verdict: planned\n"}})
+        await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-1"}})
+
+    def _write_project_start_files(self) -> None:
         consensus_path = self.cwd / ".vibrant" / "consensus.md"
         roadmap_path = self.cwd / ".vibrant" / "roadmap.md"
         current = ConsensusParser().parse_file(consensus_path)
@@ -119,8 +132,6 @@ class FakeGatekeeperAdapter:
 """
             ),
         )
-        await self._emit({"type": "content.delta", "delta": "Verdict: planned\n"})
-        await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-1"}})
 
     async def _simulate_task_completion(self) -> None:
         consensus_path = self.cwd / ".vibrant" / "consensus.md"
@@ -274,6 +285,25 @@ async def test_gatekeeper_project_start_run_updates_consensus_and_roadmap(tmp_pa
     assert result.consensus_document.status is ConsensusStatus.PLANNING
     assert result.roadmap_document is not None
     assert len(result.roadmap_document.tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_ignores_non_assistant_task_progress_in_transcript(tmp_path):
+    FakeGatekeeperAdapter.instances.clear()
+    FakeGatekeeperAdapter.scenario = "project_start_progress_items"
+    initialize_project(tmp_path)
+
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
+    result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.PROJECT_START,
+            trigger_description="Build a resilient multi-agent orchestrator.",
+        )
+    )
+
+    assert result.transcript == "Verdict: planned"
+    assert "Create the initial plan." not in result.transcript
+    assert result.verdict == "planned"
 
 
 @pytest.mark.asyncio

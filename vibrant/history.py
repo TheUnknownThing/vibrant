@@ -6,11 +6,12 @@ import json
 import logging
 from pathlib import Path
 
+from .config import DEFAULT_CONVERSATION_DIRECTORY
 from .models import ThreadInfo
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HISTORY_DIR = "~/.vibrant/history"
+DEFAULT_HISTORY_DIR = str(DEFAULT_CONVERSATION_DIRECTORY)
 
 
 class HistoryStore:
@@ -20,12 +21,12 @@ class HistoryStore:
         if not history_dir:
             history_dir = DEFAULT_HISTORY_DIR
         self.history_dir = Path(history_dir).expanduser().resolve()
-        self.history_dir.mkdir(parents=True, exist_ok=True)
 
     def save_thread(self, thread: ThreadInfo) -> None:
         """Save a thread to disk."""
         try:
             file_path = self.history_dir / f"{thread.id}.json"
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             json_data = thread.model_dump_json(indent=2)
             temp_path = file_path.with_suffix(".temp.json")
             temp_path.write_text(json_data, encoding="utf-8")
@@ -49,7 +50,7 @@ class HistoryStore:
         """Load all saved threads, sorted newest first."""
         threads = []
         for file_path in self.history_dir.glob("*.json"):
-            if file_path.suffix == ".temp.json":
+            if file_path.name.endswith(".temp.json"):
                 continue
             try:
                 data = file_path.read_text(encoding="utf-8")
