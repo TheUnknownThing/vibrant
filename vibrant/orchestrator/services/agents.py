@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from vibrant.agents.runtime import ProviderThreadHandle
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
@@ -35,6 +36,7 @@ class AgentRegistry:
         callback to an ``AgentRuntime.start()`` call from orchestrator
         services — it decouples the runtime from persistence details.
         """
+
         def _persist(record: AgentRecord) -> None:
             try:
                 self.upsert(record, increment_spawn=increment_spawn)
@@ -47,23 +49,118 @@ class AgentRegistry:
         """Look up a persisted agent record by id."""
         return self.engine.agents.get(agent_id)
 
+    def list_records(self) -> list[AgentRecord]:
+        """Return all known records in stable id order."""
+        return [self.engine.agents[agent_id] for agent_id in sorted(self.engine.agents)]
+
+    def list_active_records(self) -> list[AgentRecord]:
+        """Return non-terminal records in stable id order."""
+        return [record for record in self.list_records() if record.status not in AgentRecord.TERMINAL_STATUSES]
+
+    def records_for_task(self, task_id: str) -> list[AgentRecord]:
+        """Return records for a task ordered by start time then id."""
+        records = [record for record in self.engine.agents.values() if record.task_id == task_id]
+        return sorted(records, key=lambda record: ((record.started_at or record.finished_at) is None, record.started_at or record.finished_at, record.agent_id))
+
+    def latest_for_task(self, task_id: str, *, agent_type: AgentType | None = None) -> AgentRecord | None:
+        """Return the latest persisted record for a task, optionally filtered by type."""
+        matches = self.records_for_task(task_id)
+        if agent_type is not None:
+            matches = [record for record in matches if record.type is agent_type]
+        return matches[-1] if matches else None
+
+    def provider_thread_handle(self, agent_id: str) -> ProviderThreadHandle | None:
+        """Return the persisted provider-thread handle for an agent, if available."""
+        record = self.get(agent_id)
+        if record is None:
+            return None
+        provider = record.provider
+        if provider.provider_thread_id is None and provider.thread_path is None and provider.resume_cursor is None:
+            return None
+        return ProviderThreadHandle(
+            thread_id=provider.provider_thread_id,
+            thread_path=provider.thread_path,
+            resume_cursor=provider.resume_cursor,
+        )
+
     def create_code_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRecord:
-        agent_id = f"agent-{task.id}-{uuid4().hex[:8]}"
-        native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{agent_id}.ndjson"
-        canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
-        return AgentRecord(
-            agent_id=agent_id,
+        return self.create_task_agent_record(
+            agent_type=AgentType.CODE,
             task_id=task.id,
-            type=AgentType.CODE,
-            status=AgentStatus.SPAWNING,
             branch=task.branch,
             worktree_path=str(worktree.path),
-            prompt_used=prompt,
-            skills_loaded=list(task.skills),
+            prompt=prompt,
+            skills=list(task.skills),
             retry_count=task.retry_count,
             max_retries=task.max_retries,
-            provider=AgentProviderMetadata(
-                native_event_log=str(native_log),
-                canonical_event_log=str(canonical_log),
-            ),
+        )
+
+    def create_task_agent_record(
+        self,
+        *,
+        agent_type: AgentType,
+        task_id: str,
+        branch: str | None,
+        worktree_path: str | None,
+        prompt: str | None = None,
+        skills: list[str] | None = None,
+        retry_count: int = 0,
+        max_retries: int = 3,
+        runtime_mode: str | None = None,
+    ) -> AgentRecord:
+        """Build a persisted-friendly record for a task-scoped agent run."""
+        prefix = "agent"
+        if agent_type is AgentType.MERGE:
+            prefix = "merge"
+        elif agent_type is AgentType.TEST:
+            prefix = "test"
+        agent_id = f"{prefix}-{task_id}-{uuid4().hex[:8]}"
+        native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{agent_id}.ndjson"
+        canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
+        provider = AgentProviderMetadata(
+            native_event_log=str(native_log),
+            canonical_event_log=str(canonical_log),
+        )
+        if runtime_mode is not None:
+            provider.runtime_mode = runtime_mode
+        return AgentRecord(
+            agent_id=agent_id,
+            task_id=task_id,
+            type=agent_type,
+            status=AgentStatus.SPAWNING,
+            branch=branch,
+            worktree_path=worktree_path,
+            prompt_used=prompt,
+            skills_loaded=list(skills or []),
+            retry_count=retry_count,
+            max_retries=max_retries,
+            provider=provider,
+        )
+
+    def create_merge_agent_record(self, *, task_id: str, branch: str, worktree_path: str) -> AgentRecord:
+        """Build a merge-agent record for conflict-resolution flows."""
+        return self.create_task_agent_record(
+            agent_type=AgentType.MERGE,
+            task_id=task_id,
+            branch=branch,
+            worktree_path=worktree_path,
+            runtime_mode="danger-full-access",
+        )
+
+    def create_test_agent_record(
+        self,
+        *,
+        task_id: str,
+        branch: str | None,
+        worktree_path: str,
+        prompt: str | None = None,
+    ) -> AgentRecord:
+        """Build a read-only validation/test agent record."""
+        return self.create_task_agent_record(
+            agent_type=AgentType.TEST,
+            task_id=task_id,
+            branch=branch,
+            worktree_path=worktree_path,
+            prompt=prompt,
+            runtime_mode="read-only",
         )

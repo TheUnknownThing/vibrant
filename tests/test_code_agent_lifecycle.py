@@ -428,3 +428,80 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
     assert roadmap.tasks[0].status is TaskStatus.ESCALATED
     assert lifecycle.engine.state.pending_questions == [gatekeeper.escalation_question]
     assert await lifecycle.execute_next_task() is None
+
+
+@pytest.mark.asyncio
+async def test_task_execution_service_starts_with_handle_snapshot(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature via handle\n"]
+    gatekeeper = FakeGatekeeper(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    assert lifecycle.dispatcher is not None
+
+    lifecycle.workflow_service.begin_execution_if_needed()
+    task = lifecycle.dispatcher.dispatch_next_task()
+    assert task is not None
+
+    attempt = await lifecycle.agent_manager.start_task(task)
+    snapshots = lifecycle.agent_manager.list_handle_snapshots()
+
+    assert len(snapshots) == 1
+    assert snapshots[0].agent_id == attempt.agent_record.agent_id
+    assert snapshots[0].task_id == task.id
+    assert snapshots[0].agent_type == "code"
+
+    result = await lifecycle.agent_manager.wait_for_task(attempt)
+
+    assert result.outcome == "accepted"
+    assert lifecycle.agent_manager.list_handle_snapshots() == []
+
+
+@pytest.mark.asyncio
+async def test_agent_management_service_unifies_live_and_persisted_agent_state(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["managed feature\n"]
+    gatekeeper = FakeGatekeeper(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    assert lifecycle.dispatcher is not None
+
+    lifecycle.workflow_service.begin_execution_if_needed()
+    task = lifecycle.dispatcher.dispatch_next_task()
+    assert task is not None
+
+    attempt = await lifecycle.agent_manager.start_task(task)
+
+    active = lifecycle.agent_manager.list_active_agents()
+    assert len(active) == 1
+    assert active[0].agent_id == attempt.agent_record.agent_id
+    assert active[0].task_id == task.id
+    assert active[0].agent_type == "code"
+    assert active[0].has_handle is True
+    assert active[0].active is True
+    assert active[0].provider_thread_id == "thread-task-001-1"
+
+    result = await lifecycle.agent_manager.wait_for_task(attempt)
+
+    assert result.outcome == "accepted"
+
+    snapshot = lifecycle.agent_manager.get_agent(attempt.agent_record.agent_id)
+    assert snapshot is not None
+    assert snapshot.agent_id == attempt.agent_record.agent_id
+    assert snapshot.has_handle is False
+    assert snapshot.active is False
+    assert snapshot.done is True
+    assert snapshot.status == "completed"
+    assert snapshot.state == "completed"
+    assert snapshot.summary == "Implemented task-001."
+    assert snapshot.provider_thread_id == "thread-task-001-1"
+
+    latest = lifecycle.agent_manager.latest_for_task(task.id)
+    assert latest is not None
+    assert latest.agent_id == attempt.agent_record.agent_id

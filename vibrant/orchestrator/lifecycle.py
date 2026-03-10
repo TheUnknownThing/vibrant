@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibrant.agents.code_agent import CodeAgent
+from vibrant.agents.merge_agent import MergeAgent
 from vibrant.agents.runtime import AgentRuntime, BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, load_config
 from vibrant.consensus import RoadmapDocument, RoadmapParser
 from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.state import OrchestratorStatus
 from vibrant.orchestrator.engine import OrchestratorEngine
 from vibrant.orchestrator.git_manager import GitManager
@@ -21,6 +23,7 @@ from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
 from .services import (
+    AgentManagementService,
     AgentRegistry,
     AgentRuntimeService,
     ConsensusService,
@@ -90,7 +93,7 @@ class CodeAgentLifecycle:
         self.on_canonical_event = on_canonical_event
 
         self.state_store = StateStore(self.engine)
-        self.roadmap_service = RoadmapService(self.roadmap_path)
+        self.roadmap_service = RoadmapService(self.roadmap_path, project_name=self.project_root.name)
         self.consensus_service = ConsensusService(self.consensus_path, state_store=self.state_store)
         self.agent_registry = AgentRegistry(engine=self.engine, vibrant_dir=self.vibrant_dir)
         self.question_service = QuestionService(state_store=self.state_store, gatekeeper=self.gatekeeper)
@@ -124,16 +127,9 @@ class CodeAgentLifecycle:
         # remote agents).  Otherwise we construct a BaseAgentRuntime wrapping
         # a CodeAgent so the orchestrator drives execution through the
         # protocol boundary rather than inline adapter logic.
-        self._agent_runtime: AgentRuntime | None = agent_runtime
+        self._agent_runtime: AgentRuntime | Callable[[AgentRecord], AgentRuntime] | None = agent_runtime
         if self._agent_runtime is None:
-            code_agent = CodeAgent(
-                self.project_root,
-                self.config,
-                adapter_factory=self.adapter_factory,
-                on_canonical_event=self.on_canonical_event,
-                on_agent_record_updated=self.agent_registry.make_record_callback(),
-            )
-            self._agent_runtime = BaseAgentRuntime(code_agent)
+            self._agent_runtime = self._build_default_agent_runtime
 
         self.runtime_service = AgentRuntimeService(
             agent_registry=self.agent_registry,
@@ -158,9 +154,38 @@ class CodeAgentLifecycle:
             review_service=self.review_service,
             retry_service=self.retry_service,
         )
+        self.agent_manager = AgentManagementService(
+            agent_registry=self.agent_registry,
+            runtime_service=self.runtime_service,
+            execution_service=self.execution_service,
+        )
         self._active_gatekeeper_futures: set[asyncio.Future[Any]] = set()
 
         self.reload_from_disk()
+
+    def _build_default_agent_runtime(self, agent_record: AgentRecord) -> AgentRuntime:
+        """Create a fresh protocol runtime for one agent record.
+
+        We intentionally build a fresh wrapped agent per run so callback wiring
+        stays isolated even if multiple tasks overlap in the future.
+        """
+        if agent_record.type is AgentType.MERGE:
+            agent = MergeAgent(
+                self.project_root,
+                self.config,
+                adapter_factory=self.adapter_factory,
+                on_canonical_event=self.on_canonical_event,
+                on_agent_record_updated=self.agent_registry.make_record_callback(),
+            )
+        else:
+            agent = CodeAgent(
+                self.project_root,
+                self.config,
+                adapter_factory=self.adapter_factory,
+                on_canonical_event=self.on_canonical_event,
+                on_agent_record_updated=self.agent_registry.make_record_callback(),
+            )
+        return BaseAgentRuntime(agent)
 
     @property
     def roadmap_parser(self) -> RoadmapParser:
@@ -280,11 +305,11 @@ class CodeAgentLifecycle:
 
     async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
         self.reload_from_disk()
-        return await self.execution_service.execute_until_blocked()
+        return await self.agent_manager.execute_until_blocked()
 
     async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
         self.reload_from_disk()
-        return await self.execution_service.execute_next_task()
+        return await self.agent_manager.execute_next_task()
 
 
 __all__ = ["CodeAgentLifecycle", "CodeAgentLifecycleResult"]

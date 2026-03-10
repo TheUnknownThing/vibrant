@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
 from vibrant.gatekeeper import GatekeeperRunResult
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskStatus
@@ -37,3 +38,10 @@ class RuntimeExecutionResult:
     summary: str | None = None
     error: str | None = None
     turn_result: Any | None = None
+    state: RunState | None = None
+    awaiting_input: bool = False
+    provider_thread_id: str | None = None
+    provider_thread_path: str | None = None
+    provider_resume_cursor: dict[str, Any] | None = None
+    input_requests: list[InputRequest] = field(default_factory=list)
+    normalized_result: NormalizedRunResult | None = None
