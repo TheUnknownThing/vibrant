@@ -254,8 +254,14 @@ class InitializationScreen(ModalScreen[None]):
     """
 
     BINDINGS = [
-        Binding("1", "initialize_here", "Init Here", show=False),
-        Binding("2", "select_directory", "Choose Dir", show=False),
+        Binding("f10", "exit_app", "Quit", show=True),
+        Binding("ctrl+q", "exit_app", "Quit", show=True),
+        Binding("up", "cursor_up", "Up", show=True),
+        Binding("down", "cursor_down", "Down", show=True),
+        Binding("enter", "confirm", "Confirm", show=True),
+        Binding("ctrl+p", "command_palette", "Command Palette", show=False),
+        Binding("1", "initialize_here", "Initialize Here", show=False),
+        Binding("2", "select_directory", "Select Directory", show=False),
         Binding("3", "exit_app", "Exit", show=False),
     ]
 
@@ -295,6 +301,7 @@ class InitializationScreen(ModalScreen[None]):
                 id="initialization-options",
                 padding=1,
             )
+        yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#initialization-options", Multiselect).focus()
@@ -306,6 +313,15 @@ class InitializationScreen(ModalScreen[None]):
             await self.action_select_directory()
         else:
             self.action_exit_app()
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#initialization-options", Multiselect).action_move_cursor(-1)
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#initialization-options", Multiselect).action_move_cursor(1)
+
+    def action_confirm(self) -> None:
+        self.query_one("#initialization-options", Multiselect).action_select()
 
     async def action_initialize_here(self) -> None:
         await self._initialize_directory(self._current_directory)
@@ -493,7 +509,7 @@ class VibrantApp(App):
         Binding("ctrl+s", "open_settings", "Settings", show=False),
         Binding("f6", "run_next_task", "Run Task", show=False),
         Binding("ctrl+d", "delete_thread", "Delete Thread", show=False),
-        Binding("ctrl+q", "quit_app", "Quit", show=False),
+        Binding("ctrl+q", "quit_app", "Quit", show=True),
     ]
 
     def __init__(

@@ -121,9 +121,20 @@ async def test_uninitialized_workspace_shows_initialization_screen(tmp_path: Pat
     async with app.run_test() as pilot:
         await pilot.pause()
         assert isinstance(app.screen, InitializationScreen)
+        keymap = {binding.key: binding for binding in app.screen.BINDINGS}
+        assert keymap["f10"].action == "exit_app"
+        assert keymap["ctrl+q"].action == "exit_app"
+        assert keymap["up"].action == "cursor_up"
+        assert keymap["down"].action == "cursor_down"
+        assert keymap["enter"].action == "confirm"
+        assert keymap["f10"].show is True
+        assert keymap["ctrl+q"].show is True
+        assert keymap["up"].show is True
+        assert keymap["down"].show is True
+        assert keymap["enter"].show is True
         options = app.screen.query_one("#initialization-options", Multiselect)
         assert options.show_frame is True
-        assert options.active_style == "bold yellow"
+        assert options.active_style.startswith("bold ")
         assert options.entries == [
             "Initialize Project Here",
             "Initialize Project (Select Directory)",

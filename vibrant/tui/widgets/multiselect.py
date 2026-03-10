@@ -27,12 +27,12 @@ class Multiselect(Widget, can_focus=True):
 
     # Bindings map key presses to action_* methods
     BINDINGS =[
-        Binding("up", "move_cursor(-1)", "Up", show=False),
-        Binding("down", "move_cursor(1)", "Down", show=False),
+        Binding("up", "move_cursor(-1)", "Up", show=True),
+        Binding("down", "move_cursor(1)", "Down", show=True),
         Binding("tab", "move_cursor(1)", "Next", show=False),
         Binding("shift+tab", "move_cursor(-1)", "Prev", show=False),
         Binding("ctrl+tab", "move_cursor(1)", "Ctrl+Next", show=False),
-        Binding("enter", "select", "Select", show=False),
+        Binding("enter", "select", "Confirm", show=True),
     ]
 
     # Reactive attributes automatically re-render the widget when modified

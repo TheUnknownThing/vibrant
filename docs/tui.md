@@ -2,6 +2,8 @@
 
 ![tui](images/tui-overview.png)
 
+On all screens the footer is present.
+
 The TUI of project Vibrant requires a redesign to enhance user experience. The details of the new user interface are outlined below.
 
 ## Initization Screen (Finished)
