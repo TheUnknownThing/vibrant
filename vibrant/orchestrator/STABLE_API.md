@@ -129,8 +129,10 @@ that data is explicitly promoted into a future stable read model.
 ## MCP Surface
 
 `OrchestratorMCPServer` is the typed in-process MCP registry for the document
-and workflow control plane. It currently exposes role-scoped resources and tools
-for:
+and workflow control plane. It uses the shared scope definitions in
+`vibrant/mcp/authz.py` rather than a separate orchestrator-local auth model.
+
+Current scope-gated resources and tools cover:
 
 - consensus reads and updates
 - roadmap reads and task mutations

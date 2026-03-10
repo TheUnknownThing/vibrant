@@ -1,6 +1,7 @@
 """Typed MCP surface for the orchestrator control plane."""
 
-from .authz import MCPAuthorizationError, MCPPrincipal, OrchestratorMCPRole, default_role_policies
+from vibrant.mcp.authz import MCPAuthorizationError, MCPPrincipal
+
 from .server import MCPResourceDefinition, MCPToolDefinition, OrchestratorMCPServer
 
 __all__ = [
@@ -8,7 +9,5 @@ __all__ = [
     "MCPPrincipal",
     "MCPResourceDefinition",
     "MCPToolDefinition",
-    "OrchestratorMCPRole",
     "OrchestratorMCPServer",
-    "default_role_policies",
 ]

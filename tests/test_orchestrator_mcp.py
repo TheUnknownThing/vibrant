@@ -6,11 +6,16 @@ from types import SimpleNamespace
 import pytest
 
 from vibrant.config import RoadmapExecutionMode
+from vibrant.mcp.authz import (
+    MCPAuthorizationError,
+    MCPPrincipal,
+    orchestrator_agent_scopes,
+    orchestrator_gatekeeper_scopes,
+)
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionStatus
 from vibrant.orchestrator.engine import OrchestratorEngine
 from vibrant.orchestrator.facade import OrchestratorFacade
 from vibrant.orchestrator.mcp import OrchestratorMCPServer
-from vibrant.orchestrator.mcp.authz import MCPAuthorizationError, MCPPrincipal, OrchestratorMCPRole
 from vibrant.orchestrator.services.consensus import ConsensusService
 from vibrant.orchestrator.services.questions import QuestionService
 from vibrant.orchestrator.services.roadmap import RoadmapService
@@ -75,13 +80,13 @@ def test_question_service_tracks_structured_records(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_mcp_server_enforces_roles_and_mutates_state(tmp_path: Path) -> None:
+async def test_orchestrator_mcp_server_enforces_shared_scopes_and_mutates_state(tmp_path: Path) -> None:
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
 
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(role=OrchestratorMCPRole.GATEKEEPER, agent_id="gatekeeper-1")
-    agent = MCPPrincipal(role=OrchestratorMCPRole.AGENT, agent_id="agent-task-1")
+    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
+    agent = MCPPrincipal(scopes=orchestrator_agent_scopes(), subject_id="agent-task-1")
 
     created = await server.call_tool(
         "roadmap_add_task",
@@ -107,13 +112,16 @@ async def test_orchestrator_mcp_server_enforces_roles_and_mutates_state(tmp_path
     fetched = await server.call_tool("task_get", principal=agent, task_id="task-1")
     assert fetched["title"] == "Add MCP facade tests"
 
-    with pytest.raises(MCPAuthorizationError):
+    with pytest.raises(MCPAuthorizationError, match="roadmap_update_task"):
         await server.call_tool(
             "roadmap_update_task",
             principal=agent,
             task_id="task-1",
             updates={"title": "Nope"},
         )
+
+    with pytest.raises(MCPAuthorizationError, match="questions.pending"):
+        await server.read_resource("questions.pending", principal=agent)
 
     paused = await server.call_tool("workflow_pause", principal=gatekeeper)
     assert paused == {"status": "paused"}

@@ -6,22 +6,50 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from vibrant.mcp.authz import (
+    MCP_ACCESS_SCOPE,
+    MCPPrincipal,
+    ORCHESTRATOR_CONSENSUS_READ_SCOPE,
+    ORCHESTRATOR_CONSENSUS_WRITE_SCOPE,
+    ORCHESTRATOR_QUESTIONS_READ_SCOPE,
+    ORCHESTRATOR_QUESTIONS_WRITE_SCOPE,
+    ORCHESTRATOR_WORKFLOW_READ_SCOPE,
+    ORCHESTRATOR_WORKFLOW_WRITE_SCOPE,
+    TASKS_READ_SCOPE,
+    TASKS_WRITE_SCOPE,
+    ensure_scopes,
+    has_scopes,
+)
 from vibrant.orchestrator.facade import OrchestratorFacade
 
-from .authz import (
-    MCPPrincipal,
-    OrchestratorMCPRole,
-    RolePolicy,
-    default_role_policies,
-    ensure_resource_allowed,
-    ensure_tool_allowed,
-)
 from .resources import ResourceHandlers
 from .tools_agents import AgentToolHandlers
 from .tools_gatekeeper import GatekeeperToolHandlers
 
 ToolHandler = Callable[..., dict[str, Any] | list[dict[str, Any]] | Awaitable[Any] | None]
 ResourceHandler = Callable[..., dict[str, Any] | list[dict[str, Any]] | Awaitable[Any] | None]
+
+_RESOURCE_SCOPES: dict[str, tuple[str, ...]] = {
+    "consensus.current": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_READ_SCOPE),
+    "questions.pending": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_READ_SCOPE),
+    "roadmap.current": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "task.by_id": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "workflow.status": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_READ_SCOPE),
+}
+
+_TOOL_SCOPES: dict[str, tuple[str, ...]] = {
+    "consensus_get": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_READ_SCOPE),
+    "consensus_update": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_WRITE_SCOPE),
+    "question_ask_user": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
+    "question_resolve": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
+    "roadmap_add_task": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
+    "roadmap_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "roadmap_reorder_tasks": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
+    "roadmap_update_task": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
+    "task_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "workflow_pause": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
+    "workflow_resume": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,20 +71,10 @@ class MCPToolDefinition:
 
 
 class OrchestratorMCPServer:
-    """Small in-process MCP surface over the orchestrator facade.
+    """Small in-process MCP surface over the orchestrator facade."""
 
-    This stays framework-agnostic so the transport layer can evolve independently
-    from the typed orchestrator control-plane contract.
-    """
-
-    def __init__(
-        self,
-        facade: OrchestratorFacade,
-        *,
-        policies: dict[OrchestratorMCPRole, RolePolicy] | None = None,
-    ) -> None:
+    def __init__(self, facade: OrchestratorFacade) -> None:
         self.facade = facade
-        self.policies = policies or default_role_policies()
         self.resources = ResourceHandlers(facade)
         self.gatekeeper_tools = GatekeeperToolHandlers(facade)
         self.agent_tools = AgentToolHandlers(facade)
@@ -89,76 +107,30 @@ class OrchestratorMCPServer:
             ),
         }
         self._tools: dict[str, MCPToolDefinition] = {
-            "consensus_get": MCPToolDefinition(
-                name="consensus_get",
-                description="Read the current consensus document.",
-                handler=self.gatekeeper_tools.consensus_get,
-            ),
-            "consensus_update": MCPToolDefinition(
-                name="consensus_update",
-                description="Update orchestrator-owned consensus fields.",
-                handler=self.gatekeeper_tools.consensus_update,
-            ),
-            "question_ask_user": MCPToolDefinition(
-                name="question_ask_user",
-                description="Create a structured user-facing question.",
-                handler=self.gatekeeper_tools.question_ask_user,
-            ),
-            "question_resolve": MCPToolDefinition(
-                name="question_resolve",
-                description="Resolve a structured question record.",
-                handler=self.gatekeeper_tools.question_resolve,
-            ),
-            "roadmap_add_task": MCPToolDefinition(
-                name="roadmap_add_task",
-                description="Add a task to the roadmap.",
-                handler=self.gatekeeper_tools.roadmap_add_task,
-            ),
-            "roadmap_get": MCPToolDefinition(
-                name="roadmap_get",
-                description="Read the current roadmap document.",
-                handler=self.gatekeeper_tools.roadmap_get,
-            ),
-            "roadmap_reorder_tasks": MCPToolDefinition(
-                name="roadmap_reorder_tasks",
-                description="Reorder roadmap tasks by id.",
-                handler=self.gatekeeper_tools.roadmap_reorder_tasks,
-            ),
-            "roadmap_update_task": MCPToolDefinition(
-                name="roadmap_update_task",
-                description="Update a roadmap task definition.",
-                handler=self.gatekeeper_tools.roadmap_update_task,
-            ),
-            "task_get": MCPToolDefinition(
-                name="task_get",
-                description="Read one roadmap task by id.",
-                handler=self.agent_tools.task_get,
-            ),
-            "workflow_pause": MCPToolDefinition(
-                name="workflow_pause",
-                description="Pause the workflow.",
-                handler=self.gatekeeper_tools.workflow_pause,
-            ),
-            "workflow_resume": MCPToolDefinition(
-                name="workflow_resume",
-                description="Resume the workflow.",
-                handler=self.gatekeeper_tools.workflow_resume,
-            ),
+            "consensus_get": MCPToolDefinition("consensus_get", "Read the current consensus document.", self.gatekeeper_tools.consensus_get),
+            "consensus_update": MCPToolDefinition("consensus_update", "Update orchestrator-owned consensus fields.", self.gatekeeper_tools.consensus_update),
+            "question_ask_user": MCPToolDefinition("question_ask_user", "Create a structured user-facing question.", self.gatekeeper_tools.question_ask_user),
+            "question_resolve": MCPToolDefinition("question_resolve", "Resolve a structured question record.", self.gatekeeper_tools.question_resolve),
+            "roadmap_add_task": MCPToolDefinition("roadmap_add_task", "Add a task to the roadmap.", self.gatekeeper_tools.roadmap_add_task),
+            "roadmap_get": MCPToolDefinition("roadmap_get", "Read the current roadmap document.", self.gatekeeper_tools.roadmap_get),
+            "roadmap_reorder_tasks": MCPToolDefinition("roadmap_reorder_tasks", "Reorder roadmap tasks by id.", self.gatekeeper_tools.roadmap_reorder_tasks),
+            "roadmap_update_task": MCPToolDefinition("roadmap_update_task", "Update a roadmap task definition.", self.gatekeeper_tools.roadmap_update_task),
+            "task_get": MCPToolDefinition("task_get", "Read one roadmap task by id.", self.agent_tools.task_get),
+            "workflow_pause": MCPToolDefinition("workflow_pause", "Pause the workflow.", self.gatekeeper_tools.workflow_pause),
+            "workflow_resume": MCPToolDefinition("workflow_resume", "Resume the workflow.", self.gatekeeper_tools.workflow_resume),
         }
 
     def list_resources(self, principal: MCPPrincipal) -> list[MCPResourceDefinition]:
-        allowed = set(self.policies[principal.role].resources)
-        return [definition for name, definition in self._resources.items() if name in allowed]
+        return [definition for name, definition in self._resources.items() if has_scopes(principal.scopes, _RESOURCE_SCOPES[name])]
 
     def list_tools(self, principal: MCPPrincipal) -> list[MCPToolDefinition]:
-        allowed = set(self.policies[principal.role].tools)
-        return [definition for name, definition in self._tools.items() if name in allowed]
+        return [definition for name, definition in self._tools.items() if has_scopes(principal.scopes, _TOOL_SCOPES[name])]
 
     async def read_resource(self, resource_name: str, *, principal: MCPPrincipal, **params: Any) -> Any:
         definition = self._resources.get(resource_name)
         if definition is None:
             raise KeyError(f"Unknown orchestrator MCP resource: {resource_name}")
-        ensure_resource_allowed(principal, resource_name, policies=self.policies)
+        ensure_scopes(principal.scopes, _RESOURCE_SCOPES[resource_name], action=f"read resource {resource_name}")
         result = definition.handler(**params)
         if inspect.isawaitable(result):
             return await result
@@ -168,7 +140,7 @@ class OrchestratorMCPServer:
         definition = self._tools.get(tool_name)
         if definition is None:
             raise KeyError(f"Unknown orchestrator MCP tool: {tool_name}")
-        ensure_tool_allowed(principal, tool_name, policies=self.policies)
+        ensure_scopes(principal.scopes, _TOOL_SCOPES[tool_name], action=f"call tool {tool_name}")
         result = definition.handler(**params)
         if inspect.isawaitable(result):
             return await result
