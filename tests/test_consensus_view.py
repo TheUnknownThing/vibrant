@@ -216,6 +216,8 @@ async def test_app_f3_opens_full_consensus_markdown_overlay(tmp_path: Path):
 
     app = VibrantApp(cwd=str(repo), lifecycle_factory=FakeLifecycle)
     async with _run_test(app) as pilot:
+        await pilot.pause()
+
         panel = app.query_one(ConsensusView)
         assert "Tasks: 2/4" in panel.get_summary_text()
 

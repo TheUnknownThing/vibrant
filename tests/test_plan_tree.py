@@ -191,6 +191,8 @@ async def test_app_wires_plan_tree_and_run_next_task_into_gui(tmp_path):
 
     app = VibrantApp(cwd=str(repo), lifecycle_factory=FakeLifecycle)
     async with _run_test(app) as pilot:
+        await pilot.pause()
+
         assert _task_label(app, "task-001").startswith("○ task-001")
 
         await pilot.press("f6")

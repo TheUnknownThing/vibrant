@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Grid, Vertical
+from textual.containers import Vertical
 from textual.widgets import Static
 
-from ..widgets.agent_output import AgentOutput
 from ..widgets.chat_panel import ChatPanel
-from ..widgets.consensus_view import ConsensusView
 from ..widgets.input_bar import InputBar
-from ..widgets.plan_tree import PlanTree
-from ..widgets.thread_list import ThreadList
 
 
 class PlanningScreen(Static):
@@ -22,38 +18,61 @@ class PlanningScreen(Static):
         height: 1fr;
     }
 
-    PlanningScreen #workspace-grid {
-        layout: grid;
-        grid-size: 1 1;
-        grid-columns: 1fr;
-        grid-rows: 1fr;
+    PlanningScreen #planning-shell {
         height: 1fr;
-    }
-
-    PlanningScreen #plan-panel,
-    PlanningScreen #agent-output-panel,
-    PlanningScreen #consensus-panel,
-    PlanningScreen #thread-panel {
-        display: none;
+        border: round $primary-background;
+        background: $surface;
     }
 
     PlanningScreen #planning-hero {
-        display: block;
+        height: auto;
+        padding: 1 2;
+        border-bottom: solid $primary-background;
+        background: $surface;
+    }
+
+    PlanningScreen #conversation-panel {
+        height: 1fr;
+    }
+
+    PlanningScreen #input-panel {
+        height: auto;
+        max-height: 8;
+        border-top: solid $primary-background;
+        padding: 0 1;
+        background: $surface;
     }
     """
 
     def compose(self) -> ComposeResult:
-        with Grid(id="workspace-grid"):
-            yield PlanTree(id="plan-panel")
-            yield AgentOutput(id="agent-output-panel")
-            yield ConsensusView(id="consensus-panel")
-            with Vertical(id="chat-panel-container"):
-                yield Static(
-                    "[b]Consensus Building[/b]\n"
-                    "Tell the Gatekeeper what you want to build. Planning stays open until the Gatekeeper ends it.",
-                    id="planning-hero",
-                    markup=True,
-                )
-                yield ThreadList(id="thread-panel")
-                yield ChatPanel(id="conversation-panel")
-                yield InputBar(id="input-panel")
+        with Vertical(id="planning-shell"):
+            yield Static(
+                "[b]Consensus Building[/b]\n"
+                "Tell the Gatekeeper what you want to build. Type `/vibe` when you are ready to move into execution.",
+                id="planning-hero",
+                markup=True,
+            )
+            yield ChatPanel(id="conversation-panel")
+            yield InputBar(id="input-panel")
+
+    @property
+    def chat_panel(self) -> ChatPanel:
+        """Return the planning chat panel."""
+
+        return self.query_one(ChatPanel)
+
+    @property
+    def input_bar(self) -> InputBar:
+        """Return the planning input bar."""
+
+        return self.query_one(InputBar)
+
+    def focus_primary_input(self) -> None:
+        """Focus the planning input."""
+
+        self.input_bar.focus_input()
+
+    def set_input_placeholder(self, text: str) -> None:
+        """Update the planning input placeholder."""
+
+        self.input_bar.set_placeholder(text)

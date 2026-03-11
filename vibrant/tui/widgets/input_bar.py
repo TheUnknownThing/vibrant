@@ -10,7 +10,18 @@ from textual.widgets import Static, Input
 class InputBar(Static):
     """Message input bar at the bottom of the conversation panel."""
 
-    DEFAULT_PLACEHOLDER = "Type a message... (Ctrl+N for new thread)"
+    DEFAULT_PLACEHOLDER = "Type a message for the Gatekeeper..."
+
+    DEFAULT_CSS = """
+    InputBar #input-context {
+        height: 1;
+        padding: 0 1;
+    }
+
+    InputBar #message-input {
+        margin: 0 0 1 0;
+    }
+    """
 
     class MessageSubmitted(Message):
         """Emitted when the user submits a message."""
