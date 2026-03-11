@@ -518,7 +518,7 @@ class VibrantApp(App):
         elif event_type == "turn.completed":
             self._set_status(f"Completed {event.get('task_id', 'task')}")
         elif event_type == "runtime.error":
-            self._set_status(str(event.get("error") or "Task failed"))
+            self._set_status(_error_text_from_event(event) or "Task failed")
         elif event_type == "user-input.requested":
             self._refresh_gatekeeper_state(force_flash=True)
         elif event_type == "gatekeeper.result.applied":
@@ -702,28 +702,33 @@ class VibrantApp(App):
     def _refresh_project_views(self) -> None:
         self._sync_workspace_screen()
         vibing_screen = self._vibing_screen()
-        consensus_view = self._consensus_view()
         orchestrator = self._orchestrator
+        agent_output = None
+        plan_tree = None
+        consensus_view = None
+        if vibing_screen is not None:
+            with suppress(Exception):
+                agent_output = vibing_screen.agent_output
+            with suppress(Exception):
+                plan_tree = vibing_screen.plan_tree
+            with suppress(Exception):
+                consensus_view = vibing_screen.consensus_view
         if orchestrator is None:
             if vibing_screen is not None:
-                try:
-                    vibing_screen.plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
-                    vibing_screen.agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
-                    vibing_screen.set_roadmap_loading(True)
-                except NoMatches:
-                    pass
-            if consensus_view is not None:
-                with suppress(NoMatches):
+                if plan_tree is not None:
+                    plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+                if agent_output is not None:
+                    agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
+                if consensus_view is not None:
                     consensus_view.clear_summary("No `.vibrant/consensus.md` found for this workspace.")
+                with suppress(Exception):
+                    vibing_screen.set_roadmap_loading(True)
             self._refresh_gatekeeper_state()
             return
 
         snapshot = orchestrator.snapshot()
-        if vibing_screen is not None:
-            try:
-                vibing_screen.agent_output.sync_agents(snapshot.agent_records)
-            except NoMatches:
-                vibing_screen = None
+        if agent_output is not None:
+            agent_output.sync_agents(snapshot.agent_records)
 
         consensus_document = snapshot.consensus
         consensus_path = snapshot.consensus_path
@@ -737,29 +742,26 @@ class VibrantApp(App):
         except Exception as exc:
             logger.exception("Failed to refresh roadmap view")
             if vibing_screen is not None:
-                try:
-                    vibing_screen.plan_tree.clear_tasks(f"Failed to load roadmap: {exc}")
-                    vibing_screen.set_roadmap_loading(True)
-                except NoMatches:
-                    pass
-            if consensus_view is not None:
-                with suppress(NoMatches):
+                if plan_tree is not None:
+                    plan_tree.clear_tasks(f"Failed to load roadmap: {exc}")
+                if consensus_view is not None:
                     consensus_view.update_consensus(
                         consensus_document,
                         source_path=consensus_path,
                     )
+                with suppress(Exception):
+                    vibing_screen.set_roadmap_loading(True)
             self._refresh_gatekeeper_state()
             return
 
         if vibing_screen is not None:
-            try:
-                vibing_screen.plan_tree.update_tasks(
+            if plan_tree is not None:
+                plan_tree.update_tasks(
                     roadmap_tasks,
                     agent_summaries=self._collect_task_summaries(),
                 )
+            with suppress(Exception):
                 vibing_screen.set_roadmap_loading(not bool(roadmap_tasks))
-            except NoMatches:
-                pass
 
         if consensus_view is not None:
             with suppress(NoMatches):
@@ -887,12 +889,14 @@ class VibrantApp(App):
 
         new_questions = [question for question in questions if question not in self._known_pending_questions]
         flash = force_flash or bool(new_questions)
-        chat_panel.set_gatekeeper_state(
-            status=normalized_status or status,
-            pending_questions=questions,
-            flash=flash,
-        )
-        chat_panel.show_gatekeeper_thread()
+        with suppress(Exception):
+            chat_panel.set_gatekeeper_state(
+                status=normalized_status or status,
+                pending_questions=questions,
+                flash=flash,
+            )
+        with suppress(Exception):
+            chat_panel.show_gatekeeper_thread()
 
         if questions and not self._gatekeeper_is_busy():
             banner = (
@@ -1091,6 +1095,9 @@ def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
 
 
 def _error_text_from_event(event: dict[str, Any]) -> str:
+    error_message = event.get("error_message")
+    if isinstance(error_message, str) and error_message.strip():
+        return error_message.strip()
     error = event.get("error")
     if isinstance(error, dict):
         return str(error.get("message") or error)

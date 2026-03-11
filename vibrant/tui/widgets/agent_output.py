@@ -257,7 +257,7 @@ class AgentOutput(Static):
         if event_type == "task.progress":
             for line in _render_task_progress_lines(event):
                 self._append_canonical_line(stream, line)
-        elif event_type != "content.delta":
+        else:
             for line in _render_canonical_event_lines(event):
                 self._append_canonical_line(stream, line)
 
@@ -722,11 +722,12 @@ def _split_visible_lines(text: str) -> list[str]:
 
 
 def _error_text(event: dict[str, Any]) -> str:
+    if isinstance(event.get("error_message"), str) and event["error_message"]:
+        return event["error_message"]
     error = event.get("error")
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "")
-
 
 def _render_native_entry(payload: dict[str, Any]) -> str:
     prefix = _timestamp_prefix(_timestamp_text(payload.get("timestamp")))

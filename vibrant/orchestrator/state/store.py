@@ -5,6 +5,7 @@ from __future__ import annotations
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, reconcile_question_records
+from vibrant.providers.base import CanonicalEvent
 from .backend import OrchestratorStateBackend
 
 from .projection import build_user_input_requested_event, rebuild_derived_state, sync_status_from_consensus
@@ -79,7 +80,7 @@ class StateStore:
         self.engine.state.status = status
         self.persist()
 
-    def append_event(self, event: dict[str, object]) -> None:
+    def append_event(self, event: CanonicalEvent) -> None:
         self.engine.emitted_events.append(event)
         self.persist()
 
@@ -98,7 +99,7 @@ class StateStore:
             can_transition_to=self.can_transition_to,
         )
 
-    def apply_gatekeeper_result(self, result: GatekeeperRunResult) -> list[dict[str, object]]:
+    def apply_gatekeeper_result(self, result: GatekeeperRunResult) -> list[CanonicalEvent]:
         if result.agent_record is not None:
             increment_spawn = self._agent_store is None or result.agent_record.agent_id not in self._agent_store
             if self._agent_store is not None:
@@ -115,7 +116,7 @@ class StateStore:
         self.rebuild_derived_state()
         self.sync_status_from_consensus()
 
-        events: list[dict[str, object]] = []
+        events: list[CanonicalEvent] = []
         pending_messages = [
             request.message or f"Gatekeeper request: {request.request_kind}"
             for request in result.input_requests
