@@ -15,8 +15,8 @@ from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, Static
 
+from ..agents import PLANNING_COMPLETE_MCP_TOOL
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, resolve_project_path
-from ..gatekeeper import PLANNING_COMPLETE_MCP_SENTINEL, PLANNING_COMPLETE_MCP_TOOL
 from ..history import HistoryStore
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo
 from ..orchestrator import CodeAgentLifecycleResult, Orchestrator, OrchestratorFacade, create_orchestrator
@@ -387,7 +387,7 @@ class VibrantApp(App):
                 if chat_panel is not None:
                     chat_panel.record_gatekeeper_response(gatekeeper_text)
             self._persist_gatekeeper_thread()
-            if self._maybe_handle_planning_completion_request(result):
+            if self._maybe_sync_post_planning_transition():
                 return
 
             self._refresh_project_views()
@@ -483,9 +483,6 @@ class VibrantApp(App):
                 "/logs - Open Agent Logs\n"
                 "/help - Show this help"
             )
-        elif cmd == "vibe":
-            if self._transition_to_vibing(prefer_chat_history=True):
-                self.notify("Entered the vibing phase.")
         else:
             self.notify(f"Unknown command: /{cmd}", severity="warning")
 
@@ -1093,9 +1090,14 @@ class VibrantApp(App):
         status = _normalize_orchestrator_status(self._orchestrator.workflow_status())
         return status in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}
 
-    def _maybe_handle_planning_completion_request(self, result: object) -> bool:
-        if _extract_planning_completion_request(result) is None:
+    def _maybe_sync_post_planning_transition(self) -> bool:
+        if self._planning_screen() is None or self._orchestrator is None:
             return False
+
+        status = _normalize_orchestrator_status(self._orchestrator.workflow_status())
+        if status in {None, OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
+            return False
+
         self._todo_exit_message = None
         return self._transition_to_vibing(prefer_chat_history=True)
 
@@ -1156,22 +1158,6 @@ def _render_gatekeeper_result_text(result: object) -> str:
         return f"Verdict: {verdict.strip()}"
 
     return "Gatekeeper updated the plan."
-
-
-def _extract_planning_completion_request(result: object) -> str | None:
-    transcript = getattr(result, "transcript", None)
-    if isinstance(transcript, str):
-        for line in transcript.splitlines():
-            if line.strip() == PLANNING_COMPLETE_MCP_SENTINEL:
-                return PLANNING_COMPLETE_MCP_TOOL
-
-    events = getattr(result, "events", None)
-    if isinstance(events, list):
-        for event in events:
-            if _event_requests_planning_completion(event):
-                return PLANNING_COMPLETE_MCP_TOOL
-
-    return None
 
 
 def _event_requests_planning_completion(event: object) -> bool:

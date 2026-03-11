@@ -28,7 +28,6 @@ from .base import ReadOnlyAgentBase
 from .runtime import AgentHandle, BaseAgentRuntime, NormalizedRunResult
 
 PLANNING_COMPLETE_MCP_TOOL = "vibrant.end_planning_phase"
-PLANNING_COMPLETE_MCP_SENTINEL = f"MCP: {PLANNING_COMPLETE_MCP_TOOL}"
 REQUEST_USER_DECISION_MCP_TOOL = "vibrant.request_user_decision"
 SET_PENDING_QUESTIONS_MCP_TOOL = "vibrant.set_pending_questions"
 REVIEW_TASK_OUTCOME_MCP_TOOL = "vibrant.review_task_outcome"
@@ -138,7 +137,7 @@ class GatekeeperAgent(ReadOnlyAgentBase):
                 "## Operating Model",
                 "1. You are read-only. Do not edit repository files or .vibrant state directly.",
                 "2. The orchestrator is the source of truth for durable project state.",
-                "3. Express durable decisions through MCP tool calls when the tools are available.",
+                "3. Express durable decisions through orchestrator MCP tool calls.",
                 "4. If a high-level product, UX, or architecture decision is required, request user input through MCP.",
                 "5. If a decision is purely technical, make it yourself and record it through MCP.",
                 "## Your Responsibilities",
@@ -156,14 +155,14 @@ class GatekeeperAgent(ReadOnlyAgentBase):
                 "## Agent Summary (if applicable)",
                 summary_text,
                 "## MCP Tools",
-                "Use these when the MCP bridge is available. Some tools may be absent in this refactor.",
+                "Use the orchestrator MCP tools for every durable project mutation.",
                 mcp_text,
                 "## Available Skills",
                 "The following skills are available for agents. Assign them to tasks as needed:",
                 skills_text,
                 "## Output Rules",
                 "1. Do not invent fake MCP results.",
-                "2. If a required MCP tool is unavailable, explain the intended action in plain language.",
+                f"2. End planning by calling `{PLANNING_COMPLETE_MCP_TOOL}` instead of asking the user to type a slash command.",
                 "3. Keep the conversation focused on project planning, review, and escalation.",
             ]
         )

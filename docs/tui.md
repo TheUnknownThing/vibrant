@@ -20,7 +20,7 @@ When choosing a directory, the path input should support filesystem autocomplete
 
 ## Planning Screen
 
-The planning phase is also named "Consensus Building". "Tell me what you want to build" is displayed as default text in the user input box, and the user engages in a conversation with the Gatekeeper (a codex session spawned by the Orchestrator immediately after initialization). The Gatekeeper will ask questions until it has enough information to build a consensus (not a detailed roadmap, but a general understanding of what the project should be, and what decision choices the user prefers). If the user is satisfied, he types `/vibe` to enter the vibing phase.
+The planning phase is also named "Consensus Building". "Tell me what you want to build" is displayed as default text in the user input box, and the user engages in a conversation with the Gatekeeper (a codex session spawned by the Orchestrator immediately after initialization). The Gatekeeper will ask questions until it has enough information to build a consensus (not a detailed roadmap, but a general understanding of what the project should be, and what decision choices the user prefers). When planning is complete, the Gatekeeper ends the planning phase through the orchestrator and the UI switches into the vibing phase automatically.
 
 Users can use `f7` to toggle the consensus view, which is a side panel (default hidden) that shows the current consensus in a markdown format. The panel automatically pops up when the gatekeeper first writes to the consensus (at the end of the conversation).
 

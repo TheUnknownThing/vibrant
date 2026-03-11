@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from vibrant.agents.runtime import RunState
-from vibrant.gatekeeper import (
+from vibrant.agents import (
     Gatekeeper,
     GatekeeperRequest,
     GatekeeperTrigger,

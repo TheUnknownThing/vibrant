@@ -36,7 +36,7 @@ class HelpScreen(ModalScreen[None]):
 
 ## Screens
 - **Initialization**: create a `.vibrant` workspace in the current or selected directory
-- **Planning**: talk with the Gatekeeper until you are ready to type `/vibe`
+- **Planning**: talk with the Gatekeeper until it finalizes the roadmap and moves into execution
 - **Vibing**: monitor tasks, review consensus, inspect agent logs, and keep chatting with the Gatekeeper
 
 ## Keys
@@ -49,7 +49,6 @@ class HelpScreen(ModalScreen[None]):
 - `F10` quit
 
 ## Commands
-- `/vibe` move from planning to vibing
 - `/run` execute the next roadmap task
 - `/refresh` reload project state
 - `/settings` open settings

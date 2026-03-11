@@ -68,7 +68,7 @@ class PlanningScreen(Static):
             with Vertical(id="planning-shell"):
                 yield Static(
                     "[b]Consensus Building[/b]\n"
-                    "Tell the Gatekeeper what you want to build. Type [u]/vibe[/u] when you are ready to move into execution. Type [u]F7[/u] to toggle the consensus panel.",
+                    "Tell the Gatekeeper what you want to build. When planning is ready, the orchestrator will move into execution automatically. Type [u]F7[/u] to toggle the consensus panel.",
                     id="planning-hero",
                     markup=True,
                 )
