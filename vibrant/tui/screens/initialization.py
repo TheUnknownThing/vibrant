@@ -174,7 +174,7 @@ class InitializationScreen(ModalScreen[None]):
 
     BINDINGS = [
         Binding("f10", "exit_app", "Quit", show=True),
-        Binding("ctrl+q", "exit_app", "Quit", show=True),
+        Binding("ctrl+c", "exit_app", "Quit", show=True),
         Binding("up", "cursor_up", "Up", show=True),
         Binding("down", "cursor_down", "Down", show=True),
         Binding("enter", "confirm", "Confirm", show=True),

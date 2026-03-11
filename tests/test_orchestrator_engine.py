@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from vibrant.agents import GatekeeperRunResult
+from vibrant.agents import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.agents.runtime import RunState
 from vibrant.consensus.writer import ConsensusWriter
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType

@@ -57,6 +57,7 @@ def build_gatekeeper_prompt(
             "## Output Rules",
             "1. Do not invent fake MCP results.",
             "2. If a required MCP tool is unavailable, explain the intended action in plain language.",
-            "3. Keep the conversation focused on project planning, review, and escalation.",
+            "3. End planning by calling `vibrant.end_planning_phase` instead of asking the user to type a slash command.",
+            "4. Keep the conversation focused on project planning, review, and escalation.",
         ]
     )
