@@ -87,8 +87,7 @@ def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
             updated_at=datetime(2026, 3, 8, 10, 15, tzinfo=timezone.utc),
             version=2,
             status=ConsensusStatus.COMPLETED,
-            objectives="Ship Phase 1.",
-            getting_started="Read the roadmap.",
+            context="## Objectives\nShip Phase 1.\n\n## Getting Started\nRead the roadmap.",
         ),
     )
 
@@ -180,8 +179,7 @@ class TestOrchestratorEnginePersistence:
                 updated_at=datetime(2026, 3, 8, 10, 15, tzinfo=timezone.utc),
                 version=14,
                 status=ConsensusStatus.EXECUTING,
-                objectives="Ship Phase 1.",
-                getting_started="Read the roadmap.",
+                context="## Objectives\nShip Phase 1.\n\n## Getting Started\nRead the roadmap.",
             ),
         )
 

@@ -93,8 +93,7 @@ class TestRoadmapParser:
             updated_at=datetime(2026, 3, 8, 1, 0, tzinfo=timezone.utc),
             version=4,
             status=ConsensusStatus.PLANNING,
-            objectives="Ship roadmap parsing and prompt generation.",
-            getting_started="Read docs/spec.md and inspect `.vibrant/roadmap.md`.",
+            context="## Objectives\nShip roadmap parsing and prompt generation.\n\n## Getting Started\nRead docs/spec.md and inspect `.vibrant/roadmap.md`.",
         )
 
         prompt = parser.build_task_prompt(
@@ -112,6 +111,8 @@ class TestRoadmapParser:
         assert "## Context" in prompt
         assert "Consensus Status: PLANNING" in prompt
         assert "Consensus Version: 4" in prompt
+        assert "Consensus Context:" in prompt
+        assert "Ship roadmap parsing and prompt generation." in prompt
         assert "Relevant files:" in prompt
         assert "## Skills" in prompt
         assert "# testing-strategy" in prompt

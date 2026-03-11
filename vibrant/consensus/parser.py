@@ -5,43 +5,22 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from vibrant.models.consensus import ConsensusDecision, ConsensusDocument, ConsensusPool
+from vibrant.models.consensus import ConsensusDocument, ConsensusPool
 
 
 class ConsensusParser:
-    """Parse the machine-readable sections of ``consensus.md``."""
+    """Parse the machine-readable metadata in ``consensus.md``."""
 
     META_PATTERN = re.compile(r"<!-- META:START -->\n(?P<body>.*?)\n<!-- META:END -->", re.DOTALL)
-    OBJECTIVES_PATTERN = re.compile(
-        r"<!-- OBJECTIVES:START -->\n(?P<body>.*?)\n<!-- OBJECTIVES:END -->",
-        re.DOTALL,
-    )
-    DECISIONS_PATTERN = re.compile(
-        r"<!-- DECISIONS:START -->\n(?P<body>.*?)\n<!-- DECISIONS:END -->",
-        re.DOTALL,
-    )
-    GETTING_STARTED_PATTERN = re.compile(
-        r"## Getting Started\n(?P<body>.*?)(?=^## Questions\n|\Z)",
-        re.DOTALL | re.MULTILINE,
-    )
-    QUESTIONS_PATTERN = re.compile(
-        r"^## Questions\n(?P<body>.*)\Z",
-        re.DOTALL | re.MULTILINE,
-    )
     BULLET_PATTERN = re.compile(r"- \*\*(?P<key>[^*]+)\*\*: (?P<value>.*)")
-    DECISION_TITLE_PATTERN = re.compile(r"### Decision \d+: (?P<title>.+)")
-    BLOCKING_QUESTION_PATTERN = re.compile(r"^-\s*(?:\[blocking\]\s*)?(?P<question>.+)$", re.IGNORECASE)
-    PRIORITY_QUESTION_PATTERN = re.compile(
-        r"^-\s*\*\*Priority\*\*:\s*blocking\s*\|\s*\*\*Question\*\*:\s*(?P<question>.+)$",
-        re.IGNORECASE,
-    )
 
     def parse(self, markdown_text: str) -> ConsensusPool:
-        meta = self._parse_meta(markdown_text)
-        objectives = self._extract_section(self.OBJECTIVES_PATTERN, markdown_text)
-        decisions = self._parse_decisions(markdown_text)
-        getting_started = self._extract_section(self.GETTING_STARTED_PATTERN, markdown_text)
-        questions = self._parse_questions(markdown_text)
+        meta_match = self.META_PATTERN.search(markdown_text)
+        if meta_match is None:
+            raise ValueError("Consensus META section not found")
+
+        meta = self._parse_meta(meta_match)
+        context = markdown_text[meta_match.end() :].removeprefix("\n").removesuffix("\n")
 
         return ConsensusPool(
             project=meta.get("Project", "Vibrant"),
@@ -49,20 +28,13 @@ class ConsensusParser:
             updated_at=meta.get("Last Updated"),
             version=int(meta.get("Version", 0)),
             status=meta.get("Status", "PLANNING"),
-            objectives=objectives.strip(),
-            decisions=decisions,
-            getting_started=getting_started.strip(),
-            questions=questions,
+            context=context,
         )
 
     def parse_file(self, path: str | Path) -> ConsensusDocument:
         return self.parse(Path(path).read_text(encoding="utf-8"))
 
-    def _parse_meta(self, markdown_text: str) -> dict[str, str]:
-        match = self.META_PATTERN.search(markdown_text)
-        if match is None:
-            raise ValueError("Consensus META section not found")
-
+    def _parse_meta(self, match: re.Match[str]) -> dict[str, str]:
         parsed: dict[str, str] = {}
         for line in match.group("body").splitlines():
             line = line.strip()
@@ -73,67 +45,3 @@ class ConsensusParser:
                 raise ValueError(f"Invalid consensus META line: {line}")
             parsed[bullet_match.group("key")] = bullet_match.group("value")
         return parsed
-
-    def _parse_decisions(self, markdown_text: str) -> list[ConsensusDecision]:
-        block = self._extract_section(self.DECISIONS_PATTERN, markdown_text)
-        if not block.strip():
-            return []
-
-        decisions: list[ConsensusDecision] = []
-        current: dict[str, str] | None = None
-        for raw_line in block.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-
-            title_match = self.DECISION_TITLE_PATTERN.fullmatch(line)
-            if title_match is not None:
-                if current is not None:
-                    decisions.append(self._build_decision(current))
-                current = {"title": title_match.group("title")}
-                continue
-
-            bullet_match = self.BULLET_PATTERN.fullmatch(line)
-            if bullet_match is not None and current is not None:
-                current[bullet_match.group("key")] = bullet_match.group("value").strip("`")
-
-        if current is not None:
-            decisions.append(self._build_decision(current))
-        return decisions
-
-    def _build_decision(self, data: dict[str, str]) -> ConsensusDecision:
-        return ConsensusDecision(
-            title=data.get("title", "Untitled"),
-            date=data.get("Date"),
-            made_by=data.get("Made By", "gatekeeper"),
-            context=data.get("Context", ""),
-            resolution=data.get("Resolution", ""),
-            impact=data.get("Impact", ""),
-        )
-
-    def _parse_questions(self, markdown_text: str) -> list[str]:
-        section = self._extract_section(self.QUESTIONS_PATTERN, markdown_text)
-        if not section.strip():
-            return []
-
-        questions: list[str] = []
-        for raw_line in section.splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            priority_match = self.PRIORITY_QUESTION_PATTERN.match(line)
-            if priority_match is not None:
-                questions.append(priority_match.group("question").strip())
-                continue
-            blocking_match = self.BLOCKING_QUESTION_PATTERN.match(line)
-            if blocking_match is not None and "blocking" in line.lower():
-                question = re.sub(r"^\[blocking\]\s*", "", blocking_match.group("question").strip(), flags=re.IGNORECASE)
-                questions.append(question)
-        return questions
-
-    @staticmethod
-    def _extract_section(pattern: re.Pattern[str], markdown_text: str) -> str:
-        match = pattern.search(markdown_text)
-        if match is None:
-            return ""
-        return match.group("body")

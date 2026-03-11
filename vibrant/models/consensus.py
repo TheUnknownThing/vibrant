@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class ConsensusStatus(str, enum.Enum):
@@ -17,26 +17,18 @@ class ConsensusStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
-class DecisionAuthor(str, enum.Enum):
-    GATEKEEPER = "gatekeeper"
-    USER = "user"
-
-
-class ConsensusDecision(BaseModel):
-    """Structured representation of one consensus decision entry."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    title: str
-    date: datetime | None = None
-    made_by: DecisionAuthor = DecisionAuthor.GATEKEEPER
-    context: str = ""
-    resolution: str = ""
-    impact: str = ""
+DEFAULT_CONSENSUS_CONTEXT = """## Objectives
+<!-- OBJECTIVES:START -->
+<!-- OBJECTIVES:END -->
+## Design Choices
+<!-- DECISIONS:START -->
+<!-- DECISIONS:END -->
+## Getting Started
+Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."""
 
 
 class ConsensusDocument(BaseModel):
-    """Parsed representation of ``consensus.md`` sections."""
+    """Parsed representation of ``consensus.md`` metadata and raw body."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -45,10 +37,7 @@ class ConsensusDocument(BaseModel):
     updated_at: datetime | None = None
     version: int = 1
     status: ConsensusStatus = ConsensusStatus.PLANNING
-    objectives: str = ""
-    decisions: list[ConsensusDecision] = Field(default_factory=list)
-    getting_started: str = ""
-    questions: list[str] = Field(default_factory=list)
+    context: str = DEFAULT_CONSENSUS_CONTEXT
 
     @model_validator(mode="after")
     def validate_document(self) -> ConsensusDocument:
