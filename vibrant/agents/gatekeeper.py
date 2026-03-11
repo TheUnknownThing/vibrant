@@ -23,12 +23,12 @@ from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root,
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
+from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
 
 from .base import ReadOnlyAgentBase
 from .runtime import AgentHandle, BaseAgentRuntime, NormalizedRunResult
 
 PLANNING_COMPLETE_MCP_TOOL = "vibrant.end_planning_phase"
-PLANNING_COMPLETE_MCP_SENTINEL = f"MCP: {PLANNING_COMPLETE_MCP_TOOL}"
 REQUEST_USER_DECISION_MCP_TOOL = "vibrant.request_user_decision"
 SET_PENDING_QUESTIONS_MCP_TOOL = "vibrant.set_pending_questions"
 REVIEW_TASK_OUTCOME_MCP_TOOL = "vibrant.review_task_outcome"
@@ -128,44 +128,15 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
         roadmap_text = _read_text(self.roadmap_path) or "No roadmap document exists yet."
         skills_text = self._render_available_skills()
-        summary_text = request.agent_summary.strip() if request.agent_summary else "N/A"
-        mcp_text = "\n".join(f"- `{tool_name}`" for tool_name in MCP_TOOL_NAMES)
-
-        return "\n".join(
-            [
-                f"You are the Gatekeeper for Project {self.project_root.name}.",
-                "You are a long-lived, project-scoped planning and review agent.",
-                "## Operating Model",
-                "1. You are read-only. Do not edit repository files or .vibrant state directly.",
-                "2. The orchestrator is the source of truth for durable project state.",
-                "3. Express durable decisions through MCP tool calls when the tools are available.",
-                "4. If a high-level product, UX, or architecture decision is required, request user input through MCP.",
-                "5. If a decision is purely technical, make it yourself and record it through MCP.",
-                "## Your Responsibilities",
-                "1. Create or refine the roadmap during planning.",
-                "2. Review task outcomes against acceptance criteria during execution.",
-                "3. Decide whether work is accepted, retried, escalated, or replanned.",
-                "4. Preserve continuity across planning, review, failure, and user-conversation turns.",
-                "5. Keep responses concise and actionable so the orchestrator can render them directly.",
-                "## Current Consensus",
-                consensus_text,
-                "## Current Roadmap",
-                roadmap_text,
-                "## Trigger",
-                f"{request.trigger.value}: {request.trigger_description}",
-                "## Agent Summary (if applicable)",
-                summary_text,
-                "## MCP Tools",
-                "Use these when the MCP bridge is available. Some tools may be absent in this refactor.",
-                mcp_text,
-                "## Available Skills",
-                "The following skills are available for agents. Assign them to tasks as needed:",
-                skills_text,
-                "## Output Rules",
-                "1. Do not invent fake MCP results.",
-                "2. If a required MCP tool is unavailable, explain the intended action in plain language.",
-                "3. Keep the conversation focused on project planning, review, and escalation.",
-            ]
+        return build_gatekeeper_prompt(
+            project_name=self.project_root.name,
+            consensus_text=consensus_text,
+            roadmap_text=roadmap_text,
+            trigger_value=request.trigger.value,
+            trigger_description=request.trigger_description,
+            agent_summary=request.agent_summary,
+            skills_text=skills_text,
+            mcp_tool_names=MCP_TOOL_NAMES,
         )
 
     def _render_available_skills(self) -> str:
@@ -266,7 +237,7 @@ class Gatekeeper:
     async def answer_question(self, question: str, answer: str) -> GatekeeperRunResult:
         request = GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
-            trigger_description=f"Question: {question}\nUser Answer: {answer}",
+            trigger_description=build_user_answer_trigger_description(question=question, answer=answer),
             agent_summary=answer,
         )
         return await self.run(request, resume_latest_thread=True)
@@ -281,7 +252,7 @@ class Gatekeeper:
     ) -> GatekeeperRunHandle:
         request = GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
-            trigger_description=f"Question: {question}\nUser Answer: {answer}",
+            trigger_description=build_user_answer_trigger_description(question=question, answer=answer),
             agent_summary=answer,
         )
         return await self.start_run(
