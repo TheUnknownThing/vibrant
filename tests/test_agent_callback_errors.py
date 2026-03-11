@@ -97,9 +97,9 @@ def test_agent_registry_rejects_unwired_task_agent_types(tmp_path) -> None:
     agent_store = AgentRecordStore(vibrant_dir=project_root / ".vibrant", state_store=state_store)
     registry = AgentRegistry(agent_store=agent_store, vibrant_dir=project_root / ".vibrant")
 
-    with pytest.raises(ValueError, match="Unsupported task agent type: test"):
+    with pytest.raises(ValueError, match="Unsupported task agent type: gatekeeper"):
         registry.create_task_agent_record(
-            agent_type=AgentType.TEST,
+            agent_type=AgentType.GATEKEEPER,
             task_id="task-1",
             branch=None,
             worktree_path=str(project_root),

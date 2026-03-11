@@ -23,7 +23,7 @@ from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionR
 from vibrant.models.task import TaskInfo, TaskStatus
 
 from .bootstrap import Orchestrator
-from .task_dispatch import TaskDispatcher
+from .execution.dispatcher import TaskDispatcher
 from .types import (
     AgentOutput,
     AgentSnapshotIdentity,

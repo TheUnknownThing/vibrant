@@ -36,9 +36,9 @@ from .execution.retry_policy import RetryPolicyService
 from .execution.review import ReviewService
 from .execution.service import TaskExecutionService
 from .gatekeeper_runtime import GatekeeperRuntimeService
-from .git_manager import GitManager
+from .execution.dispatcher import TaskDispatcher
+from .execution.git_manager import GitManager
 from .state.store import StateStore
-from .task_dispatch import TaskDispatcher
 from .types import TaskResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]

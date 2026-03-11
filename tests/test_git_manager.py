@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from vibrant.orchestrator.git_manager import GitManager
+from vibrant.orchestrator.execution.git_manager import GitManager
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:

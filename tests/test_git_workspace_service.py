@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from vibrant.models.task import TaskInfo
+from vibrant.orchestrator.execution.git_manager import GitManager, GitManagerError, GitWorktreeInfo
 from vibrant.orchestrator.execution.git_workspace import GitWorkspaceService
-from vibrant.orchestrator.git_manager import GitManager, GitManagerError, GitWorktreeInfo
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
