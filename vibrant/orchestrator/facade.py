@@ -21,7 +21,7 @@ from vibrant.agents.utils import maybe_forward_event
 
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.consensus import ConsensusStatus
 from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
@@ -176,6 +176,9 @@ class OrchestratorFacade:
     def _snapshot_from_record(self, record: AgentRecord) -> OrchestratorAgentSnapshot:
         status = record.status.value
         done = record.status in AgentRecord.TERMINAL_STATUSES
+        provider_thread = ProviderResumeHandle.from_provider_metadata(record.provider) or ProviderResumeHandle(
+            kind=record.provider.kind
+        )
         return OrchestratorAgentSnapshot(
             agent_id=record.agent_id,
             task_id=record.task_id,
@@ -193,9 +196,9 @@ class OrchestratorFacade:
             finished_at=record.finished_at,
             summary=record.summary,
             error=record.error,
-            provider_thread_id=record.provider.provider_thread_id,
-            provider_thread_path=record.provider.thread_path,
-            provider_resume_cursor=record.provider.resume_cursor,
+            provider_thread_id=provider_thread.thread_id,
+            provider_thread_path=provider_thread.thread_path,
+            provider_resume_cursor=provider_thread.resume_cursor,
             input_requests=[],
             native_event_log=record.provider.native_event_log,
             canonical_event_log=record.provider.canonical_event_log,

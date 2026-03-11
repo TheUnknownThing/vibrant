@@ -31,6 +31,7 @@ from .runtime import (
     BaseAgentRuntime,
     InputRequest,
     NormalizedRunResult,
+    ProviderResumeHandle,
     ProviderThreadHandle,
     RunState,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "MCP_TOOL_NAMES",
     "MergeAgent",
     "NormalizedRunResult",
+    "ProviderResumeHandle",
     "PLANNING_COMPLETE_MCP_SENTINEL",
     "PLANNING_COMPLETE_MCP_TOOL",
     "ProviderThreadHandle",

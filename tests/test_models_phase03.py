@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.models.consensus import (
     ConsensusDecision,
     ConsensusDocument,
@@ -47,8 +47,15 @@ class TestAgentRecord:
         )
 
         restored = AgentRecord.model_validate_json(record.model_dump_json())
+        dumped = record.model_dump(mode="json")
 
         assert restored == record
+        assert dumped["provider"]["resume_handle"] == ProviderResumeHandle(
+            kind="codex",
+            thread_id="thread_abc123",
+            resume_cursor={"threadId": "thread_abc123"},
+        ).model_dump(mode="json")
+        assert "provider_thread_id" not in dumped["provider"]
         assert restored.provider.resume_cursor == {"threadId": "thread_abc123"}
 
     def test_status_transitions_are_validated(self):

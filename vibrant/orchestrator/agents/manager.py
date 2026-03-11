@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from vibrant.agents.runtime import AgentHandle, InputRequest, ProviderThreadHandle
+from vibrant.models.agent import ProviderResumeHandle
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
@@ -135,12 +136,15 @@ class AgentManagementService:
             provider_resume_cursor = handle_snapshot.provider_resume_cursor
             input_requests = list(handle_snapshot.input_requests)
         else:
+            provider_thread = ProviderResumeHandle.from_provider_metadata(record.provider) or ProviderResumeHandle(
+                kind=record.provider.kind
+            )
             state = record.status.value
             done = record.status in AgentRecord.TERMINAL_STATUSES
             awaiting_input = record.status.value == "awaiting_input"
-            provider_thread_id = record.provider.provider_thread_id
-            provider_thread_path = record.provider.thread_path
-            provider_resume_cursor = record.provider.resume_cursor
+            provider_thread_id = provider_thread.thread_id
+            provider_thread_path = provider_thread.thread_path
+            provider_resume_cursor = provider_thread.resume_cursor
             input_requests = []
 
         output = self._output_service.output_for_record(record) if self._output_service is not None else None
