@@ -82,8 +82,6 @@ The current async methods are:
 
 - `submit_gatekeeper_message(text)`
 - `answer_pending_question(answer, *, question=None)`
-- `execute_until_blocked()`
-- `execute_next_task()`
 
 Everything else documented as part of the stable facade currently uses a normal
 synchronous call/return flow.
@@ -356,23 +354,17 @@ Current notable cases include:
 
 Consumers should treat these as part of the operational contract.
 
-## Compatibility API
+## Workflow Control API
 
-The following facade methods remain available for legacy callers, but they are
-**compatibility entry points**, not the preferred long-term contract for new
-integrations:
+Workflow state transitions remain available on the facade:
 
-- `reload_from_disk()`
-- `execute_until_blocked()`
-- `execute_next_task()`
 - `can_transition_to(next_status)`
 - `transition_workflow_state(next_status)`
 
-These methods expose lower-level runtime-driving or persistence-shaped behavior
-that may continue to change as the orchestrator converges on a more explicit
-service-backed control plane.
+Task execution is driven by the concrete orchestrator (`run_next_task()` and
+`run_until_blocked()`), not by facade compatibility wrappers.
 
-`CodeAgentLifecycleResult` is stable for these compatibility flows, but new code
+`CodeAgentLifecycleResult` remains stable for concrete task-execution flows, but new code
 should avoid depending on raw merge details, Gatekeeper result internals, event
 lists, or worktree paths unless that information is later promoted into a more
 intentional stable read model.
@@ -478,7 +470,7 @@ When refactoring the orchestrator system:
 4. Prefer semantic intent methods over generic runtime-driver methods.
 5. Avoid introducing new external dependencies on backend internals.
 6. Add new public needs to the facade before exposing underlying services.
-7. Treat `execute_*` helpers as compatibility, not as the preferred direction.
+7. Keep task-driving helpers on the concrete orchestrator, not on the facade.
 
 ## Minimal Examples
 

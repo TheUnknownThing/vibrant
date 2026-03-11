@@ -300,8 +300,6 @@ class VibrantApp(App):
         assert self._orchestrator is not None
 
         automatic = self._roadmap_execution_mode() is RoadmapExecutionMode.AUTOMATIC
-        if automatic and not callable(getattr(self._orchestrator, "execute_until_blocked", None)):
-            automatic = False
 
         self._task_execution_in_progress = True
         self._set_status("Running roadmap workflow…" if automatic else "Running next roadmap task…")
@@ -310,21 +308,13 @@ class VibrantApp(App):
 
         try:
             if automatic:
-                execute_until_blocked = getattr(self._orchestrator, "execute_until_blocked", None)
-                if callable(execute_until_blocked):
-                    results = await execute_until_blocked()
-                    if results:
-                        self._handle_task_results(results)
-                    elif notify_when_idle:
-                        self._handle_task_result(None)
-                else:
-                    result = await self._orchestrator.execute_next_task()
-                    if result is not None:
-                        self._handle_task_result(result)
-                    elif notify_when_idle:
-                        self._handle_task_result(None)
+                results = await self._orchestrator.run_until_blocked()
+                if results:
+                    self._handle_task_results(results)
+                elif notify_when_idle:
+                    self._handle_task_result(None)
             else:
-                result = await self._orchestrator.execute_next_task()
+                result = await self._orchestrator.run_next_task()
                 if result is not None:
                     self._handle_task_result(result)
                 elif notify_when_idle:
@@ -762,7 +752,8 @@ class VibrantApp(App):
         consensus_path = snapshot.consensus_path
         roadmap_tasks = ()
         try:
-            roadmap = orchestrator.reload_from_disk()
+            assert self._orchestrator is not None
+            roadmap = self._orchestrator.refresh()
             refreshed = orchestrator.snapshot()
             consensus_document = refreshed.consensus
             consensus_path = refreshed.consensus_path
@@ -1023,8 +1014,8 @@ class VibrantApp(App):
                 return mapped
 
         roadmap_document = orchestrator.roadmap_document
-        if roadmap_document is None:
-            roadmap_document = orchestrator.reload_from_disk()
+        if roadmap_document is None and self._orchestrator is not None:
+            roadmap_document = self._orchestrator.refresh()
         return OrchestratorStatus.EXECUTING if getattr(roadmap_document, "tasks", None) else OrchestratorStatus.PLANNING
 
     def _transition_workflow_state(self, next_status: OrchestratorStatus) -> None:

@@ -4,10 +4,6 @@ The preferred surface is intentionally small:
 
 - stable reads via ``snapshot()`` and related helpers
 - stable user/operator intents such as Gatekeeper messaging and pause/resume
-
-Some runtime-driving methods remain temporarily available during the
-orchestrator migration, but callers should prefer the facade's stable read and
-workflow APIs over engine-shaped access.
 """
 
 from __future__ import annotations
@@ -37,7 +33,6 @@ from .types import (
     AgentSnapshotRuntime,
     AgentSnapshotWorkspace,
     OrchestratorAgentSnapshot,
-    TaskResult,
 )
 
 _WORKFLOW_TO_CONSENSUS = {
@@ -74,11 +69,9 @@ class OrchestratorFacade:
     - Gatekeeper/user intent entrypoints
     - semantic workflow actions such as pause/resume
 
-    Temporary runtime-oriented surface retained during migration:
-
-    - ``reload_from_disk()``
-    - ``execute_*`` runtime-driving helpers
-    - generic state-transition helpers
+    Workflow control remains available through semantic state-transition
+    helpers, but task execution is intentionally driven by the concrete
+    orchestrator services rather than by compatibility wrappers on this facade.
     """
 
     def __init__(self, orchestrator: Orchestrator | Any) -> None:
@@ -818,24 +811,6 @@ class OrchestratorFacade:
             return self.questions.current_question()
         questions = self.pending_questions()
         return questions[0] if questions else None
-
-    def reload_from_disk(self) -> RoadmapDocument:
-        reload_from_disk = getattr(self.orchestrator, "reload_from_disk", None)
-        if not callable(reload_from_disk):
-            raise AttributeError("Lifecycle does not support reload_from_disk")
-        return reload_from_disk()
-
-    async def execute_until_blocked(self) -> list[TaskResult]:
-        execute = getattr(self.orchestrator, "execute_until_blocked", None)
-        if not callable(execute):
-            raise AttributeError("Lifecycle does not support execute_until_blocked")
-        return await execute()
-
-    async def execute_next_task(self) -> TaskResult | None:
-        execute = getattr(self.orchestrator, "execute_next_task", None)
-        if not callable(execute):
-            raise AttributeError("Lifecycle does not support execute_next_task")
-        return await execute()
 
     def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
         state_store = self._state_store()

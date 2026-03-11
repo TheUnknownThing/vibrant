@@ -240,7 +240,7 @@ class Orchestrator:
             agent_manager=agent_manager,
             _config_holder=config_holder,
         )
-        orchestrator.reload_from_disk()
+        orchestrator.refresh()
         return orchestrator
 
     @property
@@ -263,7 +263,7 @@ class Orchestrator:
     def gatekeeper_busy(self) -> bool:
         return self.gatekeeper_runtime.busy
 
-    def reload_from_disk(self) -> RoadmapDocument:
+    def refresh(self) -> RoadmapDocument:
         self.config = load_config(start_path=self.project_root)
         self._config_holder["value"] = self.config
         self.state_store.refresh()
@@ -281,13 +281,13 @@ class Orchestrator:
     async def answer_pending_question(self, answer: str, *, question: str | None = None) -> Any:
         return await self.question_service.answer(answer, question=question)
 
-    async def execute_until_blocked(self) -> list[TaskResult]:
-        self.reload_from_disk()
-        return await self.execution_service.execute_until_blocked()
+    async def run_until_blocked(self) -> list[TaskResult]:
+        self.refresh()
+        return await self.agent_manager.execute_until_blocked()
 
-    async def execute_next_task(self) -> TaskResult | None:
-        self.reload_from_disk()
-        return await self.execution_service.execute_next_task()
+    async def run_next_task(self) -> TaskResult | None:
+        self.refresh()
+        return await self.agent_manager.execute_next_task()
 
 
 def create_orchestrator(
