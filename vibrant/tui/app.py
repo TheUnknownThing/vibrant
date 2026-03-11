@@ -1083,10 +1083,10 @@ class VibrantApp(App):
         return status in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}
 
     def _maybe_sync_post_planning_transition(self) -> bool:
-        if self._planning_screen() is None or self._orchestrator is None:
+        if self._planning_screen() is None or self._orchestrator_facade is None:
             return False
 
-        status = _normalize_orchestrator_status(self._orchestrator.workflow_status())
+        status = _normalize_orchestrator_status(self._orchestrator_facade.workflow_status())
         if status in {None, OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
             return False
 
