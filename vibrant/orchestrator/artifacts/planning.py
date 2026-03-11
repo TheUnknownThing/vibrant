@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.state import OrchestratorStatus
 
 from .questions import QuestionService
-from .review import ReviewService
 from .roadmap import RoadmapService
-from .state_store import StateStore
 from .workflow import WorkflowService
+from ..execution.review import ReviewService
+from ..state.store import StateStore
 
 
 class PlanningService:
@@ -36,12 +36,12 @@ class PlanningService:
         if not message:
             raise ValueError("Gatekeeper message cannot be empty")
 
-        if self.question_service.pending_questions():
+        if self.question_service.has_pending_questions():
             result = await self.question_service.answer(message)
         else:
             trigger = (
                 GatekeeperTrigger.PROJECT_START
-                if self.state_store.state.status is OrchestratorStatus.INIT
+                if self.state_store.status is OrchestratorStatus.INIT
                 else GatekeeperTrigger.USER_CONVERSATION
             )
             request = GatekeeperRequest(
@@ -55,7 +55,10 @@ class PlanningService:
             )
             self.state_store.apply_gatekeeper_result(result)
 
-        self.roadmap_service.merge_result(result.roadmap_document)
+        self.roadmap_service.reload(
+            project_name=self.roadmap_service.project_name,
+            concurrency_limit=self.state_store.state.concurrency_limit,
+        )
         self.roadmap_service.persist()
         self.workflow_service.maybe_complete_workflow()
         self.state_store.refresh()

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Sequence
 
 from vibrant.consensus import ConsensusParser, ConsensusWriter
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 
-from .state_store import StateStore
+from ..state.store import StateStore
 
 
 class ConsensusService:
@@ -37,7 +38,7 @@ class ConsensusService:
 
     def write(self, document: ConsensusDocument) -> ConsensusDocument:
         written = self.writer.write(self.consensus_path, document)
-        self.state_store.engine.consensus = written
+        self.state_store.set_consensus(written)
         return written
 
     def set_status(self, status: ConsensusStatus) -> ConsensusDocument | None:
@@ -51,5 +52,28 @@ class ConsensusService:
         updated = document.model_copy(deep=True)
         updated.status = status
         written = self.write(updated)
+        self.state_store.refresh()
+        return written
+
+    def update(
+        self,
+        *,
+        status: ConsensusStatus | str | None = None,
+        objectives: str | None = None,
+        getting_started: str | None = None,
+        questions: Sequence[str] | None = None,
+    ) -> ConsensusDocument:
+        document = self.load().model_copy(deep=True)
+
+        if status is not None:
+            document.status = status if isinstance(status, ConsensusStatus) else ConsensusStatus(str(status).strip().upper())
+        if objectives is not None:
+            document.objectives = objectives
+        if getting_started is not None:
+            document.getting_started = getting_started
+        if questions is not None:
+            document.questions = [question.strip() for question in questions if isinstance(question, str) and question.strip()]
+
+        written = self.write(document)
         self.state_store.refresh()
         return written

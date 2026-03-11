@@ -101,7 +101,6 @@ def _render_default_config() -> str:
         f'codex-binary = "{config.codex_binary}"',
         "launch-args = []",
         f'model = "{config.model}"',
-        f'model-provider = "{config.model_provider}"',
         f'approval-policy = "{config.approval_policy}"',
         f'reasoning-effort = "{config.reasoning_effort}"',
         f'reasoning-summary = "{config.reasoning_summary}"',
@@ -118,6 +117,8 @@ def _render_default_config() -> str:
         "test-commands = []",
         "",
     ]
+    if config.model_provider is not None:
+        lines.insert(4, f'model-provider = "{config.model_provider}"')
     return "\n".join(lines)
 
 

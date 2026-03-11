@@ -35,6 +35,7 @@ class CodexClient:
         *,
         cwd: str | None = None,
         codex_binary: str = "codex",
+        launch_args: list[str] | None = None,
         codex_home: str | None = None,
         on_notification: Callable[[JsonRpcNotification], Coroutine[Any, Any, None]] | None = None,
         on_stderr: Callable[[str], None] | None = None,
@@ -42,6 +43,7 @@ class CodexClient:
     ) -> None:
         self._cwd = cwd or os.getcwd()
         self._codex_binary = codex_binary
+        self._launch_args = launch_args
         self._codex_home = codex_home
         self._on_notification = on_notification
         self._on_stderr = on_stderr
@@ -64,9 +66,10 @@ class CodexClient:
         if self._codex_home:
             env["CODEX_HOME"] = self._codex_home
 
+        argv = list(self._launch_args) if self._launch_args else ["app-server"]
         self._process = await asyncio.create_subprocess_exec(
             self._codex_binary,
-            "app-server",
+            *argv,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -77,7 +80,7 @@ class CodexClient:
         self._running = True
         self._read_task = asyncio.create_task(self._read_loop(), name="codex-read")
         self._stderr_task = asyncio.create_task(self._stderr_loop(), name="codex-stderr")
-        logger.info("codex app-server started (pid=%s, cwd=%s)", self._process.pid, self._cwd)
+        logger.info("codex app-server started (pid=%s, cwd=%s, argv=%s)", self._process.pid, self._cwd, argv)
 
     async def stop(self) -> None:
         """Gracefully shut down the subprocess."""

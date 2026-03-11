@@ -44,6 +44,9 @@ class DummyProviderAdapter(ProviderAdapter):
     async def interrupt_turn(self, **kwargs: Any) -> Any:
         return kwargs
 
+    async def send_request(self, method: str, params=None, **kwargs: Any) -> Any:
+        return {"method": method, "params": params, **kwargs}
+
     async def respond_to_request(
         self,
         request_id: int | str,

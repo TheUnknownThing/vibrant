@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from vibrant.gatekeeper import GatekeeperRunResult
+from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
@@ -10,7 +10,7 @@ from vibrant.orchestrator.git_manager import GitWorktreeInfo
 from ..types import CodeAgentLifecycleResult
 from .git_workspace import GitWorkspaceService
 from .review import ReviewService
-from .roadmap import RoadmapService
+from ..artifacts.roadmap import RoadmapService
 
 
 class RetryPolicyService:

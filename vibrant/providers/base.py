@@ -11,6 +11,7 @@ Codex sandbox controls as follows:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
@@ -18,6 +19,53 @@ from typing import Any, TypeAlias
 
 CanonicalEvent: TypeAlias = dict[str, Any]
 CanonicalEventHandler: TypeAlias = Callable[[CanonicalEvent], Any]
+
+
+class CodexAuthMode(str, enum.Enum):
+    """Authentication strategies for Codex app-server sessions.
+
+    - ``SYSTEM``: rely on the user's existing Codex auth state on disk.
+    - ``API_KEY``: login with an OpenAI API key via ``account/login/start``.
+    - ``CHATGPT``: managed ChatGPT browser login via ``account/login/start``.
+    - ``CHATGPT_AUTH_TOKENS``: host-provided ChatGPT tokens via ``account/login/start``.
+    """
+
+    SYSTEM = "system"
+    API_KEY = "apiKey"
+    CHATGPT = "chatgpt"
+    CHATGPT_AUTH_TOKENS = "chatgptAuthTokens"
+
+
+@dataclass(slots=True)
+class CodexAuthConfig:
+    """Optional authentication configuration for a Codex session.
+
+    When ``mode`` is ``SYSTEM``, Vibrant does not call login RPCs and Codex
+    uses its default persisted configuration (typically under ``CODEX_HOME``).
+    """
+
+    mode: CodexAuthMode = CodexAuthMode.SYSTEM
+    api_key: str | None = None
+    id_token: str | None = None
+    access_token: str | None = None
+
+    def to_login_params(self) -> dict[str, Any] | None:
+        """Return ``account/login/start`` params for this configuration."""
+
+        if self.mode is CodexAuthMode.SYSTEM:
+            return None
+
+        params: dict[str, Any] = {"type": self.mode.value}
+        if self.mode is CodexAuthMode.API_KEY:
+            if not self.api_key:
+                raise ValueError("CodexAuthConfig.api_key is required for API_KEY auth mode")
+            params["apiKey"] = self.api_key
+        elif self.mode is CodexAuthMode.CHATGPT_AUTH_TOKENS:
+            if not self.id_token or not self.access_token:
+                raise ValueError("CodexAuthConfig.id_token and access_token are required for CHATGPT_AUTH_TOKENS")
+            params["idToken"] = self.id_token
+            params["accessToken"] = self.access_token
+        return params
 
 
 class RuntimeMode(str, enum.Enum):
@@ -94,6 +142,19 @@ class ProviderAdapter(ABC):
     @abstractmethod
     async def interrupt_turn(self, **kwargs: Any) -> Any:
         """Interrupt the currently running turn, if any."""
+
+    @abstractmethod
+    async def send_request(
+        self,
+        method: str,
+        params: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Send a provider-native control-plane request.
+
+        This surface is used for Codex management endpoints such as
+        ``skills/list``, ``config/mcpServer/reload``, and ``account/read``.
+        """
 
     @abstractmethod
     async def respond_to_request(

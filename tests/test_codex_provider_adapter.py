@@ -11,7 +11,7 @@ import pytest
 
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.wire import JsonRpcNotification
-from vibrant.providers.base import RuntimeMode
+from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 from vibrant.providers.codex.client import CodexClientError
 
@@ -88,6 +88,22 @@ class TestCodexProviderAdapter:
         assert [event["type"] for event in events[:2]] == ["session.started", "thread.started"]
 
     @pytest.mark.asyncio
+    async def test_start_thread_omits_model_provider_when_unset(self):
+        client = FakeCodexClient()
+        client.responses["thread/start"] = {"thread": {"id": "thread_abc123"}}
+        adapter = CodexProviderAdapter(client=client)
+
+        await adapter.start_thread(
+            model="gpt-5.3-codex",
+            cwd="/tmp/project",
+            runtime_mode=RuntimeMode.WORKSPACE_WRITE,
+            approval_policy="never",
+        )
+
+        assert client.calls[0][0] == "thread/start"
+        assert "modelProvider" not in client.calls[0][1]
+
+    @pytest.mark.asyncio
     async def test_notification_delta_maps_to_canonical_content_delta(self):
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
@@ -104,6 +120,26 @@ class TestCodexProviderAdapter:
         assert events[0]["item_id"] == "item-1"
         assert events[0]["turn_id"] == "turn-1"
         assert events[0]["delta"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_summary_delta_maps_to_canonical_event(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/reasoning/summaryTextDelta",
+                params={"itemId": "item-r1", "turnId": "turn-1", "delta": "summary", "summaryIndex": 0},
+            )
+        )
+
+        assert [event["type"] for event in events] == ["task.progress", "reasoning.summary.delta"]
+        assert events[0]["item"]["type"] == "reasoning"
+        assert events[0]["item"]["text"] == "summary"
+        assert events[1]["item_id"] == "item-r1"
+        assert events[1]["turn_id"] == "turn-1"
+        assert events[1]["delta"] == "summary"
+        assert events[1]["summary_index"] == 0
 
     @pytest.mark.asyncio
     async def test_turn_completed_maps_to_canonical_turn_completed(self):
@@ -139,6 +175,164 @@ class TestCodexProviderAdapter:
         assert events[0]["request_kind"] == "approval"
         assert client.server_responses == [(10, {"approved": True}, None)]
         assert events[1]["type"] == "request.resolved"
+
+    @pytest.mark.asyncio
+    async def test_send_request_delegates_to_client(self):
+        client = FakeCodexClient()
+        client.responses["skills/list"] = {"data": []}
+        adapter = CodexProviderAdapter(client=client)
+
+        result = await adapter.send_request("skills/list", {"cwds": ["/tmp"]})
+
+        assert result == {"data": []}
+        assert client.calls[0] == ("skills/list", {"cwds": ["/tmp"]})
+
+    @pytest.mark.asyncio
+    async def test_start_session_with_custom_auth_calls_account_login_start(self):
+        client = FakeCodexClient()
+        client.responses["initialize"] = {"serverInfo": {"name": "codex"}}
+        client.responses["account/login/start"] = {"type": "apiKey"}
+        adapter = CodexProviderAdapter(client=client)
+
+        await adapter.start_session(
+            cwd="/tmp/project",
+            auth_config=CodexAuthConfig(mode=CodexAuthMode.API_KEY, api_key="sk-test"),
+        )
+
+        methods = [call[0] for call in client.calls]
+        assert methods == ["start", "initialize", "notify:initialized", "account/login/start"]
+        assert client.calls[3][1]["type"] == "apiKey"
+        assert client.calls[3][1]["apiKey"] == "sk-test"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_item_completed_sanitizes_raw_content(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/completed",
+                params={
+                    "item": {
+                        "type": "reasoning",
+                        "id": "r1",
+                        "summary": ["line 1", "line 2"],
+                        "content": [{"type": "text", "text": "raw reasoning"}],
+                    }
+                },
+            )
+        )
+
+        assert len(events) == 1
+        assert events[0]["type"] == "task.progress"
+        item = events[0]["item"]
+        assert item.get("text") == "line 1\nline 2"
+        assert "content" not in item
+
+    @pytest.mark.asyncio
+    async def test_reasoning_completed_does_not_duplicate_visible_summary_delta(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/reasoning/summaryTextDelta",
+                params={"itemId": "item-r1", "turnId": "turn-1", "delta": "line 1\nline 2", "summaryIndex": 0},
+            )
+        )
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/completed",
+                params={
+                    "turnId": "turn-1",
+                    "item": {
+                        "type": "reasoning",
+                        "id": "item-r1",
+                        "summary": ["line 1", "line 2"],
+                        "content": [{"type": "text", "text": "raw reasoning"}],
+                    },
+                },
+            )
+        )
+
+        assert [event["type"] for event in events] == ["task.progress", "reasoning.summary.delta"]
+
+    @pytest.mark.asyncio
+    async def test_command_execution_output_delta_maps_to_task_progress(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/started",
+                params={
+                    "turnId": "turn-1",
+                    "item": {
+                        "type": "commandExecution",
+                        "id": "cmd-1",
+                        "command": "pwd",
+                        "cwd": "/tmp/project",
+                        "status": "inProgress",
+                    },
+                },
+            )
+        )
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="item/commandExecution/outputDelta",
+                params={"itemId": "cmd-1", "turnId": "turn-1", "delta": "/tmp/project\n"},
+            )
+        )
+
+        assert [event["type"] for event in events] == ["task.progress", "task.progress"]
+        assert events[0]["item"]["text"] == "$ pwd"
+        assert events[1]["item"]["text"] == "/tmp/project\n"
+        assert events[1]["item"]["type"] == "commandExecution"
+
+    @pytest.mark.asyncio
+    async def test_legacy_exec_command_begin_and_end_map_to_task_progress(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="codex/event/exec_command_begin",
+                params={
+                    "msg": {
+                        "call_id": "call-1",
+                        "turn_id": "turn-1",
+                        "process_id": "123",
+                        "command": ["/bin/zsh", "-lc", "pwd"],
+                        "cwd": "/tmp/project",
+                        "parsed_cmd": [{"type": "unknown", "cmd": "pwd"}],
+                    }
+                },
+            )
+        )
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="codex/event/exec_command_end",
+                params={
+                    "msg": {
+                        "call_id": "call-1",
+                        "turn_id": "turn-1",
+                        "process_id": "123",
+                        "command": ["/bin/zsh", "-lc", "pwd"],
+                        "cwd": "/tmp/project",
+                        "parsed_cmd": [{"type": "unknown", "cmd": "pwd"}],
+                        "stdout": "/tmp/project\n",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "duration": {"secs": 0, "nanos": 5_000_000},
+                    }
+                },
+            )
+        )
+
+        assert [event["type"] for event in events] == ["task.progress", "task.progress"]
+        assert events[0]["item"]["text"] == "$ /bin/zsh -lc pwd"
+        assert "command completed (exit 0) [5ms]" in events[1]["item"]["text"]
+        assert "/tmp/project" in events[1]["item"]["text"]
 
     @pytest.mark.asyncio
     async def test_resume_thread_uses_thread_resume(self):
