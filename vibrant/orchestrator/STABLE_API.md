@@ -60,7 +60,7 @@ implementation without forcing matching changes in every caller.
 
 ## Integration Model
 
-The intended integration pattern is:
+The intended integration pattern for **stable external consumers** is:
 
 1. Create or obtain an orchestrator root through app/project bootstrapping.
 2. Wrap it in `OrchestratorFacade`.
@@ -73,6 +73,13 @@ The stable consumer contract begins at the facade and the public read models.
 The exact shape of the orchestrator root consumed by
 `OrchestratorFacade(...)` is intentionally **not** the public integration
 contract.
+
+For first-party orchestrator assembly, this does **not** mean MCP wiring must
+depend only on `OrchestratorFacade`. MCP resources and tools may call into
+internal orchestrator services directly when that produces a cleaner or more
+capable implementation. The stable contract is the exposed MCP resource/tool
+shape and the documented public facade surface for external consumers — not a
+hard rule that every MCP handler must route through the facade.
 
 ## Sync vs Async Surface
 
@@ -379,15 +386,19 @@ intentional stable read model.
 
 ## `OrchestratorMCPServer` Stable Surface
 
-`OrchestratorMCPServer` is the stable typed in-process MCP registry layered on
-top of `OrchestratorFacade`.
+`OrchestratorMCPServer` is the stable typed in-process MCP registry for the
+orchestrator control plane.
 
 It is responsible for:
 
 - listing scope-filtered MCP resources
 - listing scope-filtered MCP tools
 - enforcing shared authorization scopes from `vibrant.mcp.authz`
-- dispatching MCP calls into facade-backed handlers
+- dispatching MCP calls into orchestrator-backed handlers
+
+Current implementations may back those handlers with `OrchestratorFacade`,
+direct service calls, or a mix of both. That choice is an internal layering
+decision, not part of the stable MCP contract.
 
 It is **not** a promise about a specific network transport. The stable contract
 is the in-process registry shape and the resource/tool names documented here.

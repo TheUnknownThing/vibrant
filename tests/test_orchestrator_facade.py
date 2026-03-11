@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.state import OrchestratorState
-from vibrant.orchestrator import OrchestratorAgentSnapshot, OrchestratorFacade
+from vibrant.orchestrator import Orchestrator, OrchestratorAgentSnapshot, OrchestratorFacade
 from vibrant.orchestrator.types import (
+    AgentOutput,
     AgentSnapshotIdentity,
     AgentSnapshotOutcome,
     AgentSnapshotProvider,
@@ -67,6 +69,7 @@ class _FakeAgentManager:
 
 
 def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
+    output = AgentOutput(agent_id="agent-1", task_id="task-1", partial_text="Still working")
     managed = OrchestratorAgentSnapshot(
         identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", agent_type="code"),
         runtime=AgentSnapshotRuntime(
@@ -80,7 +83,7 @@ def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
             started_at=datetime.now(timezone.utc),
         ),
         workspace=AgentSnapshotWorkspace(branch="vibrant/task-1", worktree_path="/tmp/worktree"),
-        outcome=AgentSnapshotOutcome(summary="Waiting on user input"),
+        outcome=AgentSnapshotOutcome(summary="Waiting on user input", output=output),
         provider=AgentSnapshotProvider(
             thread_id="thread-1",
             thread_path="/tmp/thread.json",
@@ -103,6 +106,7 @@ def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
     assert snapshot.runtime.has_handle is True
     assert snapshot.runtime.awaiting_input is True
     assert snapshot.provider.thread_id == "thread-1"
+    assert facade.agent_output("agent-1") is output
 
     listed = facade.list_active_agents()
     assert [item.identity.agent_id for item in listed] == ["agent-1"]
@@ -180,3 +184,122 @@ def test_facade_raises_for_invalid_managed_agent_snapshot() -> None:
 
     with pytest.raises(ValueError, match="Unsupported agent status"):
         facade.get_agent("agent-1")
+
+
+class _FakeSubscribedOrchestrator:
+    def __init__(self, snapshots: list[object]) -> None:
+        self.agent_manager = _FakeAgentManager(snapshots)
+        self.engine = SimpleNamespace(state=OrchestratorState(session_id="session-subscribe"))
+        self.execution_mode = "manual"
+        self._subscriptions: list[tuple[object, str | None, str | None, object]] = []
+
+    def subscribe_raw_events(self, handler, *, agent_id=None, task_id=None, event_types=None):
+        entry = (handler, agent_id, task_id, event_types)
+        self._subscriptions.append(entry)
+
+        def unsubscribe() -> None:
+            try:
+                self._subscriptions.remove(entry)
+            except ValueError:
+                return
+
+        return unsubscribe
+
+
+@pytest.mark.asyncio
+async def test_facade_subscribe_agent_updates_emits_snapshots() -> None:
+    managed = OrchestratorAgentSnapshot(
+        identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", agent_type="code"),
+        runtime=AgentSnapshotRuntime(
+            status="running",
+            state="running",
+            has_handle=False,
+            active=True,
+            done=False,
+            awaiting_input=False,
+        ),
+    )
+    lifecycle = _FakeSubscribedOrchestrator([managed])
+    facade = OrchestratorFacade(lifecycle)
+    seen: list[OrchestratorAgentSnapshot] = []
+
+    unsubscribe = facade.subscribe_agent_updates(seen.append, agent_id="agent-1")
+    handler, agent_id, task_id, event_types = lifecycle._subscriptions[0]
+
+    assert agent_id == "agent-1"
+    assert task_id is None
+    assert event_types is None
+
+    await handler({"agent_id": "agent-1", "task_id": "task-1", "type": "turn.started"})
+
+    assert [item.identity.agent_id for item in seen] == ["agent-1"]
+
+    unsubscribe()
+    assert lifecycle._subscriptions == []
+
+
+def _make_test_orchestrator() -> Orchestrator:
+    state_store = SimpleNamespace(refresh=lambda: None, state=SimpleNamespace(concurrency_limit=1))
+    roadmap_service = SimpleNamespace(parser=None, document=None, reload=lambda **_: None, dispatcher=None)
+    return Orchestrator(
+        project_root=Path("/tmp/project"),
+        vibrant_dir=Path("/tmp/project/.vibrant"),
+        roadmap_path=Path("/tmp/project/.vibrant/roadmap.md"),
+        consensus_path=Path("/tmp/project/.vibrant/consensus.md"),
+        skills_dir=Path("/tmp/project/.vibrant/skills"),
+        config=SimpleNamespace(execution_mode="manual"),
+        state_backend=SimpleNamespace(),
+        gatekeeper=SimpleNamespace(),
+        git_manager=SimpleNamespace(),
+        adapter_factory=SimpleNamespace(),
+        on_canonical_event=None,
+        agent_output_service=SimpleNamespace(),
+        state_store=state_store,
+        agent_store=SimpleNamespace(),
+        roadmap_service=roadmap_service,
+        consensus_service=SimpleNamespace(),
+        agent_registry=SimpleNamespace(),
+        question_service=SimpleNamespace(),
+        git_service=SimpleNamespace(),
+        prompt_service=SimpleNamespace(),
+        workflow_service=SimpleNamespace(),
+        gatekeeper_runtime=SimpleNamespace(busy=False),
+        review_service=SimpleNamespace(),
+        planning_service=SimpleNamespace(),
+        runtime_service=SimpleNamespace(),
+        retry_service=SimpleNamespace(),
+        execution_service=SimpleNamespace(),
+        agent_manager=SimpleNamespace(),
+        _config_holder={"value": SimpleNamespace(execution_mode="manual")},
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_subscribe_raw_events_filters_and_unsubscribes() -> None:
+    orchestrator = _make_test_orchestrator()
+    seen: list[dict[str, str]] = []
+
+    unsubscribe = orchestrator.subscribe_raw_events(
+        seen.append,
+        agent_id="agent-1",
+        task_id="task-1",
+        event_types={"turn.started"},
+    )
+
+    await orchestrator._publish_raw_event(
+        {"agent_id": "agent-1", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:00Z"}
+    )
+    await orchestrator._publish_raw_event(
+        {"agent_id": "agent-2", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:01Z"}
+    )
+
+    assert seen == [
+        {"agent_id": "agent-1", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:00Z"}
+    ]
+
+    unsubscribe()
+    await orchestrator._publish_raw_event(
+        {"agent_id": "agent-1", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:02Z"}
+    )
+
+    assert len(seen) == 1

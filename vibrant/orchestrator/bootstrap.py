@@ -20,8 +20,8 @@ from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
-from .agent_output import AgentOutputProjectionService
 from .agents.manager import AgentManagementService
+from .agents.output_projection import AgentOutputProjectionService
 from .agents.registry import AgentRegistry
 from .agents.runtime import AgentRuntimeService
 from .agents.store import AgentRecordStore
@@ -42,6 +42,14 @@ from .task_dispatch import TaskDispatcher
 from .types import TaskResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
+
+
+@dataclass(slots=True)
+class _RawEventSubscription:
+    handler: Any
+    agent_id: str | None = None
+    task_id: str | None = None
+    event_types: frozenset[str] | None = None
 
 
 @dataclass(slots=True)
@@ -77,6 +85,7 @@ class Orchestrator:
     execution_service: TaskExecutionService
     agent_manager: AgentManagementService
     _config_holder: dict[str, VibrantConfig] = field(repr=False)
+    _raw_event_subscribers: list[_RawEventSubscription] = field(default_factory=list, repr=False)
 
     @classmethod
     def load(
@@ -100,10 +109,12 @@ class Orchestrator:
         config = load_config(start_path=root)
         config_holder = {"value": config}
         backend = state_backend or OrchestratorStateBackend.load(root)
+        raw_event_subscribers: list[_RawEventSubscription] = []
         agent_output_service = AgentOutputProjectionService()
 
         async def handle_canonical_event(event: CanonicalEvent) -> None:
             agent_output_service.ingest(event)
+            await _dispatch_raw_event_subscribers(raw_event_subscribers, event)
             await maybe_forward_event(on_canonical_event, event)
 
         resolved_gatekeeper = gatekeeper or Gatekeeper(
@@ -239,6 +250,7 @@ class Orchestrator:
             execution_service=execution_service,
             agent_manager=agent_manager,
             _config_holder=config_holder,
+            _raw_event_subscribers=raw_event_subscribers,
         )
         orchestrator.reload_from_disk()
         return orchestrator
@@ -288,6 +300,40 @@ class Orchestrator:
     async def execute_next_task(self) -> TaskResult | None:
         self.reload_from_disk()
         return await self.execution_service.execute_next_task()
+
+    async def _publish_raw_event(self, event: CanonicalEvent) -> None:
+        await _dispatch_raw_event_subscribers(self._raw_event_subscribers, event)
+
+    def subscribe_raw_events(
+        self,
+        handler: Any,
+        *,
+        agent_id: str | None = None,
+        task_id: str | None = None,
+        event_types: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> Callable[[], None]:
+        normalized_event_types = None
+        if event_types is not None:
+            normalized_event_types = frozenset(
+                event_type.strip()
+                for event_type in event_types
+                if isinstance(event_type, str) and event_type.strip()
+            )
+        subscription = _RawEventSubscription(
+            handler=handler,
+            agent_id=agent_id,
+            task_id=task_id,
+            event_types=normalized_event_types,
+        )
+        self._raw_event_subscribers.append(subscription)
+
+        def unsubscribe() -> None:
+            try:
+                self._raw_event_subscribers.remove(subscription)
+            except ValueError:
+                return
+
+        return unsubscribe
 
 
 def create_orchestrator(
@@ -353,6 +399,26 @@ def _build_default_agent_runtime_factory(
         return BaseAgentRuntime(agent)
 
     return _build
+
+
+async def _dispatch_raw_event_subscribers(
+    subscribers: list[_RawEventSubscription],
+    event: CanonicalEvent,
+) -> None:
+    for subscription in tuple(subscribers):
+        if not _raw_event_matches(subscription, event):
+            continue
+        await maybe_forward_event(subscription.handler, event)
+
+
+def _raw_event_matches(subscription: _RawEventSubscription, event: CanonicalEvent) -> bool:
+    if subscription.agent_id is not None and event.get("agent_id") != subscription.agent_id:
+        return False
+    if subscription.task_id is not None and event.get("task_id") != subscription.task_id:
+        return False
+    if subscription.event_types is not None and str(event.get("type") or "") not in subscription.event_types:
+        return False
+    return True
 
 
 __all__ = ["Orchestrator", "create_orchestrator"]
