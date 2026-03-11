@@ -13,7 +13,7 @@ from vibrant.mcp.authz import (
     orchestrator_gatekeeper_scopes,
 )
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionStatus
-from vibrant.orchestrator.engine import OrchestratorEngine
+from vibrant.orchestrator import OrchestratorStateBackend
 from vibrant.orchestrator.facade import OrchestratorFacade
 from vibrant.orchestrator.mcp import OrchestratorMCPServer
 from vibrant.orchestrator.artifacts import ConsensusService
@@ -33,7 +33,7 @@ def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, Quest
     repo.mkdir()
     initialize_project(repo)
 
-    engine = OrchestratorEngine.load(repo, notification_bell_enabled=False)
+    engine = OrchestratorStateBackend.load(repo, notification_bell_enabled=False)
     state_store = StateStore(engine)
     roadmap_service = RoadmapService(repo / ".vibrant" / "roadmap.md", project_name=repo.name)
     roadmap_service.reload(project_name=repo.name, concurrency_limit=engine.state.concurrency_limit)

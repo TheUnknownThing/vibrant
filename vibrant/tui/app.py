@@ -18,7 +18,7 @@ from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..gatekeeper import PLANNING_COMPLETE_MCP_SENTINEL, PLANNING_COMPLETE_MCP_TOOL
 from ..history import HistoryStore
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo
-from ..orchestrator import CodeAgentLifecycle, CodeAgentLifecycleResult, OrchestratorFacade
+from ..orchestrator import CodeAgentLifecycleResult, Orchestrator, OrchestratorFacade, create_orchestrator
 from ..project_init import ensure_project_files, initialize_project
 from .screens import HelpScreen, InitializationScreen, PlanningScreen, VibingScreen
 from .widgets.chat_panel import ChatPanel
@@ -26,7 +26,7 @@ from .widgets.input_bar import InputBar
 from .widgets.settings_panel import SettingsPanel
 
 logger = logging.getLogger(__name__)
-LifecycleFactory = Callable[..., CodeAgentLifecycle]
+LifecycleFactory = Callable[..., Orchestrator]
 WorkspaceScreen = PlanningScreen | VibingScreen
 
 class VibrantApp(App):
@@ -83,8 +83,10 @@ class VibrantApp(App):
 
         self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
         self._history = HistoryStore(self._resolve_history_dir(self._settings.history_dir))
-        self._lifecycle_factory = lifecycle_factory or CodeAgentLifecycle
-        self._lifecycle: CodeAgentLifecycle | None = None
+        # TODO(step 3): rename the remaining lifecycle-oriented TUI terminology
+        # now that bootstrapping is handled by ``create_orchestrator``.
+        self._lifecycle_factory = lifecycle_factory or create_orchestrator
+        self._lifecycle: Orchestrator | None = None
         self._orchestrator: OrchestratorFacade | None = None
         self._workspace_screen: WorkspaceScreen | None = None
         self._task_execution_in_progress = False
