@@ -225,8 +225,3 @@ class TaskExecutionService:
             prior_gatekeeper_result=gatekeeper_result,
             notify_gatekeeper_on_retry=False,
         )
-
-    async def _execute_task(self, task: TaskInfo) -> TaskResult:
-        """Compatibility wrapper for the legacy one-shot flow."""
-        attempt = await self.start_task_attempt(task)
-        return await self.wait_for_task_attempt(attempt)

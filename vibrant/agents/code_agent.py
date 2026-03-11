@@ -12,7 +12,7 @@ from .base import AgentBase
 
 if TYPE_CHECKING:
     from vibrant.models.task import TaskInfo
-    from vibrant.orchestrator.git_manager import GitWorktreeInfo
+    from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
 
 class CodeAgent(AgentBase):

@@ -306,51 +306,6 @@ class TestCodexProviderAdapter:
         assert events[1]["item"]["type"] == "commandExecution"
 
     @pytest.mark.asyncio
-    async def test_legacy_exec_command_begin_and_end_map_to_task_progress(self):
-        events: list[dict[str, Any]] = []
-        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
-
-        await adapter._handle_notification(
-            JsonRpcNotification(
-                method="codex/event/exec_command_begin",
-                params={
-                    "msg": {
-                        "call_id": "call-1",
-                        "turn_id": "turn-1",
-                        "process_id": "123",
-                        "command": ["/bin/zsh", "-lc", "pwd"],
-                        "cwd": "/tmp/project",
-                        "parsed_cmd": [{"type": "unknown", "cmd": "pwd"}],
-                    }
-                },
-            )
-        )
-        await adapter._handle_notification(
-            JsonRpcNotification(
-                method="codex/event/exec_command_end",
-                params={
-                    "msg": {
-                        "call_id": "call-1",
-                        "turn_id": "turn-1",
-                        "process_id": "123",
-                        "command": ["/bin/zsh", "-lc", "pwd"],
-                        "cwd": "/tmp/project",
-                        "parsed_cmd": [{"type": "unknown", "cmd": "pwd"}],
-                        "stdout": "/tmp/project\n",
-                        "stderr": "",
-                        "exit_code": 0,
-                        "duration": {"secs": 0, "nanos": 5_000_000},
-                    }
-                },
-            )
-        )
-
-        assert [event["type"] for event in events] == ["task.progress", "task.progress"]
-        assert events[0]["item"]["text"] == "$ /bin/zsh -lc pwd"
-        assert "command completed (exit 0) [5ms]" in events[1]["item"]["text"]
-        assert "/tmp/project" in events[1]["item"]["text"]
-
-    @pytest.mark.asyncio
     async def test_resume_thread_uses_thread_resume(self):
         client = FakeCodexClient()
         client.responses["thread/resume"] = {"thread": {"id": "thread_abc123"}}

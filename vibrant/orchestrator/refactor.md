@@ -80,7 +80,6 @@ Persistence should continue to flow through existing structured helpers where po
 - `vibrant.consensus.writer`
 - `vibrant.consensus.roadmap`
 
-A small shared helper for machine-managed Markdown sections should be introduced as a support layer for consensus, roadmap, and future orchestrator-owned docs. See [docs/structured_markdown.md](/home/rogerw/project/vibrant/docs/structured_markdown.md).
 
 ## New Orchestrator Boundary
 

@@ -36,9 +36,9 @@ from .execution.retry_policy import RetryPolicyService
 from .execution.review import ReviewService
 from .execution.service import TaskExecutionService
 from .gatekeeper_runtime import GatekeeperRuntimeService
-from .git_manager import GitManager
+from .execution.dispatcher import TaskDispatcher
+from .execution.git_manager import GitManager
 from .state.store import StateStore
-from .task_dispatch import TaskDispatcher
 from .types import TaskResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
@@ -168,9 +168,6 @@ class Orchestrator:
 
         runtime_service = AgentRuntimeService(
             agent_registry=agent_registry,
-            adapter_factory=resolved_adapter_factory,
-            config_getter=lambda: config_holder["value"],
-            on_canonical_event=handle_canonical_event,
             agent_runtime=runtime_factory,
         )
         gatekeeper_runtime = GatekeeperRuntimeService(
@@ -252,7 +249,7 @@ class Orchestrator:
             _config_holder=config_holder,
             _raw_event_subscribers=raw_event_subscribers,
         )
-        orchestrator.reload_from_disk()
+        orchestrator.refresh()
         return orchestrator
 
     @property
@@ -275,7 +272,7 @@ class Orchestrator:
     def gatekeeper_busy(self) -> bool:
         return self.gatekeeper_runtime.busy
 
-    def reload_from_disk(self) -> RoadmapDocument:
+    def refresh(self) -> RoadmapDocument:
         self.config = load_config(start_path=self.project_root)
         self._config_holder["value"] = self.config
         self.state_store.refresh()
@@ -293,13 +290,13 @@ class Orchestrator:
     async def answer_pending_question(self, answer: str, *, question: str | None = None) -> Any:
         return await self.question_service.answer(answer, question=question)
 
-    async def execute_until_blocked(self) -> list[TaskResult]:
-        self.reload_from_disk()
-        return await self.execution_service.execute_until_blocked()
+    async def run_until_blocked(self) -> list[TaskResult]:
+        self.refresh()
+        return await self.agent_manager.execute_until_blocked()
 
-    async def execute_next_task(self) -> TaskResult | None:
-        self.reload_from_disk()
-        return await self.execution_service.execute_next_task()
+    async def run_next_task(self) -> TaskResult | None:
+        self.refresh()
+        return await self.agent_manager.execute_next_task()
 
     async def _publish_raw_event(self, event: CanonicalEvent) -> None:
         await _dispatch_raw_event_subscribers(self._raw_event_subscribers, event)

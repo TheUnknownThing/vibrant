@@ -396,7 +396,7 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     gatekeeper = FakeGatekeeper(repo)
 
     lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
-    result = await lifecycle.execute_next_task()
+    result = await lifecycle.run_next_task()
 
     assert result is not None
     assert result.outcome == "accepted"
@@ -577,8 +577,8 @@ async def test_code_agent_lifecycle_retries_after_gatekeeper_reprompt(tmp_path):
 
     lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
 
-    first = await lifecycle.execute_next_task()
-    second = await lifecycle.execute_next_task()
+    first = await lifecycle.run_next_task()
+    second = await lifecycle.run_next_task()
 
     assert first is not None and first.outcome == "retried"
     assert first.task_status is TaskStatus.QUEUED
@@ -604,7 +604,7 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
     assert lifecycle.dispatcher is not None
     lifecycle.dispatcher.get_task("task-001").max_retries = 0
 
-    result = await lifecycle.execute_next_task()
+    result = await lifecycle.run_next_task()
 
     assert result is not None
     assert result.outcome == "escalated"
@@ -615,7 +615,7 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
     roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")
     assert roadmap.tasks[0].status is TaskStatus.ESCALATED
     assert lifecycle.state_backend.state.pending_questions == [gatekeeper.escalation_question]
-    assert await lifecycle.execute_next_task() is None
+    assert await lifecycle.run_next_task() is None
 
 
 @pytest.mark.asyncio

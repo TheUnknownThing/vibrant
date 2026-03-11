@@ -160,7 +160,7 @@ class TestOrchestratorEnginePersistence:
             ),
         )
         completed_agent = AgentRecord(
-            identity={"agent_id": "agent-task-002", "task_id": "task-002", "type": AgentType.TEST},
+            identity={"agent_id": "agent-task-002", "task_id": "task-002", "type": AgentType.MERGE},
             lifecycle={"status": AgentStatus.COMPLETED},
         )
         failed_agent = AgentRecord(

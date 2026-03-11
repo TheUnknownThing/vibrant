@@ -4,23 +4,18 @@ The preferred surface is intentionally small:
 
 - stable reads via ``snapshot()`` and related helpers
 - stable user/operator intents such as Gatekeeper messaging and pause/resume
-
-Some runtime-driving methods remain temporarily available during the
-orchestrator migration, but callers should prefer the facade's stable read and
-workflow APIs over engine-shaped access.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 from typing import Any
 
 from vibrant.agents.utils import maybe_forward_event
 
 from vibrant.config import RoadmapExecutionMode
-from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
+from vibrant.consensus import RoadmapDocument
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.consensus import ConsensusStatus
@@ -28,7 +23,7 @@ from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionR
 from vibrant.models.task import TaskInfo, TaskStatus
 
 from .bootstrap import Orchestrator
-from .task_dispatch import TaskDispatcher
+from .execution.dispatcher import TaskDispatcher
 from .types import (
     AgentOutput,
     AgentSnapshotIdentity,
@@ -37,7 +32,6 @@ from .types import (
     AgentSnapshotRuntime,
     AgentSnapshotWorkspace,
     OrchestratorAgentSnapshot,
-    TaskResult,
 )
 
 _WORKFLOW_TO_CONSENSUS = {
@@ -74,57 +68,43 @@ class OrchestratorFacade:
     - Gatekeeper/user intent entrypoints
     - semantic workflow actions such as pause/resume
 
-    Temporary runtime-oriented surface retained during migration:
-
-    - ``reload_from_disk()``
-    - ``execute_*`` runtime-driving helpers
-    - generic state-transition helpers
+    Workflow control remains available through semantic state-transition
+    helpers, but task execution is intentionally driven by the concrete
+    orchestrator services rather than by compatibility wrappers on this facade.
     """
 
     def __init__(self, orchestrator: Orchestrator | Any) -> None:
         self.orchestrator = orchestrator
         self.questions = getattr(orchestrator, "question_service", None)
 
-    def _engine(self) -> Any | None:
-        backend = getattr(self.orchestrator, "state_backend", None)
-        if backend is not None:
-            return backend
-        return getattr(self.orchestrator, "engine", None)
-
     def _state_store(self) -> Any | None:
         return getattr(self.orchestrator, "state_store", None)
+
+    def _roadmap_service(self) -> Any | None:
+        return getattr(self.orchestrator, "roadmap_service", None)
+
+    def _consensus_service(self) -> Any | None:
+        return getattr(self.orchestrator, "consensus_service", None)
 
     def _agent_manager(self) -> Any | None:
         return getattr(self.orchestrator, "agent_manager", None)
 
-    def _pending_questions_from_engine(self) -> list[str]:
+    def _pending_questions(self) -> list[str]:
         state_store = self._state_store()
         pending_questions = getattr(state_store, "pending_questions", None)
         if callable(pending_questions):
             return list(pending_questions())
+        return []
 
-        engine = self._engine()
-        state = getattr(engine, "state", None)
-        questions = getattr(state, "pending_questions", None)
-        if not questions:
-            return []
-        return [question for question in questions if isinstance(question, str) and question]
-
-    def _question_records_from_engine(self) -> tuple[QuestionRecord, ...]:
+    def _question_records(self) -> tuple[QuestionRecord, ...]:
         state_store = self._state_store()
         state = getattr(state_store, "state", None)
         records = getattr(state, "questions", None)
         if isinstance(records, list):
             return tuple(record for record in records if isinstance(record, QuestionRecord))
+        return ()
 
-        engine = self._engine()
-        state = getattr(engine, "state", None)
-        records = getattr(state, "questions", None)
-        if not isinstance(records, list):
-            return ()
-        return tuple(record for record in records if isinstance(record, QuestionRecord))
-
-    def _agent_records_from_engine(self) -> tuple[AgentRecord, ...]:
+    def _agent_records(self) -> tuple[AgentRecord, ...]:
         agent_manager = self._agent_manager()
         list_records = getattr(agent_manager, "list_records", None)
         if callable(list_records):
@@ -134,11 +114,6 @@ class OrchestratorFacade:
         agent_records = getattr(state_store, "agent_records", None)
         if callable(agent_records):
             return tuple(record for record in agent_records() if isinstance(record, AgentRecord))
-
-        engine = self._engine()
-        list_agent_records = getattr(engine, "list_agent_records", None)
-        if callable(list_agent_records):
-            return tuple(record for record in list_agent_records() if isinstance(record, AgentRecord))
         return ()
 
     @staticmethod
@@ -320,17 +295,19 @@ class OrchestratorFacade:
         )
 
     def _fallback_agent_snapshots(self) -> list[OrchestratorAgentSnapshot]:
-        return [self._snapshot_from_record(record) for record in self._agent_records_from_engine()]
+        return [self._snapshot_from_record(record) for record in self._agent_records()]
 
     @staticmethod
     def _task_summary_timestamp(record: object) -> float:
-        started_at = getattr(record, "started_at", None)
+        lifecycle = getattr(record, "lifecycle", None)
+
+        started_at = getattr(lifecycle, "started_at", getattr(record, "started_at", None))
         if started_at is not None:
             timestamp = getattr(started_at, "timestamp", None)
             if callable(timestamp):
                 return float(timestamp())
 
-        finished_at = getattr(record, "finished_at", None)
+        finished_at = getattr(lifecycle, "finished_at", getattr(record, "finished_at", None))
         if finished_at is not None:
             timestamp = getattr(finished_at, "timestamp", None)
             if callable(timestamp):
@@ -375,15 +352,15 @@ class OrchestratorFacade:
         )
 
     def snapshot(self) -> OrchestratorSnapshot:
-        engine = self._engine()
         state_store = self._state_store()
-        state = getattr(state_store, "state", None) or getattr(engine, "state", None)
+        state = getattr(state_store, "state", None)
         status = getattr(state, "status", OrchestratorStatus.INIT)
-        roadmap_document = getattr(self.orchestrator, "roadmap_document", None)
-        consensus_document = getattr(state_store, "consensus", None)
-        if consensus_document is None:
-            consensus_document = getattr(engine, "consensus", None)
-        consensus_path = getattr(engine, "consensus_path", None)
+        roadmap_service = self._roadmap_service()
+        roadmap_document = getattr(roadmap_service, "document", getattr(self.orchestrator, "roadmap_document", None))
+        consensus_service = self._consensus_service()
+        current_consensus = getattr(consensus_service, "current", None)
+        consensus_document = current_consensus() if callable(current_consensus) else getattr(state_store, "consensus", None)
+        consensus_path = getattr(consensus_service, "consensus_path", getattr(self.orchestrator, "consensus_path", None))
         if consensus_path is not None:
             consensus_path = Path(consensus_path)
 
@@ -397,13 +374,13 @@ class OrchestratorFacade:
             roadmap=roadmap_document,
             consensus=consensus_document if isinstance(consensus_document, ConsensusDocument) else None,
             consensus_path=consensus_path if isinstance(consensus_path, Path) else None,
-            agent_records=self._agent_records_from_engine(),
+            agent_records=self._agent_records(),
             execution_mode=self.execution_mode,
             user_input_banner=str(
-                user_input_banner() if callable(user_input_banner) else getattr(engine, "USER_INPUT_BANNER", "⚠ Gatekeeper needs your input — see Chat panel")
+                user_input_banner() if callable(user_input_banner) else "⚠ Gatekeeper needs your input — see Chat panel"
             ),
             notification_bell_enabled=bool(
-                notification_bell_enabled() if callable(notification_bell_enabled) else getattr(engine, "notification_bell_enabled", False)
+                notification_bell_enabled() if callable(notification_bell_enabled) else False
             ),
         )
 
@@ -517,20 +494,20 @@ class OrchestratorFacade:
             records = getattr(self.questions, "records", None)
             if callable(records):
                 return list(records())
-        return list(self._question_records_from_engine())
+        return list(self._question_records())
 
     def pending_question_records(self) -> list[QuestionRecord]:
         if self.questions is not None:
             pending_records = getattr(self.questions, "pending_records", None)
             if callable(pending_records):
                 return list(pending_records())
-        records = self._question_records_from_engine()
+        records = self._question_records()
         if records:
             return [record for record in records if record.is_pending()]
         return []
 
     def task(self, task_id: str) -> TaskInfo | None:
-        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
+        roadmap_service = self._roadmap_service()
         get_task = getattr(roadmap_service, "get_task", None)
         if callable(get_task):
             return get_task(task_id)
@@ -543,7 +520,7 @@ class OrchestratorFacade:
         return None
 
     def add_task(self, task: TaskInfo | dict[str, Any], *, index: int | None = None) -> TaskInfo:
-        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
+        roadmap_service = self._roadmap_service()
         add_task = getattr(roadmap_service, "add_task", None)
         if not callable(add_task):
             raise AttributeError("Lifecycle does not support roadmap task creation")
@@ -551,21 +528,21 @@ class OrchestratorFacade:
         return add_task(task_info, index=index)
 
     def update_task(self, task_id: str, **updates: Any) -> TaskInfo:
-        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
+        roadmap_service = self._roadmap_service()
         update_task = getattr(roadmap_service, "update_task", None)
         if not callable(update_task):
             raise AttributeError("Lifecycle does not support roadmap task updates")
         return update_task(task_id, **updates)
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
-        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
+        roadmap_service = self._roadmap_service()
         reorder_tasks = getattr(roadmap_service, "reorder_tasks", None)
         if not callable(reorder_tasks):
             raise AttributeError("Lifecycle does not support roadmap reordering")
         return reorder_tasks(ordered_task_ids)
 
     def replace_roadmap(self, *, tasks: list[TaskInfo | dict[str, Any]], project: str | None = None) -> RoadmapDocument:
-        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
+        roadmap_service = self._roadmap_service()
         ensure_document = getattr(roadmap_service, "_ensure_document", None)
         persist = getattr(roadmap_service, "persist", None)
         parser = getattr(roadmap_service, "parser", None)
@@ -585,7 +562,7 @@ class OrchestratorFacade:
         return document
 
     def update_consensus(self, **updates: Any) -> ConsensusDocument:
-        consensus_service = getattr(self.orchestrator, "consensus_service", None)
+        consensus_service = self._consensus_service()
         update = getattr(consensus_service, "update", None)
         if not callable(update):
             raise AttributeError("Lifecycle does not support consensus updates")
@@ -648,8 +625,8 @@ class OrchestratorFacade:
         records = self.snapshot().agent_records
 
         for record in records:
-            summary = getattr(record, "summary", None)
-            task_id = getattr(record, "task_id", None)
+            summary = getattr(getattr(record, "outcome", None), "summary", None)
+            task_id = getattr(getattr(record, "identity", None), "task_id", None)
             if not summary or not isinstance(task_id, str) or not task_id:
                 continue
             sort_key = self._task_summary_timestamp(record)
@@ -658,8 +635,13 @@ class OrchestratorFacade:
                 by_task[task_id] = (sort_key, str(summary))
         return {task_id: summary for task_id, (_, summary) in by_task.items()}
 
-    def _consensus_path(self, engine: Any | None) -> Path | None:
-        consensus_path = getattr(engine, "consensus_path", None)
+    def _consensus_path(self) -> Path | None:
+        consensus_service = self._consensus_service()
+        consensus_path = getattr(consensus_service, "consensus_path", None)
+        if consensus_path:
+            return Path(consensus_path)
+
+        consensus_path = getattr(self.orchestrator, "consensus_path", None)
         if consensus_path:
             return Path(consensus_path)
 
@@ -671,7 +653,7 @@ class OrchestratorFacade:
         if default_cwd:
             return Path(default_cwd) / ".vibrant" / "consensus.md"
 
-        return Path(os.getcwd()) / ".vibrant" / "consensus.md"
+        return Path.cwd() / ".vibrant" / "consensus.md"
 
     def user_input_banner(self) -> str:
         return self.snapshot().user_input_banner
@@ -680,7 +662,7 @@ class OrchestratorFacade:
         return self.snapshot().notification_bell_enabled
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
-        consensus_service = getattr(self.orchestrator, "consensus_service", None)
+        consensus_service = self._consensus_service()
         write = getattr(consensus_service, "write", None)
         if callable(write):
             written = write(document)
@@ -689,18 +671,11 @@ class OrchestratorFacade:
                 refresh()
             return written
 
-        engine = self._engine()
-        consensus_path = self._consensus_path(engine)
+        consensus_path = self._consensus_path()
         if consensus_path is None:
             raise RuntimeError("Consensus path is unavailable")
 
-        written = ConsensusWriter().write(consensus_path, document)
-        if engine is not None:
-            engine.consensus = written
-            refresh = getattr(engine, "refresh_from_disk", None)
-            if callable(refresh):
-                refresh()
-        return written
+        raise AttributeError("Lifecycle does not support consensus writes")
 
     async def submit_gatekeeper_message(self, text: str) -> Any:
         submit = getattr(self.orchestrator, "submit_gatekeeper_message", None)
@@ -819,7 +794,7 @@ class OrchestratorFacade:
             pending_questions = getattr(self.questions, "pending_questions", None)
             if callable(pending_questions):
                 return pending_questions()
-        return self._pending_questions_from_engine()
+        return self._pending_questions()
 
     def current_pending_question(self) -> str | None:
         if self.questions is not None:
@@ -827,42 +802,19 @@ class OrchestratorFacade:
         questions = self.pending_questions()
         return questions[0] if questions else None
 
-    def reload_from_disk(self) -> RoadmapDocument:
-        reload_from_disk = getattr(self.orchestrator, "reload_from_disk", None)
-        if not callable(reload_from_disk):
-            raise AttributeError("Lifecycle does not support reload_from_disk")
-        return reload_from_disk()
-
-    async def execute_until_blocked(self) -> list[TaskResult]:
-        execute = getattr(self.orchestrator, "execute_until_blocked", None)
-        if not callable(execute):
-            raise AttributeError("Lifecycle does not support execute_until_blocked")
-        return await execute()
-
-    async def execute_next_task(self) -> TaskResult | None:
-        execute = getattr(self.orchestrator, "execute_next_task", None)
-        if not callable(execute):
-            raise AttributeError("Lifecycle does not support execute_next_task")
-        return await execute()
-
     def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
         state_store = self._state_store()
         method = getattr(state_store, "can_transition_to", None)
         if callable(method):
             return bool(method(next_status))
-
-        engine = self._engine()
-        method = getattr(engine, "can_transition_to", None)
-        if not callable(method):
-            return False
-        return bool(method(next_status))
+        return False
 
     def transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
-        engine = self._engine()
-        if engine is None:
+        state_store = self._state_store()
+        if state_store is None:
             raise RuntimeError("Project lifecycle is not initialized")
 
-        current = getattr(getattr(engine, "state", None), "status", None)
+        current = getattr(getattr(state_store, "state", None), "status", None)
         if current is next_status:
             return
         if not self.can_transition_to(next_status):
@@ -871,49 +823,31 @@ class OrchestratorFacade:
 
         self._sync_consensus_status(next_status)
 
-        current = getattr(getattr(engine, "state", None), "status", None)
+        current = getattr(getattr(state_store, "state", None), "status", None)
         if current is next_status:
             return
         if not self.can_transition_to(next_status):
             current_value = getattr(current, "value", str(current))
             raise ValueError(f"Invalid orchestrator state transition: {current_value} -> {next_status.value}")
 
-        state_store = self._state_store()
         transition = getattr(state_store, "transition_to", None)
-        if callable(transition):
-            transition(next_status)
-        else:
-            engine.transition_to(next_status)
+        if not callable(transition):
+            raise AttributeError("Lifecycle does not support workflow transitions")
+        transition(next_status)
 
         refresh = getattr(state_store, "refresh", None)
         if callable(refresh):
             refresh()
-        else:
-            engine.refresh_from_disk()
 
     def _sync_consensus_status(self, next_status: OrchestratorStatus) -> None:
         target_consensus_status = _WORKFLOW_TO_CONSENSUS.get(next_status)
         if target_consensus_status is None:
             return
 
-        consensus_service = getattr(self.orchestrator, "consensus_service", None)
+        consensus_service = self._consensus_service()
         set_status = getattr(consensus_service, "set_status", None)
         if callable(set_status):
             set_status(target_consensus_status)
-            return
-
-        engine = self._engine()
-        consensus_document = getattr(engine, "consensus", None)
-        consensus_path = self._consensus_path(engine)
-        if consensus_path is None or not consensus_path.exists():
-            return
-
-        document = consensus_document
-        if document is None:
-            document = ConsensusParser().parse_file(consensus_path)
-        updated_document = document.model_copy(deep=True)
-        updated_document.status = target_consensus_status
-        engine.consensus = ConsensusWriter().write(consensus_path, updated_document)
 
 
 __all__ = [

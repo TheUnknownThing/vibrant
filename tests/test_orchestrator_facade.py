@@ -68,6 +68,16 @@ class _FakeAgentManager:
         return []
 
 
+def _state_store(state: object, *, records: list[AgentRecord] | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        state=state,
+        pending_questions=lambda: [],
+        agent_records=lambda: list(records or []),
+        user_input_banner=lambda: "banner",
+        notification_bell_enabled=lambda: False,
+    )
+
+
 def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
     output = AgentOutput(agent_id="agent-1", task_id="task-1", partial_text="Still working")
     managed = OrchestratorAgentSnapshot(
@@ -94,7 +104,7 @@ def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
     )
     lifecycle = SimpleNamespace(
         agent_manager=_FakeAgentManager([managed]),
-        engine=SimpleNamespace(state=OrchestratorState(session_id="session-1")),
+        state_store=_state_store(OrchestratorState(session_id="session-1")),
         execution_mode="manual",
     )
 
@@ -116,8 +126,7 @@ def test_facade_falls_back_to_agent_records_when_agent_manager_is_absent() -> No
     running = _record("agent-1", task_id="task-1", status=AgentStatus.RUNNING, summary="Still working")
     completed = _record("agent-2", task_id="task-2", status=AgentStatus.COMPLETED, summary="Done")
     lifecycle = SimpleNamespace(
-        engine=SimpleNamespace(state=OrchestratorState(session_id="session-2")),
-        state_store=SimpleNamespace(agent_records=lambda: [running, completed]),
+        state_store=_state_store(OrchestratorState(session_id="session-2"), records=[running, completed]),
         execution_mode="manual",
     )
 
@@ -140,7 +149,7 @@ def test_facade_falls_back_to_agent_records_when_agent_manager_is_absent() -> No
 
 def test_facade_raises_for_invalid_workflow_status() -> None:
     lifecycle = SimpleNamespace(
-        engine=SimpleNamespace(state=SimpleNamespace(status="mystery")),
+        state_store=_state_store(SimpleNamespace(status="mystery")),
         execution_mode="manual",
     )
 
@@ -152,7 +161,7 @@ def test_facade_raises_for_invalid_workflow_status() -> None:
 
 def test_facade_raises_for_invalid_execution_mode() -> None:
     lifecycle = SimpleNamespace(
-        engine=SimpleNamespace(state=OrchestratorState(session_id="session-3")),
+        state_store=_state_store(OrchestratorState(session_id="session-3")),
         execution_mode="surprise",
     )
 
@@ -176,7 +185,7 @@ def test_facade_raises_for_invalid_managed_agent_snapshot() -> None:
     )
     lifecycle = SimpleNamespace(
         agent_manager=_FakeAgentManager([managed]),
-        engine=SimpleNamespace(state=OrchestratorState(session_id="session-4")),
+        state_store=_state_store(OrchestratorState(session_id="session-4")),
         execution_mode="manual",
     )
 
