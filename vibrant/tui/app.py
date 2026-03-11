@@ -19,6 +19,7 @@ from ..agents import PLANNING_COMPLETE_MCP_TOOL
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, resolve_project_path
 from ..history import HistoryStore
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo
+from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT
 from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, create_orchestrator
 from ..project_init import ensure_project_files, initialize_project
 from ..utility.deprecation import deprecated
@@ -986,13 +987,8 @@ class VibrantApp(App):
     def _should_auto_reveal_consensus(document) -> bool:
         if document is None:
             return False
-        default_getting_started = "Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."
-        return bool(
-            document.objectives.strip()
-            or document.decisions
-            or document.questions
-            or document.getting_started.strip() != default_getting_started
-        )
+        normalized = document.context.strip()
+        return bool(normalized and normalized != DEFAULT_CONSENSUS_CONTEXT.strip())
 
     def _vibing_screen(self) -> VibingScreen | None:
         if isinstance(self._workspace_screen, VibingScreen):

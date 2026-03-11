@@ -78,11 +78,6 @@ def _render_consensus_markdown(project_name: str) -> str:
         updated_at=timestamp,
         version=0,
         status=ConsensusStatus.INIT,
-        objectives="",
-        decisions=[],
-        getting_started=(
-            "Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."
-        ),
     )
     return ConsensusWriter().render(document)
 

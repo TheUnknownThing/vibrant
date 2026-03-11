@@ -25,15 +25,11 @@ class GatekeeperToolHandlers:
         self,
         *,
         status: str | None = None,
-        objectives: str | None = None,
-        getting_started: str | None = None,
-        questions: Sequence[str] | None = None,
+        context: str | None = None,
     ) -> dict[str, Any]:
         return self.facade.update_consensus(
             status=status,
-            objectives=objectives,
-            getting_started=getting_started,
-            questions=questions,
+            context=context,
         ).model_dump(mode="json")
 
     def roadmap_get(self) -> dict[str, Any] | None:
@@ -169,15 +165,11 @@ class GatekeeperToolHandlers:
         self,
         *,
         status: str | None = None,
-        objectives: str | None = None,
-        getting_started: str | None = None,
-        questions: Sequence[str] | None = None,
+        context: str | None = None,
     ) -> dict[str, Any]:
         return self.consensus_update(
             status=status,
-            objectives=objectives,
-            getting_started=getting_started,
-            questions=questions,
+            context=context,
         )
 
     def update_roadmap(self, *, tasks: Sequence[dict[str, Any]], project: str | None = None) -> dict[str, Any]:

@@ -186,9 +186,9 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
         "vibrant.update_consensus",
         principal=gatekeeper,
         status="planning",
-        objectives="Ship MCP-driven orchestration.",
+        context="## Objectives\nShip MCP-driven orchestration.",
     )
-    assert updated_consensus["objectives"] == "Ship MCP-driven orchestration."
+    assert updated_consensus["context"] == "## Objectives\nShip MCP-driven orchestration."
 
     updated_roadmap = await server.call_tool(
         "vibrant.update_roadmap",

@@ -11,11 +11,9 @@ from pydantic import BaseModel, Field
 
 from .agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from .consensus import (
-    ConsensusDecision,
     ConsensusDocument,
     ConsensusPool,
     ConsensusStatus,
-    DecisionAuthor,
 )
 from .settings import AppSettings, ApprovalMode, SessionConfig
 from .state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, ProviderRuntimeState
@@ -117,11 +115,9 @@ __all__ = [
     "AgentType",
     "AppSettings",
     "ApprovalMode",
-    "ConsensusDecision",
     "ConsensusDocument",
     "ConsensusPool",
     "ConsensusStatus",
-    "DecisionAuthor",
     "GatekeeperStatus",
     "ItemInfo",
     "ItemType",
