@@ -60,7 +60,7 @@ class AgentRegistry:
 
     def list_active_records(self) -> list[AgentRecord]:
         """Return non-terminal records in stable id order."""
-        return [record for record in self.list_records() if record.status not in AgentRecord.TERMINAL_STATUSES]
+        return [record for record in self.list_records() if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES]
 
     def records_for_task(self, task_id: str) -> list[AgentRecord]:
         """Return records for a task ordered by start time then id."""
@@ -115,16 +115,22 @@ class AgentRegistry:
         if runtime_mode is not None:
             provider.runtime_mode = runtime_mode
         return AgentRecord(
-            agent_id=agent_id,
-            task_id=task_id,
-            type=agent_type,
-            status=AgentStatus.SPAWNING,
-            branch=branch,
-            worktree_path=worktree_path,
-            prompt_used=prompt,
-            skills_loaded=list(skills or []),
-            retry_count=retry_count,
-            max_retries=max_retries,
+            identity={
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "type": agent_type,
+            },
+            lifecycle={"status": AgentStatus.SPAWNING},
+            context={
+                "branch": branch,
+                "worktree_path": worktree_path,
+                "prompt_used": prompt,
+                "skills_loaded": list(skills or []),
+            },
+            retry={
+                "retry_count": retry_count,
+                "max_retries": max_retries,
+            },
             provider=provider,
         )
 

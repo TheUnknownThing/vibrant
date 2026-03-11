@@ -324,7 +324,7 @@ def _build_default_agent_runtime_factory(
 ):
     def _build(agent_record: AgentRecord) -> AgentRuntime:
         config = config_getter()
-        if agent_record.type is AgentType.GATEKEEPER and isinstance(gatekeeper, Gatekeeper):
+        if agent_record.identity.type is AgentType.GATEKEEPER and isinstance(gatekeeper, Gatekeeper):
             gatekeeper_agent = gatekeeper.agent
             agent = GatekeeperAgent(
                 project_root,
@@ -334,7 +334,7 @@ def _build_default_agent_runtime_factory(
                 on_agent_record_updated=agent_registry.make_record_callback(),
                 timeout_seconds=gatekeeper_agent.timeout_seconds,
             )
-        elif agent_record.type is AgentType.MERGE:
+        elif agent_record.identity.type is AgentType.MERGE:
             agent = MergeAgent(
                 project_root,
                 config,

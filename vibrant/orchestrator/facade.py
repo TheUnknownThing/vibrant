@@ -29,7 +29,16 @@ from vibrant.models.task import TaskInfo, TaskStatus
 
 from .bootstrap import Orchestrator
 from .task_dispatch import TaskDispatcher
-from .types import AgentOutput, CodeAgentLifecycleResult, OrchestratorAgentSnapshot
+from .types import (
+    AgentOutput,
+    AgentSnapshotIdentity,
+    AgentSnapshotOutcome,
+    AgentSnapshotProvider,
+    AgentSnapshotRuntime,
+    AgentSnapshotWorkspace,
+    CodeAgentLifecycleResult,
+    OrchestratorAgentSnapshot,
+)
 
 _WORKFLOW_TO_CONSENSUS = {
     OrchestratorStatus.INIT: ConsensusStatus.INIT,
@@ -187,53 +196,66 @@ class OrchestratorFacade:
         return getter(agent_id)
 
     def _snapshot_from_record(self, record: AgentRecord) -> OrchestratorAgentSnapshot:
-        status = record.status.value
-        done = record.status in AgentRecord.TERMINAL_STATUSES
+        status = record.lifecycle.status.value
+        done = record.lifecycle.status in AgentRecord.TERMINAL_STATUSES
         provider_thread = ProviderResumeHandle.from_provider_metadata(record.provider) or ProviderResumeHandle(
             kind=record.provider.kind
         )
         return OrchestratorAgentSnapshot(
-            agent_id=record.agent_id,
-            task_id=record.task_id,
-            agent_type=record.type.value,
-            status=status,
-            state=status,
-            has_handle=False,
-            active=not done,
-            done=done,
-            awaiting_input=record.status is AgentStatus.AWAITING_INPUT,
-            pid=record.pid,
-            branch=record.branch,
-            worktree_path=record.worktree_path,
-            started_at=record.started_at,
-            finished_at=record.finished_at,
-            summary=record.summary,
-            error=record.error,
-            provider_thread_id=provider_thread.thread_id,
-            provider_thread_path=provider_thread.thread_path,
-            provider_resume_cursor=provider_thread.resume_cursor,
-            input_requests=[],
-            native_event_log=record.provider.native_event_log,
-            canonical_event_log=record.provider.canonical_event_log,
-            output=self._output_for_record(record),
+            identity=AgentSnapshotIdentity(
+                agent_id=record.identity.agent_id,
+                task_id=record.identity.task_id,
+                agent_type=record.identity.type.value,
+            ),
+            runtime=AgentSnapshotRuntime(
+                status=status,
+                state=status,
+                has_handle=False,
+                active=not done,
+                done=done,
+                awaiting_input=record.lifecycle.status is AgentStatus.AWAITING_INPUT,
+                pid=record.lifecycle.pid,
+                started_at=record.lifecycle.started_at,
+                finished_at=record.lifecycle.finished_at,
+            ),
+            workspace=AgentSnapshotWorkspace(
+                branch=record.context.branch,
+                worktree_path=record.context.worktree_path,
+            ),
+            outcome=AgentSnapshotOutcome(
+                summary=record.outcome.summary,
+                error=record.outcome.error,
+                output=self._output_for_record(record),
+            ),
+            provider=AgentSnapshotProvider(
+                thread_id=provider_thread.thread_id,
+                thread_path=provider_thread.thread_path,
+                resume_cursor=provider_thread.resume_cursor,
+                native_event_log=record.provider.native_event_log,
+                canonical_event_log=record.provider.canonical_event_log,
+            ),
         )
 
     def _coerce_agent_snapshot(self, value: object) -> OrchestratorAgentSnapshot | None:
-        if isinstance(value, OrchestratorAgentSnapshot):
-            return value
         if isinstance(value, AgentRecord):
             return self._snapshot_from_record(value)
 
-        agent_id = getattr(value, "agent_id", None)
-        task_id = getattr(value, "task_id", None)
+        identity_value = getattr(value, "identity", None)
+        runtime_value = getattr(value, "runtime", None)
+        workspace_value = getattr(value, "workspace", None)
+        outcome_value = getattr(value, "outcome", None)
+        provider_value = getattr(value, "provider", None)
+
+        agent_id = getattr(identity_value, "agent_id", getattr(value, "agent_id", None))
+        task_id = getattr(identity_value, "task_id", getattr(value, "task_id", None))
         if not isinstance(agent_id, str) or not agent_id:
             return None
         if not isinstance(task_id, str) or not task_id:
             return None
 
-        status_value = getattr(value, "status", None)
-        state_value = getattr(value, "state", status_value)
-        agent_type_value = getattr(value, "agent_type", getattr(value, "type", None))
+        status_value = getattr(runtime_value, "status", getattr(value, "status", None))
+        state_value = getattr(runtime_value, "state", getattr(value, "state", status_value))
+        agent_type_value = getattr(identity_value, "agent_type", getattr(value, "agent_type", getattr(value, "type", None)))
         status = self._normalize_agent_status(status_value)
         state = self._normalize_agent_status(state_value)
         agent_type = self._normalize_agent_type(agent_type_value)
@@ -243,36 +265,50 @@ class OrchestratorFacade:
             raise ValueError(f"Agent snapshot {agent_id!r} is missing a valid state")
         if agent_type is None:
             raise ValueError(f"Agent snapshot {agent_id!r} is missing a valid agent type")
-        done = bool(getattr(value, "done", status in AgentRecord.TERMINAL_STATUSES if status is not None else False))
+        done = bool(getattr(runtime_value, "done", getattr(value, "done", status in AgentRecord.TERMINAL_STATUSES)))
         awaiting_input = bool(
-            getattr(value, "awaiting_input", status is AgentStatus.AWAITING_INPUT or state is AgentStatus.AWAITING_INPUT)
+            getattr(
+                runtime_value,
+                "awaiting_input",
+                getattr(value, "awaiting_input", status is AgentStatus.AWAITING_INPUT or state is AgentStatus.AWAITING_INPUT),
+            )
         )
-        active = bool(getattr(value, "active", not done))
+        active = bool(getattr(runtime_value, "active", getattr(value, "active", not done)))
 
         return OrchestratorAgentSnapshot(
-            agent_id=agent_id,
-            task_id=task_id,
-            agent_type=agent_type.value,
-            status=status.value,
-            state=state.value,
-            has_handle=bool(getattr(value, "has_handle", False)),
-            active=active,
-            done=done,
-            awaiting_input=awaiting_input,
-            pid=getattr(value, "pid", None),
-            branch=getattr(value, "branch", None),
-            worktree_path=getattr(value, "worktree_path", None),
-            started_at=getattr(value, "started_at", None),
-            finished_at=getattr(value, "finished_at", None),
-            summary=getattr(value, "summary", None),
-            error=getattr(value, "error", None),
-            provider_thread_id=getattr(value, "provider_thread_id", None),
-            provider_thread_path=getattr(value, "provider_thread_path", None),
-            provider_resume_cursor=getattr(value, "provider_resume_cursor", None),
-            input_requests=list(getattr(value, "input_requests", []) or []),
-            native_event_log=getattr(value, "native_event_log", None),
-            canonical_event_log=getattr(value, "canonical_event_log", None),
-            output=getattr(value, "output", None) or self._output_for_agent(agent_id),
+            identity=AgentSnapshotIdentity(
+                agent_id=agent_id,
+                task_id=task_id,
+                agent_type=agent_type.value,
+            ),
+            runtime=AgentSnapshotRuntime(
+                status=status.value,
+                state=state.value,
+                has_handle=bool(getattr(runtime_value, "has_handle", getattr(value, "has_handle", False))),
+                active=active,
+                done=done,
+                awaiting_input=awaiting_input,
+                pid=getattr(runtime_value, "pid", getattr(value, "pid", None)),
+                started_at=getattr(runtime_value, "started_at", getattr(value, "started_at", None)),
+                finished_at=getattr(runtime_value, "finished_at", getattr(value, "finished_at", None)),
+                input_requests=list(getattr(runtime_value, "input_requests", getattr(value, "input_requests", []) or [])),
+            ),
+            workspace=AgentSnapshotWorkspace(
+                branch=getattr(workspace_value, "branch", getattr(value, "branch", None)),
+                worktree_path=getattr(workspace_value, "worktree_path", getattr(value, "worktree_path", None)),
+            ),
+            outcome=AgentSnapshotOutcome(
+                summary=getattr(outcome_value, "summary", getattr(value, "summary", None)),
+                error=getattr(outcome_value, "error", getattr(value, "error", None)),
+                output=getattr(outcome_value, "output", getattr(value, "output", None)) or self._output_for_agent(agent_id),
+            ),
+            provider=AgentSnapshotProvider(
+                thread_id=getattr(provider_value, "thread_id", getattr(value, "provider_thread_id", None)),
+                thread_path=getattr(provider_value, "thread_path", getattr(value, "provider_thread_path", None)),
+                resume_cursor=getattr(provider_value, "resume_cursor", getattr(value, "provider_resume_cursor", None)),
+                native_event_log=getattr(provider_value, "native_event_log", getattr(value, "native_event_log", None)),
+                canonical_event_log=getattr(provider_value, "canonical_event_log", getattr(value, "canonical_event_log", None)),
+            ),
         )
 
     def _fallback_agent_snapshots(self) -> list[OrchestratorAgentSnapshot]:
@@ -385,7 +421,7 @@ class OrchestratorFacade:
             return self._coerce_agent_snapshot(get_agent(agent_id))
 
         for snapshot in self._fallback_agent_snapshots():
-            if snapshot.agent_id == agent_id:
+            if snapshot.identity.agent_id == agent_id:
                 return snapshot
         return None
 
@@ -415,13 +451,13 @@ class OrchestratorFacade:
         resolved_type = self._normalize_agent_type(agent_type)
         snapshots = self._fallback_agent_snapshots()
         if task_id is not None:
-            snapshots = [snapshot for snapshot in snapshots if snapshot.task_id == task_id]
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.task_id == task_id]
         if resolved_type is not None:
-            snapshots = [snapshot for snapshot in snapshots if snapshot.agent_type == resolved_type.value]
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.agent_type == resolved_type.value]
         if active_only:
-            return [snapshot for snapshot in snapshots if snapshot.active]
+            return [snapshot for snapshot in snapshots if snapshot.runtime.active]
         if not include_completed:
-            return [snapshot for snapshot in snapshots if not snapshot.done or snapshot.awaiting_input]
+            return [snapshot for snapshot in snapshots if not snapshot.runtime.done or snapshot.runtime.awaiting_input]
         return snapshots
 
     def list_active_agents(self) -> list[OrchestratorAgentSnapshot]:

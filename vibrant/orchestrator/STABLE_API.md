@@ -134,50 +134,39 @@ record state with live runtime-handle details when those details are available.
 
 Fields:
 
-- `agent_id: str`
-  - Stable identifier for the agent attempt.
-- `task_id: str`
-  - Roadmap task currently or previously associated with the agent.
-- `agent_type: str`
-  - Logical type such as `code`.
-- `status: str`
-  - Durable agent status value.
-- `state: str`
-  - Runtime-oriented state projection.
-- `has_handle: bool`
-  - Whether a live runtime handle is currently attached.
-- `active: bool`
-  - Whether the orchestrator considers the agent active now.
-- `done: bool`
-  - Whether the agent has completed its lifecycle.
-- `awaiting_input: bool`
-  - Whether the agent is blocked on user/provider input.
-- `pid: int | None`
-  - Process identifier when available.
-- `branch: str | None`
-  - Work branch name when applicable.
-- `worktree_path: str | None`
-  - Worktree used by the agent when applicable.
-- `started_at: datetime | None`
-  - Start timestamp.
-- `finished_at: datetime | None`
-  - Finish timestamp.
-- `summary: str | None`
-  - Best available summary of the run.
-- `error: str | None`
-  - Best available terminal error string.
-- `provider_thread_id: str | None`
-  - Provider-specific thread identifier, if tracked.
-- `provider_thread_path: str | None`
-  - Path to persisted provider thread data, if tracked.
-- `provider_resume_cursor: dict[str, Any] | None`
-  - Resume cursor for provider continuation, if tracked.
-- `input_requests: list[InputRequest]`
-  - Structured input requests currently associated with the run.
-- `native_event_log: str | None`
-  - Path or identifier for provider-native event logs.
-- `canonical_event_log: str | None`
-  - Path or identifier for normalized canonical event logs.
+- `identity: AgentSnapshotIdentity`
+  - Stable agent identifiers.
+  - `agent_id: str` — stable identifier for the agent attempt.
+  - `task_id: str` — roadmap task currently or previously associated with the agent.
+  - `agent_type: str` — logical type such as `code`.
+- `runtime: AgentSnapshotRuntime`
+  - Live/runtime-oriented lifecycle state.
+  - `status: str` — durable agent status value.
+  - `state: str` — runtime-oriented state projection.
+  - `has_handle: bool` — whether a live runtime handle is currently attached.
+  - `active: bool` — whether the orchestrator considers the agent active now.
+  - `done: bool` — whether the agent has completed its lifecycle.
+  - `awaiting_input: bool` — whether the agent is blocked on user/provider input.
+  - `pid: int | None` — process identifier when available.
+  - `started_at: datetime | None` — start timestamp.
+  - `finished_at: datetime | None` — finish timestamp.
+  - `input_requests: list[InputRequest]` — structured input requests currently associated with the run.
+- `workspace: AgentSnapshotWorkspace`
+  - Execution workspace context.
+  - `branch: str | None` — work branch name when applicable.
+  - `worktree_path: str | None` — worktree used by the agent when applicable.
+- `outcome: AgentSnapshotOutcome`
+  - Best-known result and output summary.
+  - `summary: str | None` — best available summary of the run.
+  - `error: str | None` — best available terminal error string.
+  - `output: AgentOutput | None` — projected renderable agent output when available.
+- `provider: AgentSnapshotProvider`
+  - Provider/session metadata tracked for the run.
+  - `thread_id: str | None` — provider-specific thread identifier, if tracked.
+  - `thread_path: str | None` — path to persisted provider thread data, if tracked.
+  - `resume_cursor: dict[str, Any] | None` — resume cursor for provider continuation, if tracked.
+  - `native_event_log: str | None` — path or identifier for provider-native event logs.
+  - `canonical_event_log: str | None` — path or identifier for normalized canonical event logs.
 
 ### `CodeAgentLifecycleResult`
 

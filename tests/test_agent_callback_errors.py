@@ -8,7 +8,7 @@ from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.orchestrator.agents.registry import AgentRegistry
 from vibrant.orchestrator.agents.store import AgentRecordStore
-from vibrant.orchestrator.engine import OrchestratorEngine
+from vibrant.orchestrator import OrchestratorStateBackend
 from vibrant.orchestrator.state import StateStore
 from vibrant.project_init import initialize_project
 
@@ -47,13 +47,15 @@ def test_agent_base_notify_record_updated_raises_callback_errors(tmp_path) -> No
     )
 
     with pytest.raises(RuntimeError, match="persist failed"):
-        agent._notify_record_updated(AgentRecord(agent_id="agent-1", task_id="task-1", type=AgentType.CODE))
+        agent._notify_record_updated(
+            AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE})
+        )
 
 
 @pytest.mark.asyncio
 async def test_base_agent_runtime_surfaces_on_record_updated_failures() -> None:
     runtime = BaseAgentRuntime(_RuntimeCallbackAgent())
-    record = AgentRecord(agent_id="agent-1", task_id="task-1", type=AgentType.CODE)
+    record = AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE})
 
     def _raise(_record: AgentRecord) -> None:
         raise RuntimeError("persist failed")
@@ -70,7 +72,7 @@ def test_agent_registry_callback_surfaces_upsert_failures(tmp_path, monkeypatch:
     project_root.mkdir()
     initialize_project(project_root)
 
-    engine = OrchestratorEngine.load(project_root)
+    engine = OrchestratorStateBackend.load(project_root)
     state_store = StateStore(engine)
     agent_store = AgentRecordStore(vibrant_dir=project_root / ".vibrant", state_store=state_store)
     registry = AgentRegistry(agent_store=agent_store, vibrant_dir=project_root / ".vibrant")
@@ -82,4 +84,4 @@ def test_agent_registry_callback_surfaces_upsert_failures(tmp_path, monkeypatch:
     callback = registry.make_record_callback()
 
     with pytest.raises(RuntimeError, match="disk write failed"):
-        callback(AgentRecord(agent_id="agent-1", task_id="task-1", type=AgentType.CODE))
+        callback(AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE}))
