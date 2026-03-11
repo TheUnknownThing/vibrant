@@ -1,95 +1,67 @@
-"""Tests for the Phase 4 user escalation flow."""
+"""Tests for Gatekeeper follow-up conversation handling."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from vibrant.consensus import ConsensusParser, ConsensusWriter
 from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperTrigger
-from vibrant.models.consensus import ConsensusDecision, ConsensusStatus, DecisionAuthor
-from vibrant.orchestrator.engine import OrchestratorEngine
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
 
-class EscalationAdapter:
-    instances: list["EscalationAdapter"] = []
+class FollowUpAdapter:
+    instances: list["FollowUpAdapter"] = []
 
     def __init__(self, **kwargs: Any) -> None:
-        self.kwargs = kwargs
         self.cwd = Path(kwargs["cwd"])
         self.on_canonical_event = kwargs.get("on_canonical_event")
         self.agent_record = kwargs.get("agent_record")
         self.provider_thread_id: str | None = None
-        self.start_session_calls: list[dict[str, Any]] = []
         self.start_thread_calls: list[dict[str, Any]] = []
         self.resume_thread_calls: list[dict[str, Any]] = []
         self.start_turn_calls: list[dict[str, Any]] = []
-        self.stop_calls = 0
-        self.client = type("DummyClient", (), {"is_running": True})()
-        EscalationAdapter.instances.append(self)
+        process = type("DummyProcess", (), {"pid": 5510, "returncode": None})()
+        self.client = type("DummyClient", (), {"is_running": True, "_process": process})()
+        FollowUpAdapter.instances.append(self)
 
     async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
-        self.start_session_calls.append({"cwd": cwd, **kwargs})
         return {"serverInfo": {"name": "codex"}}
 
     async def stop_session(self) -> None:
-        self.stop_calls += 1
+        if self.client._process.returncode is None:
+            self.client._process.returncode = 0
+        self.client.is_running = False
 
     async def start_thread(self, **kwargs: Any) -> Any:
-        self.start_thread_calls.append(kwargs)
-        self.provider_thread_id = "thread-gatekeeper-qa"
-        if self.agent_record is not None:
-            self.agent_record.provider.provider_thread_id = self.provider_thread_id
-            self.agent_record.provider.resume_cursor = {"threadId": self.provider_thread_id}
+        self.start_thread_calls.append(dict(kwargs))
+        self.provider_thread_id = "thread-new"
+        self._persist_thread_metadata(self.provider_thread_id)
         return {"thread": {"id": self.provider_thread_id}}
 
     async def resume_thread(self, provider_thread_id: str, **kwargs: Any) -> Any:
         self.resume_thread_calls.append({"provider_thread_id": provider_thread_id, **kwargs})
         self.provider_thread_id = provider_thread_id
-        if self.agent_record is not None:
-            self.agent_record.provider.provider_thread_id = provider_thread_id
-            self.agent_record.provider.resume_cursor = {"threadId": provider_thread_id}
+        self._persist_thread_metadata(provider_thread_id)
         return {"thread": {"id": provider_thread_id}}
 
     async def start_turn(self, *, input_items, runtime_mode: RuntimeMode, approval_policy: str, **kwargs: Any) -> Any:
-        payload = {
-            "input_items": list(input_items),
-            "runtime_mode": runtime_mode,
-            "approval_policy": approval_policy,
-            **kwargs,
-        }
-        self.start_turn_calls.append(payload)
-        prompt_text = payload["input_items"][0]["text"]
-        consensus_path = self.cwd / ".vibrant" / "consensus.md"
-        current = ConsensusParser().parse_file(consensus_path)
-
-        if "task_completion" in prompt_text:
-            current.status = ConsensusStatus.EXECUTING
-            current.questions = ["Should we ship the UI in v1?"]
-            ConsensusWriter().write(consensus_path, current)
-            await self._emit({"type": "content.delta", "delta": "Verdict: needs_input\n"})
-        else:
-            current.questions = []
-            current.decisions.append(
-                ConsensusDecision(
-                    title="User answered UI question",
-                    date=datetime(2026, 3, 8, 13, 0, tzinfo=timezone.utc),
-                    made_by=DecisionAuthor.USER,
-                    context="Gatekeeper requested a product decision.",
-                    resolution="Defer the UI to a later milestone.",
-                    impact="Execution continues without the UI scope.",
-                )
-            )
-            ConsensusWriter().write(consensus_path, current)
-            await self._emit({"type": "content.delta", "delta": "Verdict: accepted\n"})
-
-        await self._emit({"type": "turn.completed", "turn": {"id": "turn-escalation-1"}})
-        return {"turn": {"id": "turn-escalation-1"}}
+        self.start_turn_calls.append(
+            {
+                "input_items": list(input_items),
+                "runtime_mode": runtime_mode,
+                "approval_policy": approval_policy,
+                **kwargs,
+            }
+        )
+        if self.on_canonical_event is not None:
+            await self.on_canonical_event({"type": "content.delta", "delta": "Follow-up recorded."})
+            await self.on_canonical_event({"type": "turn.completed", "turn": {"id": "turn-follow-up-1"}})
+        self.client._process.returncode = 0
+        return {"turn": {"id": "turn-follow-up-1"}}
 
     async def interrupt_turn(self, **kwargs: Any) -> Any:
         return kwargs
@@ -97,96 +69,64 @@ class EscalationAdapter:
     async def respond_to_request(self, request_id: int | str, *, result: Any | None = None, error=None) -> Any:
         return {"request_id": request_id, "result": result, "error": error}
 
-    async def _emit(self, event: dict[str, Any]) -> None:
-        if self.on_canonical_event is not None:
-            await self.on_canonical_event(event)
+    def _persist_thread_metadata(self, thread_id: str) -> None:
+        if self.agent_record is None:
+            return
+        self.agent_record.provider.provider_thread_id = thread_id
+        self.agent_record.provider.resume_cursor = {"threadId": thread_id}
+
+
+def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: str) -> None:
+    record = AgentRecord(
+        agent_id=agent_id,
+        task_id="gatekeeper-user_conversation",
+        type=AgentType.GATEKEEPER,
+        status=AgentStatus.COMPLETED,
+        provider=AgentProviderMetadata(
+            provider_thread_id=thread_id,
+            resume_cursor={"threadId": thread_id},
+        ),
+    )
+    agents_dir = project_root / ".vibrant" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / f"{agent_id}.json").write_text(record.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
 
 @pytest.mark.asyncio
-async def test_gatekeeper_question_updates_pending_questions_and_user_answer_is_forwarded(tmp_path):
-    EscalationAdapter.instances.clear()
+async def test_answer_question_resumes_latest_gatekeeper_thread(tmp_path):
+    FollowUpAdapter.instances.clear()
     initialize_project(tmp_path)
+    _write_gatekeeper_record(tmp_path, agent_id="gatekeeper-user_conversation-old", thread_id="thread-existing")
 
-    gatekeeper = Gatekeeper(tmp_path, adapter_factory=EscalationAdapter, timeout_seconds=1)
-    engine = OrchestratorEngine.load(tmp_path)
-
-    result = await gatekeeper.run(
-        GatekeeperRequest(
-            trigger=GatekeeperTrigger.TASK_COMPLETION,
-            trigger_description="Review task-001 completion.",
-            agent_summary="The implementation is ready for validation.",
-        )
-    )
-    events = engine.apply_gatekeeper_result(result)
-
-    assert engine.state.pending_questions == ["Should we ship the UI in v1?"]
-    assert engine.state.gatekeeper_status.value == "awaiting_user"
-    assert events[0]["type"] == "user-input.requested"
-
-    persisted_state = OrchestratorEngine.load(tmp_path)
-    assert persisted_state.state.pending_questions == ["Should we ship the UI in v1?"]
-
-    follow_up = await engine.answer_pending_question(
-        gatekeeper,
-        answer="No, defer the UI to a later milestone.",
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FollowUpAdapter, timeout_seconds=1)
+    result = await gatekeeper.answer_question(
+        "Should we defer the UI?",
+        "Yes, keep the first milestone backend-only.",
     )
 
-    latest_adapter = EscalationAdapter.instances[-1]
-    assert latest_adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-gatekeeper-qa"
-    answer_prompt = latest_adapter.start_turn_calls[0]["input_items"][0]["text"]
-    assert "Question: Should we ship the UI in v1?" in answer_prompt
-    assert "User Answer: No, defer the UI to a later milestone." in answer_prompt
-    assert follow_up.verdict == "accepted"
-    assert engine.state.pending_questions == []
-    assert engine.state.gatekeeper_status.value == "idle"
-    assert engine.emitted_events[-1]["type"] == "user-input.resolved"
-
-
-@pytest.mark.parametrize(
-    ("bell_enabled", "expected_bell"),
-    [
-        (True, True),
-        (False, False),
-    ],
-)
-@pytest.mark.asyncio
-async def test_notification_event_contains_banner_and_terminal_bell_setting(tmp_path, bell_enabled, expected_bell):
-    EscalationAdapter.instances.clear()
-    initialize_project(tmp_path)
-
-    gatekeeper = Gatekeeper(tmp_path, adapter_factory=EscalationAdapter, timeout_seconds=1)
-    engine = OrchestratorEngine.load(tmp_path, notification_bell_enabled=bell_enabled)
-
-    result = await gatekeeper.run(
-        GatekeeperRequest(
-            trigger=GatekeeperTrigger.TASK_COMPLETION,
-            trigger_description="Review task-001 completion.",
-            agent_summary="Summary",
-        )
-    )
-    events = engine.apply_gatekeeper_result(result)
-
-    assert events[0]["banner_text"] == "⚠ Gatekeeper needs your input — see Chat panel"
-    assert events[0]["terminal_bell"] is expected_bell
+    adapter = FollowUpAdapter.instances[0]
+    assert adapter.start_thread_calls == []
+    assert adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-existing"
+    prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
+    assert "Question: Should we defer the UI?" in prompt
+    assert "User Answer: Yes, keep the first milestone backend-only." in prompt
+    assert result.succeeded is True
+    assert result.provider_thread.thread_id == "thread-existing"
 
 
 @pytest.mark.asyncio
-async def test_pending_question_persisted_in_state_json_across_restart(tmp_path):
-    EscalationAdapter.instances.clear()
+async def test_start_answer_question_returns_gatekeeper_handle(tmp_path):
+    FollowUpAdapter.instances.clear()
     initialize_project(tmp_path)
+    _write_gatekeeper_record(tmp_path, agent_id="gatekeeper-user_conversation-old", thread_id="thread-existing")
 
-    gatekeeper = Gatekeeper(tmp_path, adapter_factory=EscalationAdapter, timeout_seconds=1)
-    engine = OrchestratorEngine.load(tmp_path)
-
-    result = await gatekeeper.run(
-        GatekeeperRequest(
-            trigger=GatekeeperTrigger.TASK_COMPLETION,
-            trigger_description="Review task-001 completion.",
-            agent_summary="Summary",
-        )
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FollowUpAdapter, timeout_seconds=1)
+    handle = await gatekeeper.start_answer_question(
+        "Should we defer the UI?",
+        "Yes, keep the first milestone backend-only.",
     )
-    engine.apply_gatekeeper_result(result)
+    result = await handle.wait()
 
-    reloaded = OrchestratorEngine.load(tmp_path)
-    assert reloaded.state.pending_questions == ["Should we ship the UI in v1?"]
-    assert reloaded.state.gatekeeper_status.value == "awaiting_user"
+    assert handle.agent_record.type is AgentType.GATEKEEPER
+    assert handle.request.trigger is GatekeeperTrigger.USER_CONVERSATION
+    assert result.succeeded is True

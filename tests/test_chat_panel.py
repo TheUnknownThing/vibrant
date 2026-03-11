@@ -71,12 +71,6 @@ class FakeAnswerEngine:
             pending_questions=["Should auth use OAuth or API keys?"],
         )
 
-    async def answer_pending_question(self, gatekeeper, *, answer: str, question: str | None = None):
-        self.answer_calls.append({"answer": answer, "question": question or ""})
-        self.state.pending_questions = []
-        self.state.gatekeeper_status = GatekeeperStatus.IDLE
-        return SimpleNamespace(verdict="accepted")
-
 
 class FakeLifecycle:
     def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
@@ -87,6 +81,12 @@ class FakeLifecycle:
 
     def reload_from_disk(self) -> RoadmapDocument:
         return RoadmapDocument(project=self.project_root.name, tasks=[])
+
+    async def answer_pending_question(self, answer: str, *, question: str | None = None):
+        self.engine.answer_calls.append({"answer": answer, "question": question or ""})
+        self.engine.state.pending_questions = []
+        self.engine.state.gatekeeper_status = GatekeeperStatus.IDLE
+        return SimpleNamespace(verdict="accepted")
 
 
 class FakePlanningEngine:
@@ -275,11 +275,9 @@ async def test_app_forwards_pending_question_answer_to_gatekeeper(tmp_path: Path
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    session_manager = FakeSessionManager()
     app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=session_manager,
         lifecycle_factory=FakeLifecycle,
     )
 
@@ -297,7 +295,6 @@ async def test_app_forwards_pending_question_answer_to_gatekeeper(tmp_path: Path
                 "question": "Should auth use OAuth or API keys?",
             }
         ]
-        assert session_manager.sent_messages == []
         assert "You → Gatekeeper" in panel.get_question_summary_text()
         assert "A: Use API keys for v1." in panel.get_question_summary_text()
 
@@ -309,7 +306,7 @@ async def test_app_keeps_gatekeeper_chat_active(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), session_manager=FakeSessionManager(), lifecycle_factory=FakePlanningLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=FakePlanningLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
@@ -324,13 +321,10 @@ async def test_app_routes_initial_prompt_to_gatekeeper_on_init(tmp_path: Path):
     repo.mkdir()
     initialize_project(repo)
 
-    thread_one = _thread("thread-1", "first user prompt", "first assistant reply")
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    session_manager = FakeSessionManager([thread_one])
     app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=session_manager,
         lifecycle_factory=FakePlanningLifecycle,
     )
 
@@ -349,7 +343,6 @@ async def test_app_routes_initial_prompt_to_gatekeeper_on_init(tmp_path: Path):
         assert lifecycle is not None
         await asyncio.wait_for(lifecycle.gatekeeper_message_submitted.wait(), timeout=1.0)
         assert lifecycle.messages == ["Build an auth MVP."]
-        assert session_manager.sent_messages == []
         assert panel.current_thread_id == ChatPanel.GATEKEEPER_THREAD_ID
         gatekeeper_thread = panel.get_gatekeeper_thread()
         assert gatekeeper_thread is not None
@@ -366,7 +359,6 @@ async def test_app_automatic_mode_does_not_run_workflow_while_still_planning(tmp
     app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=FakeSessionManager(),
         lifecycle_factory=FakeAutomaticPlanningLifecycle,
     )
     launches: list[bool] = []
@@ -395,7 +387,6 @@ async def test_app_routes_to_vibing_when_gatekeeper_requests_planning_completion
     app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=FakeSessionManager(),
         lifecycle_factory=FakePlanningCompletionLifecycle,
     )
 
@@ -417,7 +408,6 @@ def test_app_streams_gatekeeper_response_live_during_planning(tmp_path: Path, mo
     app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        session_manager=FakeSessionManager(),
         lifecycle_factory=FakeStreamingPlanningLifecycle,
     )
     panel = ChatPanel()

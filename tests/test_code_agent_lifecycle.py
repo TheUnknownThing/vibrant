@@ -9,13 +9,14 @@ from typing import Any
 
 import pytest
 
+from vibrant.agents.runtime import RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
-from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.models.agent import AgentRecord
+from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
-from vibrant.orchestrator import CodeAgentLifecycle, OrchestratorEngine
+from vibrant.orchestrator import CodeAgentLifecycle, OrchestratorEngine, OrchestratorFacade
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -184,6 +185,96 @@ class FakeCodeAgentAdapter:
             await self.on_canonical_event(payload)
 
 
+class ManagedGatekeeperAdapter:
+    instances: list["ManagedGatekeeperAdapter"] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.cwd = Path(kwargs["cwd"])
+        self.on_canonical_event = kwargs.get("on_canonical_event")
+        self.agent_record = kwargs.get("agent_record")
+        self.start_session_calls: list[dict[str, Any]] = []
+        self.start_thread_calls: list[dict[str, Any]] = []
+        self.start_turn_calls: list[dict[str, Any]] = []
+        self.respond_calls: list[dict[str, Any]] = []
+        self._request_resolved = asyncio.Event()
+        process = type("DummyProcess", (), {"pid": 6601, "returncode": None})()
+        self.client = type("DummyClient", (), {"is_running": True, "_process": process})()
+        ManagedGatekeeperAdapter.instances.append(self)
+
+    async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+        self.start_session_calls.append({"cwd": cwd, **kwargs})
+        return {"serverInfo": {"name": "codex"}}
+
+    async def stop_session(self) -> None:
+        if self.client._process.returncode is None:
+            self.client._process.returncode = 0
+        self.client.is_running = False
+
+    async def start_thread(self, **kwargs: Any) -> Any:
+        self.start_thread_calls.append(dict(kwargs))
+        thread_id = "thread-managed-gatekeeper"
+        if self.agent_record is not None:
+            self.agent_record.provider.provider_thread_id = thread_id
+            self.agent_record.provider.resume_cursor = {"threadId": thread_id}
+        return {"thread": {"id": thread_id}}
+
+    async def resume_thread(self, provider_thread_id: str, **kwargs: Any) -> Any:
+        self.start_thread_calls.append({"provider_thread_id": provider_thread_id, **kwargs})
+        if self.agent_record is not None:
+            self.agent_record.provider.provider_thread_id = provider_thread_id
+            self.agent_record.provider.resume_cursor = {"threadId": provider_thread_id}
+        return {"thread": {"id": provider_thread_id}}
+
+    async def start_turn(self, *, input_items, runtime_mode: RuntimeMode, approval_policy: str, **kwargs: Any) -> Any:
+        self.start_turn_calls.append(
+            {
+                "input_items": list(input_items),
+                "runtime_mode": runtime_mode,
+                "approval_policy": approval_policy,
+                **kwargs,
+            }
+        )
+        asyncio.create_task(self._simulate_request_flow(), name="managed-gatekeeper-request")
+        return {"turn": {"id": "turn-managed-gatekeeper-1"}}
+
+    async def respond_to_request(
+        self,
+        request_id: int | str,
+        *,
+        result: Any | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> Any:
+        self.respond_calls.append({"request_id": request_id, "result": result, "error": error})
+        self._request_resolved.set()
+        return {"request_id": request_id, "result": result, "error": error}
+
+    async def interrupt_turn(self, **kwargs: Any) -> Any:
+        return kwargs
+
+    async def _simulate_request_flow(self) -> None:
+        if self.on_canonical_event is not None:
+            await self.on_canonical_event(
+                {
+                    "type": "request.opened",
+                    "request_id": "req-1",
+                    "request_kind": "user-input",
+                    "message": "Choose the API strategy.",
+                }
+            )
+        await self._request_resolved.wait()
+        if self.on_canonical_event is not None:
+            await self.on_canonical_event(
+                {
+                    "type": "request.resolved",
+                    "request_id": "req-1",
+                    "request_kind": "user-input",
+                }
+            )
+            await self.on_canonical_event({"type": "content.delta", "delta": "Recorded the user decision."})
+            await self.on_canonical_event({"type": "turn.completed", "turn": {"id": "turn-managed-gatekeeper-1"}})
+        self.client._process.returncode = 0
+
+
 class FakeGatekeeper:
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
@@ -228,20 +319,23 @@ class FakeGatekeeper:
         ConsensusWriter().write(consensus_path, consensus)
         RoadmapParser().write(roadmap_path, roadmap)
 
-        consensus_document = ConsensusParser().parse_file(consensus_path)
-        roadmap_document = RoadmapParser().parse_file(roadmap_path)
         transcript = f"Verdict: {verdict}"
+        gatekeeper_record = AgentRecord(
+            agent_id=f"gatekeeper-{request.trigger.value}-test",
+            task_id=f"gatekeeper-{request.trigger.value}",
+            type=AgentType.GATEKEEPER,
+            status=AgentStatus.AWAITING_INPUT if (questions or consensus.questions) else AgentStatus.COMPLETED,
+            summary=transcript,
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-gatekeeper-1",
+                resume_cursor={"threadId": "thread-gatekeeper-1"},
+            ),
+        )
         return GatekeeperRunResult(
-            request=request,
-            prompt="gatekeeper prompt",
+            agent_record=gatekeeper_record,
+            state=RunState.AWAITING_INPUT if (questions or consensus.questions) else RunState.COMPLETED,
             transcript=transcript,
-            verdict=verdict,
-            questions=questions or list(consensus_document.questions),
-            consensus_updated=True,
-            roadmap_updated=True,
-            plan_modified=plan_modified,
-            consensus_document=consensus_document,
-            roadmap_document=roadmap_document,
+            summary=transcript,
             error=None,
             turn_result={"turn": {"id": "gatekeeper-turn-1"}},
         )
@@ -256,6 +350,21 @@ class AsyncHandle:
 
     async def wait(self) -> GatekeeperRunResult:
         return await self.result_future
+
+
+def _agent_record(
+    agent_id: str,
+    *,
+    task_id: str = "task-001",
+    agent_type: AgentType = AgentType.CODE,
+    status: AgentStatus = AgentStatus.RUNNING,
+) -> AgentRecord:
+    return AgentRecord(
+        agent_id=agent_id,
+        task_id=task_id,
+        type=agent_type,
+        status=status,
+    )
 
 
 class AsyncFakeGatekeeper(FakeGatekeeper):
@@ -311,7 +420,7 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     assert record.provider.runtime_mode == "workspace-write"
     assert record.provider.native_event_log is not None
     assert record.provider.canonical_event_log is not None
-    assert lifecycle.engine.state.total_agent_spawns == 1
+    assert lifecycle.engine.state.total_agent_spawns == 2
     assert lifecycle.engine.state.active_agents == []
     assert lifecycle.engine.state.status is OrchestratorStatus.COMPLETED
 
@@ -325,7 +434,7 @@ async def test_submit_gatekeeper_message_routes_initial_prompt_to_project_start(
     lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     result = await lifecycle.submit_gatekeeper_message("Build an auth MVP for the app.")
 
-    assert result.request.trigger is GatekeeperTrigger.PROJECT_START
+    assert result.state is RunState.COMPLETED
     assert gatekeeper.requests[0].trigger is GatekeeperTrigger.PROJECT_START
     assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
 
@@ -349,7 +458,79 @@ async def test_start_gatekeeper_message_returns_handle_before_result_is_applied(
     result = await handle.wait()
     await asyncio.sleep(0)
 
-    assert result.request.trigger is GatekeeperTrigger.PROJECT_START
+    assert result.state is RunState.COMPLETED
+    assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
+
+
+@pytest.mark.asyncio
+async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
+    repo = _init_repo(tmp_path)
+    initialize_project(repo)
+    gatekeeper = Gatekeeper(repo, adapter_factory=ManagedGatekeeperAdapter, timeout_seconds=1)
+
+    lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    handle = await lifecycle.start_gatekeeper_message("Build an auth MVP for the app.")
+
+    for _ in range(50):
+        active = lifecycle.agent_manager.list_agents(agent_type=AgentType.GATEKEEPER, include_completed=False)
+        if active and active[0].awaiting_input:
+            break
+        await asyncio.sleep(0)
+    else:
+        raise AssertionError("Managed Gatekeeper run never surfaced through agent_manager")
+
+    snapshot = lifecycle.agent_manager.get_agent(handle.agent_record.agent_id)
+    assert snapshot is not None
+    assert snapshot.agent_type == AgentType.GATEKEEPER.value
+    assert snapshot.has_handle is True
+    assert snapshot.awaiting_input is True
+    assert snapshot.input_requests[0].request_id == "req-1"
+
+    updated = await lifecycle.agent_manager.respond_to_request(
+        handle.agent_record.agent_id,
+        "req-1",
+        result={"answer": "Use OAuth first."},
+    )
+    assert updated.agent_id == handle.agent_record.agent_id
+
+    result = await handle.wait()
+    await asyncio.sleep(0)
+
+    assert result.state is RunState.COMPLETED
+    assert lifecycle.agent_manager.get_handle(handle.agent_record.agent_id) is None
+    completed = lifecycle.agent_manager.get_agent(handle.agent_record.agent_id)
+    assert completed is not None
+    assert completed.has_handle is False
+    assert completed.done is True
+    assert completed.summary == "Recorded the user decision."
+
+
+def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+
+    record = _agent_record("agent-task-standalone", status=AgentStatus.RUNNING)
+    lifecycle.agent_store.upsert(record)
+
+    assert not hasattr(lifecycle.engine, "agents")
+    assert [item.agent_id for item in lifecycle.state_store.agent_records()] == ["agent-task-standalone"]
+    assert lifecycle.state_store.state.active_agents == ["agent-task-standalone"]
+
+    facade = OrchestratorFacade(lifecycle)
+    assert [item.agent_id for item in facade.agent_records()] == ["agent-task-standalone"]
+
+
+def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(tmp_path):
+    repo = _init_repo(tmp_path)
+    initialize_project(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+    facade = OrchestratorFacade(lifecycle)
+
+    assert lifecycle.engine.state.status is OrchestratorStatus.INIT
+
+    facade.transition_workflow_state(OrchestratorStatus.PLANNING)
+
     assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
 
 
@@ -428,3 +609,114 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
     assert roadmap.tasks[0].status is TaskStatus.ESCALATED
     assert lifecycle.engine.state.pending_questions == [gatekeeper.escalation_question]
     assert await lifecycle.execute_next_task() is None
+
+
+@pytest.mark.asyncio
+async def test_task_execution_service_starts_with_handle_snapshot(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature via handle\n"]
+    gatekeeper = FakeGatekeeper(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    assert lifecycle.dispatcher is not None
+
+    lifecycle.workflow_service.begin_execution_if_needed()
+    task = lifecycle.dispatcher.dispatch_next_task()
+    assert task is not None
+
+    attempt = await lifecycle.agent_manager.start_task(task)
+    snapshots = lifecycle.agent_manager.list_handle_snapshots()
+
+    assert len(snapshots) == 1
+    assert snapshots[0].agent_id == attempt.agent_record.agent_id
+    assert snapshots[0].task_id == task.id
+    assert snapshots[0].agent_type == "code"
+
+    result = await lifecycle.agent_manager.wait_for_task(attempt)
+
+    assert result.outcome == "accepted"
+    assert lifecycle.agent_manager.list_handle_snapshots() == []
+
+
+@pytest.mark.asyncio
+async def test_agent_management_service_unifies_live_and_persisted_agent_state(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["managed feature\n"]
+    gatekeeper = FakeGatekeeper(repo)
+
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    assert lifecycle.dispatcher is not None
+
+    lifecycle.workflow_service.begin_execution_if_needed()
+    task = lifecycle.dispatcher.dispatch_next_task()
+    assert task is not None
+
+    attempt = await lifecycle.agent_manager.start_task(task)
+
+    active = lifecycle.agent_manager.list_active_agents()
+    assert len(active) == 1
+    assert active[0].agent_id == attempt.agent_record.agent_id
+    assert active[0].task_id == task.id
+    assert active[0].agent_type == "code"
+    assert active[0].has_handle is True
+    assert active[0].active is True
+    assert active[0].provider_thread_id == "thread-task-001-1"
+
+    result = await lifecycle.agent_manager.wait_for_task(attempt)
+
+    assert result.outcome == "accepted"
+
+    snapshot = lifecycle.agent_manager.get_agent(attempt.agent_record.agent_id)
+    assert snapshot is not None
+    assert snapshot.agent_id == attempt.agent_record.agent_id
+    assert snapshot.has_handle is False
+    assert snapshot.active is False
+    assert snapshot.done is True
+    assert snapshot.status == "completed"
+    assert snapshot.state == "completed"
+    assert snapshot.summary == "Implemented task-001."
+    assert snapshot.provider_thread_id == "thread-task-001-1"
+
+    latest = lifecycle.agent_manager.latest_for_task(task.id)
+    assert latest is not None
+    assert latest.agent_id == attempt.agent_record.agent_id
+
+
+def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+
+    record = _agent_record(
+        "agent-task-001-awaiting",
+        status=AgentStatus.AWAITING_INPUT,
+    )
+    record.provider.provider_thread_id = "thread-task-001-persisted"
+    record.provider.resume_cursor = {"threadId": "thread-task-001-persisted"}
+    lifecycle.agent_registry.upsert(record, increment_spawn=True)
+
+    active = lifecycle.agent_manager.list_active_agents()
+
+    assert [snapshot.agent_id for snapshot in active] == [record.agent_id]
+    assert active[0].has_handle is False
+    assert active[0].active is True
+    assert active[0].awaiting_input is True
+
+
+def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+
+    code_record = _agent_record("agent-task-001-code", agent_type=AgentType.CODE)
+    merge_record = _agent_record("merge-task-001-merge", agent_type=AgentType.MERGE)
+    lifecycle.agent_registry.upsert(code_record, increment_spawn=True)
+    lifecycle.agent_registry.upsert(merge_record, increment_spawn=True)
+
+    snapshots = lifecycle.agent_manager.list_agents(agent_type=" CODE ")
+
+    assert [snapshot.agent_id for snapshot in snapshots] == [code_record.agent_id]

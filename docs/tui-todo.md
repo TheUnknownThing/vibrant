@@ -1,27 +1,47 @@
 # TUI Todo List
 
-## Remaining work after the screen cleanup
+> Tasks marked with `[ ]` are pending, while those marked with `[x]` are completed. Deferred tasks should not be implemented until unmarked.
 
-### Planning screen
-- Refine the planning chat layout and spacing to match the redesign mockup more closely.
-- Decide whether non-gatekeeper Codex threads still belong in the TUI; if yes, redesign them to fit the new flow instead of restoring the old thread-list UI.
-- Add a clearer planning-phase status indicator around `/vibe` so the transition feels explicit.
+## Service Migration
 
-### Vibing screen
-- Replace the `TaskStatusView` stub with a real task-status panel that shows the selected task, progress, and current execution details.
-- Replace the temporary roadmap-loading notices with a proper loading spinner for the `Task Status` and `Chat History` tabs before roadmap generation finishes.
-- Make the task bar fully match the plan: distinguish running, queued, blocked, and completed tasks, and support selecting a task to update the right-hand panel.
-- Decide how the right-hand tabs should sync with task selection, especially the default tab rules when entering vibing from planning vs reopening an existing project.
+[x] Hook TUI events into real API calls, as is detailed in the [Orchestrator API documentation](../vibrant/orchestrator/STABLE_API.md).
+[x] Remove remaining legacy multi-thread/session actions in `vibrant/tui/app.py`.
+[ ] (Defer) After reloading the application the session needs to be reloaded from the file system.
 
-### Consensus and logs
-- Review the current `ConsensusView` tab against the redesign and simplify it if a full-file view is preferred over the current summary-heavy widget.
-- Review the current `AgentOutput` panel against the redesign and keep only the log detail that belongs in the `Agent Logs` tab.
+## Widget Improvements
 
-### App flow
-- Audit the remaining legacy multi-thread/session actions in `vibrant/tui/app.py` and either remove them or redesign them to fit the new TUI plan.
-- Add focused tests for the new screen-host flow: initialization modal, planning screen, `/vibe` transition, and vibing tab defaults.
-- Remove any additional unused widgets or helpers that were only supporting the old four-panel layout once the new behavior is settled.
+### Agent Output
 
-## Intentionally left as stubs for now
-- `vibrant/tui/widgets/task_status.py`
-- Roadmap-loading placeholder inside `vibrant/tui/screens/vibing.py`
+[ ] Display agent thoughts as a collapsible section with a spinner while going, see [textual blog](https://textual.textualize.io/blog/2022/11/24/spinners-and-progress-bars-in-textual/) for implementation.
+
+### Input Box
+
+[ ] Implement `Ctrl + Backspace` to delete the last word in the input box.
+[ ] Implement autocompletion for commands (starting with `/`) and file paths (starting with `@`).
+[ ] (Defer) Implement a command history that can be navigated with the `Up` and `Down` arrow keys when the input box is focused.
+
+### Task Status
+
+[ ] Implement stub in `vibrant/tui/widgets/task_status.py`.
+
+## Screen Fixes
+
+### Initialization modal (select directory)
+
+[ ] When the dir input is not focused, pressing `Enter` should confirm the choice.
+
+### Planning Screen
+
+[ ] The second response from the agent does not render.
+
+### Vibing Screen
+
+[ ] Use Tabs instead of buttons to select tab to display.
+[ ] Replace the `TaskStatusView` stub with a real task-status panel that shows the selected task, progress, and current execution details.
+[ ] Replace the temporary roadmap-loading notices with a proper loading spinner for the `Task Status` and `Chat History` tabs before roadmap generation finishes.
+[ ] Implement Roadmap-loading placeholder.
+
+### Consensus Modal
+
+[ ] Rewrite the current `ConsensusView` tab so that it is rendered using the markdown tool.
+[ ] Review the current `AgentOutput` panel against the redesign and keep only the log detail that belongs in the `Agent Logs` tab.

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 import inspect
 
-from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
 from .git_workspace import GitWorkspaceService
-from .roadmap import RoadmapService
-from .state_store import StateStore
+from ..artifacts.roadmap import RoadmapService
+from ..state.store import StateStore
 
 
 class ReviewService:
@@ -27,11 +28,13 @@ class ReviewService:
         state_store: StateStore,
         roadmap_service: RoadmapService,
         git_service: GitWorkspaceService,
+        gatekeeper_runner: Callable[[GatekeeperRequest, bool | None], Awaitable[GatekeeperRunResult]] | None = None,
     ) -> None:
         self.gatekeeper = gatekeeper
         self.state_store = state_store
         self.roadmap_service = roadmap_service
         self.git_service = git_service
+        self.gatekeeper_runner = gatekeeper_runner
 
     async def run_gatekeeper_request(
         self,
@@ -39,6 +42,9 @@ class ReviewService:
         *,
         resume_latest_thread: bool | None = None,
     ) -> GatekeeperRunResult:
+        if self.gatekeeper_runner is not None:
+            return await self.gatekeeper_runner(request, resume_latest_thread)
+
         run_gatekeeper = self.gatekeeper.run
         try:
             signature = inspect.signature(run_gatekeeper)
@@ -55,9 +61,9 @@ class ReviewService:
         agent_record: AgentRecord,
         worktree: GitWorktreeInfo,
     ) -> tuple[GatekeeperRunResult, str]:
-        result = await self.gatekeeper.run(self.build_completion_request(task, agent_record, worktree))
+        result = await self.run_gatekeeper_request(self.build_completion_request(task, agent_record, worktree))
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
+        self._reload_roadmap()
         return result, self.resolve_decision(result, task.id)
 
     async def review_failure(
@@ -67,9 +73,9 @@ class ReviewService:
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRunResult:
-        result = await self.gatekeeper.run(self.build_failure_request(task, agent_record, worktree, reason))
+        result = await self.run_gatekeeper_request(self.build_failure_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
+        self._reload_roadmap()
         return result
 
     async def review_escalation(
@@ -79,9 +85,9 @@ class ReviewService:
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRunResult:
-        result = await self.gatekeeper.run(self.build_escalation_request(task, agent_record, worktree, reason))
+        result = await self.run_gatekeeper_request(self.build_escalation_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
+        self._reload_roadmap()
         return result
 
     def build_completion_request(
@@ -156,14 +162,25 @@ class ReviewService:
             agent_summary=agent_record.summary or reason,
         )
 
+
+    def _reload_roadmap(self) -> None:
+        self.roadmap_service.reload(
+            project_name=self.roadmap_service.project_name,
+            concurrency_limit=self.state_store.state.concurrency_limit,
+        )
+
     def resolve_decision(self, result: GatekeeperRunResult, task_id: str) -> str:
-        verdict = (result.verdict or "").strip().lower()
-        if verdict:
-            return verdict
-        if result.questions:
+        if result.awaiting_input or result.input_requests:
             return "needs_input"
-        if result.roadmap_document is not None:
-            task = next((item for item in result.roadmap_document.tasks if item.id == task_id), None)
-            if task is not None and task.status is TaskStatus.ACCEPTED:
-                return "accepted"
+        if result.error:
+            return "rejected"
+
+        current_task = None
+        if self.roadmap_service.roadmap_path.exists():
+            document = self.roadmap_service.parser.parse_file(self.roadmap_service.roadmap_path)
+            current_task = next((item for item in document.tasks if item.id == task_id), None)
+        if current_task is None and self.roadmap_service.dispatcher is not None:
+            current_task = self.roadmap_service.dispatcher.get_task(task_id)
+        if current_task is not None and current_task.status is TaskStatus.ACCEPTED:
+            return "accepted"
         return "rejected"

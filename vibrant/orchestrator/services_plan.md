@@ -244,14 +244,19 @@ Own durable agent metadata and runtime visibility.
 **Responsibilities**
 
 - register agents
+- create agent records for code/test/merge execution roles
 - persist `AgentRecord` files
+- preserve first-registration bookkeeping such as `total_agent_spawns`
 - update runtime metadata and provider thread identifiers
+- expose durable resume handles and pending-input state to higher layers
 - list active/completed/failed agents
 - expose agent snapshots, latest summaries, and results to the facade
 
 **Should own**
 
 - `.vibrant/agents/*.json` persistence
+- record-construction helpers shared by `CodeAgent`, `MergeAgent`, and future `TestAgent`
+- spawn-accounting rules that must happen exactly once per run
 - latest status per agent
 - agent summaries / agent lookups for UI and MCP
 
@@ -312,6 +317,8 @@ Run task execution end-to-end for one task or one dispatch loop.
 - coordinate dispatcher transitions during execution
 - create execution agent records
 - collect canonical events and execution summary
+- hand merge conflicts to a merge-specific agent path instead of treating them as generic task failure
+- compose a read-only validation/test agent stage once that path exists
 - hand completed/failed work to review and workflow services
 
 **Should own**
@@ -337,20 +344,25 @@ Run task execution end-to-end for one task or one dispatch loop.
 
 **Purpose**
 
-Own provider adapter session/thread/turn execution details.
+Own single-run provider adapter session/thread/turn execution details for orchestrator-managed agents.
 
 **Responsibilities**
 
+- delegate the reusable adapter lifecycle to `vibrant.agents.AgentBase` implementations instead of duplicating it in services
 - start provider session
-- start thread / turn
+- start thread / resume thread / start turn
 - collect canonical events
 - translate runtime errors
+- surface durable resume metadata from provider threads
+- represent `request.opened` / awaiting-input state without forcing every request into failure
 - handle request rejection policy for unsupported interactive provider requests
+- translate `AgentRunResult` into orchestrator-facing runtime results
 - stop adapters safely
 
 **Should own**
 
 - the adapter orchestration block inside `_execute_task`
+- the bridge from `AgentBase.run()` to orchestrator result objects
 - provider-specific runtime event capture
 
 **Should not own**
@@ -358,10 +370,18 @@ Own provider adapter session/thread/turn execution details.
 - task scheduling
 - roadmap policy
 - review decisions
+- first-write spawn accounting or agent-record factory policy
 
 **Current logic to migrate**
 
 - most of the provider runtime portion of `_execute_task`
+
+**Additional support still required after the `AgentBase` merge**
+
+- preserve `total_agent_spawns` accounting when a run is first registered
+- expose `AWAITING_INPUT` and request metadata for interactive or resumable flows
+- resume threads from stored provider metadata instead of assuming fresh starts only
+- let execution services plug in `MergeAgent` and a future `TestAgent` without re-implementing the runtime loop
 
 ## 10. `ReviewService`
 

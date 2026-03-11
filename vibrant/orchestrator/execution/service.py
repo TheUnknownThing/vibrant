@@ -2,18 +2,39 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from vibrant.agents.runtime import AgentHandle
+from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo
+from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
 from ..types import CodeAgentLifecycleResult
-from .agents import AgentRegistry
 from .git_workspace import GitWorkspaceService, format_merge_error
 from .prompts import PromptService
-from .retries import RetryPolicyService
+from .retry_policy import RetryPolicyService
 from .review import ReviewService
-from .roadmap import RoadmapService
-from .runtime import AgentRuntimeService
-from .state_store import StateStore
-from .workflow import WorkflowService
+from ..agents.registry import AgentRegistry
+from ..agents.runtime import AgentRuntimeService
+from ..artifacts.roadmap import RoadmapService
+from ..artifacts.workflow import WorkflowService
+from ..state.store import StateStore
+
+
+@dataclass(slots=True)
+class TaskExecutionAttempt:
+    """Prepared and started task execution attempt.
+
+    This is the internal orchestration object that MCP-facing code can later
+    use to start a task, inspect the agent handle, and await the normalized
+    runtime result separately.
+    """
+
+    task: TaskInfo
+    worktree: GitWorktreeInfo
+    prompt: str
+    agent_record: AgentRecord
+    handle: AgentHandle
 
 
 class TaskExecutionService:
@@ -54,16 +75,16 @@ class TaskExecutionService:
 
             if result.outcome not in {"accepted", "retried"}:
                 break
-            if self.state_store.state.pending_questions:
+            if self.state_store.has_pending_questions():
                 break
-            if self.state_store.state.status.value in {"paused", "completed"}:
+            if self.state_store.status.value in {"paused", "completed"}:
                 break
 
         self.workflow_service.maybe_complete_workflow()
         return results
 
     async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
-        if self.state_store.state.pending_questions:
+        if self.state_store.has_pending_questions():
             return None
 
         dispatcher = self.roadmap_service.dispatcher
@@ -78,40 +99,77 @@ class TaskExecutionService:
             return None
 
         self.roadmap_service.persist()
-        return await self._execute_task(task)
+        attempt = await self.start_task_attempt(task)
+        return await self.wait_for_task_attempt(attempt)
 
-    async def _execute_task(self, task: TaskInfo) -> CodeAgentLifecycleResult:
-        dispatcher = self.roadmap_service.dispatcher
-        assert dispatcher is not None
+    async def start_task_attempt(
+        self,
+        task: TaskInfo,
+        *,
+        resume_thread_id: str | None = None,
+    ) -> TaskExecutionAttempt:
+        """Prepare a task run and start its agent handle.
 
+        This gives the orchestrator a clear two-phase API:
+        start the run, then wait or observe it later.  The method is intended
+        to become the internal basis for future MCP task-spawn endpoints.
+        """
         worktree = self.git_service.create_fresh_worktree(task.id)
         task.branch = worktree.branch or task.branch or self.git_service.branch_name(task.id)
         self.roadmap_service.persist()
 
         prompt = self.prompt_service.build_task_prompt(task, worktree)
         agent_record = self.agent_registry.create_code_agent_record(task=task, worktree=worktree, prompt=prompt)
-        runtime_result = await self.runtime_service.run_task(
+        handle = await self.runtime_service.start_task(
             worktree=worktree,
             prompt=prompt,
             agent_record=agent_record,
+            resume_thread_id=resume_thread_id,
         )
+        return TaskExecutionAttempt(
+            task=task,
+            worktree=worktree,
+            prompt=prompt,
+            agent_record=agent_record,
+            handle=handle,
+        )
+
+    async def wait_for_task_attempt(self, attempt: TaskExecutionAttempt) -> CodeAgentLifecycleResult:
+        """Resolve a started task attempt through runtime, review, and merge."""
+        dispatcher = self.roadmap_service.dispatcher
+        assert dispatcher is not None
+
+        runtime_result = await self.runtime_service.wait_for_run(handle=attempt.handle)
         agent_record = runtime_result.agent_record
+
+        if runtime_result.awaiting_input:
+            self.roadmap_service.persist()
+            return CodeAgentLifecycleResult(
+                task_id=attempt.task.id,
+                outcome="awaiting_user",
+                task_status=attempt.task.status,
+                agent_record=agent_record,
+                events=runtime_result.events,
+                summary=runtime_result.summary,
+                error=runtime_result.error,
+                worktree_path=str(attempt.worktree.path),
+            )
 
         if runtime_result.error:
             return await self.retry_service.handle_failure(
-                task=task,
+                task=attempt.task,
                 agent_record=agent_record,
-                worktree=worktree,
+                worktree=attempt.worktree,
                 events=runtime_result.events,
                 reason=runtime_result.error,
                 summary=runtime_result.summary,
                 notify_gatekeeper_on_retry=True,
             )
 
-        completed_task = dispatcher.mark_completed(task.id)
+        completed_task = dispatcher.mark_completed(attempt.task.id)
         self.roadmap_service.persist()
 
-        gatekeeper_result, decision = await self.review_service.review_completion(completed_task, agent_record, worktree)
+        gatekeeper_result, decision = await self.review_service.review_completion(completed_task, agent_record, attempt.worktree)
         if decision in self.review_service.AWAITING_INPUT_VERDICTS:
             self.roadmap_service.persist()
             return CodeAgentLifecycleResult(
@@ -122,7 +180,7 @@ class TaskExecutionService:
                 gatekeeper_result=gatekeeper_result,
                 events=runtime_result.events,
                 summary=agent_record.summary,
-                worktree_path=str(worktree.path),
+                worktree_path=str(attempt.worktree.path),
             )
 
         if decision in self.review_service.ACCEPTED_VERDICTS:
@@ -148,7 +206,7 @@ class TaskExecutionService:
             return await self.retry_service.handle_failure(
                 task=completed_task,
                 agent_record=agent_record,
-                worktree=worktree,
+                worktree=attempt.worktree,
                 events=runtime_result.events,
                 reason=merge_error,
                 summary=agent_record.summary,
@@ -160,10 +218,15 @@ class TaskExecutionService:
         return await self.retry_service.handle_failure(
             task=completed_task,
             agent_record=agent_record,
-            worktree=worktree,
+            worktree=attempt.worktree,
             events=runtime_result.events,
             reason=rejection_reason,
             summary=agent_record.summary,
             prior_gatekeeper_result=gatekeeper_result,
             notify_gatekeeper_on_retry=False,
         )
+
+    async def _execute_task(self, task: TaskInfo) -> CodeAgentLifecycleResult:
+        """Compatibility wrapper for the legacy one-shot flow."""
+        attempt = await self.start_task_attempt(task)
+        return await self.wait_for_task_attempt(attempt)

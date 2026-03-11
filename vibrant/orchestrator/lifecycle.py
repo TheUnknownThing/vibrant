@@ -3,43 +3,36 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from vibrant.agents.code_agent import CodeAgent
+from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperAgent, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents.merge_agent import MergeAgent
 from vibrant.agents.runtime import AgentRuntime, BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, load_config
 from vibrant.consensus import RoadmapDocument, RoadmapParser
-from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.state import OrchestratorStatus
-from vibrant.orchestrator.engine import OrchestratorEngine
+from vibrant.orchestrator.state.backend import OrchestratorStateBackend
 from vibrant.orchestrator.git_manager import GitManager
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
-from .services import (
-    AgentRegistry,
-    AgentRuntimeService,
-    ConsensusService,
-    GitWorkspaceService,
-    PlanningService,
-    PromptService,
-    QuestionService,
-    RetryPolicyService,
-    ReviewService,
-    RoadmapService,
-    StateStore,
-    TaskExecutionService,
-    WorkflowService,
-)
-from .services.git_workspace import scoped_worktree_root
+from .agents import AgentManagementService, AgentRecordStore, AgentRegistry, AgentRuntimeService
+from .execution import GitWorkspaceService, PromptService, RetryPolicyService, ReviewService, TaskExecutionService, scoped_worktree_root
+from .artifacts import ConsensusService, PlanningService, QuestionService, RoadmapService, WorkflowService
+from .state import StateStore
 from .task_dispatch import TaskDispatcher
 from .types import CodeAgentLifecycleResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
+GatekeeperResultCallback = Callable[[GatekeeperRunResult], Any | Awaitable[Any]]
+_MIN_TIME = datetime.min.replace(tzinfo=timezone.utc)
 
 
 @dataclass(slots=True)
@@ -62,7 +55,7 @@ class CodeAgentLifecycle:
         self,
         project_root: str | Path,
         *,
-        engine: OrchestratorEngine | None = None,
+        engine: OrchestratorStateBackend | None = None,
         gatekeeper: Gatekeeper | Any | None = None,
         git_manager: GitManager | None = None,
         adapter_factory: Any | None = None,
@@ -77,7 +70,7 @@ class CodeAgentLifecycle:
 
         ensure_project_files(self.project_root)
         self.config = load_config(start_path=self.project_root)
-        self.engine = engine or OrchestratorEngine.load(self.project_root)
+        self.engine = engine or OrchestratorStateBackend.load(self.project_root)
         self.gatekeeper = gatekeeper or Gatekeeper(
             self.project_root,
             on_canonical_event=on_canonical_event,
@@ -90,10 +83,19 @@ class CodeAgentLifecycle:
         self.on_canonical_event = on_canonical_event
 
         self.state_store = StateStore(self.engine)
-        self.roadmap_service = RoadmapService(self.roadmap_path)
+        self.agent_store = AgentRecordStore(
+            vibrant_dir=self.vibrant_dir,
+            state_store=self.state_store,
+        )
+        self.state_store.bind_agent_store(self.agent_store)
+        self.roadmap_service = RoadmapService(self.roadmap_path, project_name=self.project_root.name)
         self.consensus_service = ConsensusService(self.consensus_path, state_store=self.state_store)
-        self.agent_registry = AgentRegistry(engine=self.engine, vibrant_dir=self.vibrant_dir)
-        self.question_service = QuestionService(state_store=self.state_store, gatekeeper=self.gatekeeper)
+        self.agent_registry = AgentRegistry(agent_store=self.agent_store, vibrant_dir=self.vibrant_dir)
+        self.question_service = QuestionService(
+            state_store=self.state_store,
+            gatekeeper=self.gatekeeper,
+            answer_runner=self._answer_gatekeeper_question,
+        )
         self.git_service = GitWorkspaceService(project_root=self.project_root, git_manager=self.git_manager)
         self.prompt_service = PromptService(
             skills_dir=self.skills_dir,
@@ -110,6 +112,7 @@ class CodeAgentLifecycle:
             state_store=self.state_store,
             roadmap_service=self.roadmap_service,
             git_service=self.git_service,
+            gatekeeper_runner=self._run_gatekeeper_request,
         )
         self.planning_service = PlanningService(
             state_store=self.state_store,
@@ -124,16 +127,9 @@ class CodeAgentLifecycle:
         # remote agents).  Otherwise we construct a BaseAgentRuntime wrapping
         # a CodeAgent so the orchestrator drives execution through the
         # protocol boundary rather than inline adapter logic.
-        self._agent_runtime: AgentRuntime | None = agent_runtime
+        self._agent_runtime: AgentRuntime | Callable[[AgentRecord], AgentRuntime] | None = agent_runtime
         if self._agent_runtime is None:
-            code_agent = CodeAgent(
-                self.project_root,
-                self.config,
-                adapter_factory=self.adapter_factory,
-                on_canonical_event=self.on_canonical_event,
-                on_agent_record_updated=self.agent_registry.make_record_callback(),
-            )
-            self._agent_runtime = BaseAgentRuntime(code_agent)
+            self._agent_runtime = self._build_default_agent_runtime
 
         self.runtime_service = AgentRuntimeService(
             agent_registry=self.agent_registry,
@@ -158,9 +154,48 @@ class CodeAgentLifecycle:
             review_service=self.review_service,
             retry_service=self.retry_service,
         )
+        self.agent_manager = AgentManagementService(
+            agent_registry=self.agent_registry,
+            runtime_service=self.runtime_service,
+            execution_service=self.execution_service,
+        )
         self._active_gatekeeper_futures: set[asyncio.Future[Any]] = set()
 
         self.reload_from_disk()
+
+    def _build_default_agent_runtime(self, agent_record: AgentRecord) -> AgentRuntime:
+        """Create a fresh protocol runtime for one agent record.
+
+        We intentionally build a fresh wrapped agent per run so callback wiring
+        stays isolated even if multiple tasks overlap in the future.
+        """
+        if agent_record.type is AgentType.GATEKEEPER and isinstance(self.gatekeeper, Gatekeeper):
+            gatekeeper_agent = self.gatekeeper.agent
+            agent = GatekeeperAgent(
+                self.project_root,
+                gatekeeper_agent.config,
+                adapter_factory=gatekeeper_agent.adapter_factory,
+                on_canonical_event=self.on_canonical_event,
+                on_agent_record_updated=self.agent_registry.make_record_callback(),
+                timeout_seconds=gatekeeper_agent.timeout_seconds,
+            )
+        elif agent_record.type is AgentType.MERGE:
+            agent = MergeAgent(
+                self.project_root,
+                self.config,
+                adapter_factory=self.adapter_factory,
+                on_canonical_event=self.on_canonical_event,
+                on_agent_record_updated=self.agent_registry.make_record_callback(),
+            )
+        else:
+            agent = CodeAgent(
+                self.project_root,
+                self.config,
+                adapter_factory=self.adapter_factory,
+                on_canonical_event=self.on_canonical_event,
+                on_agent_record_updated=self.agent_registry.make_record_callback(),
+            )
+        return BaseAgentRuntime(agent)
 
     @property
     def roadmap_parser(self) -> RoadmapParser:
@@ -180,11 +215,134 @@ class CodeAgentLifecycle:
 
     @property
     def gatekeeper_busy(self) -> bool:
-        return any(not future.done() for future in self._active_gatekeeper_futures)
+        managed_busy = any(
+            snapshot.active and not snapshot.awaiting_input
+            for snapshot in self.agent_manager.list_agents(
+                agent_type=AgentType.GATEKEEPER,
+                include_completed=False,
+            )
+        )
+        return managed_busy or any(not future.done() for future in self._active_gatekeeper_futures)
+
+    def _uses_managed_gatekeeper_runtime(self) -> bool:
+        return isinstance(self.gatekeeper, Gatekeeper) and self.runtime_service.supports_handles
+
+    def _latest_gatekeeper_thread_id(self) -> str | None:
+        latest_record: AgentRecord | None = None
+        latest_sort_key: tuple[object, object] | None = None
+        for record in self.agent_registry.list_records():
+            if record.type is not AgentType.GATEKEEPER:
+                continue
+            thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
+            if not thread_id:
+                continue
+            started = record.started_at or record.finished_at or _MIN_TIME
+            finished = record.finished_at or started
+            sort_key = (started, finished)
+            if latest_sort_key is None or sort_key > latest_sort_key:
+                latest_record = record
+                latest_sort_key = sort_key
+        if latest_record is None:
+            return None
+        return latest_record.provider.provider_thread_id or _extract_provider_thread_id(
+            latest_record.provider.resume_cursor
+        )
+
+    async def _forward_gatekeeper_result(
+        self,
+        *,
+        agent_id: str,
+        callback: GatekeeperResultCallback,
+    ) -> GatekeeperRunResult:
+        execution_result = await self.agent_manager.wait_for_agent(agent_id)
+        result = execution_result.normalized_result
+        if result is None:
+            raise RuntimeError(f"Gatekeeper run {agent_id} did not produce a normalized result")
+        callback_result = callback(result)
+        if asyncio.iscoroutine(callback_result):
+            await callback_result
+        return result
+
+    async def _start_managed_gatekeeper_run(
+        self,
+        request: GatekeeperRequest,
+        *,
+        resume_latest_thread: bool | None = None,
+        on_result: GatekeeperResultCallback | None = None,
+    ) -> Any:
+        if not isinstance(self.gatekeeper, Gatekeeper):
+            raise RuntimeError("Managed Gatekeeper runtime requires a real Gatekeeper instance")
+
+        prompt = self.gatekeeper.render_prompt(request)
+        agent_record = self.gatekeeper.build_agent_record(request)
+        agent_record.prompt_used = prompt
+
+        should_resume = (
+            resume_latest_thread
+            if resume_latest_thread is not None
+            else request.trigger is GatekeeperTrigger.USER_CONVERSATION
+        )
+        resume_thread_id = self._latest_gatekeeper_thread_id() if should_resume else None
+        handle = await self.agent_manager.start_run(
+            agent_record=agent_record,
+            prompt=prompt,
+            cwd=str(self.project_root),
+            resume_thread_id=resume_thread_id,
+            increment_spawn=True,
+        )
+        setattr(handle, "agent_record", agent_record)
+        setattr(handle, "request", request)
+        setattr(handle, "prompt", prompt)
+
+        if on_result is not None:
+            future = asyncio.create_task(
+                self._forward_gatekeeper_result(agent_id=agent_record.agent_id, callback=on_result),
+                name=f"gatekeeper-{request.trigger.value}-{agent_record.agent_id}",
+            )
+            self._track_gatekeeper_future(future)
+
+        return handle
+
+    async def _run_gatekeeper_request(
+        self,
+        request: GatekeeperRequest,
+        resume_latest_thread: bool | None = None,
+    ) -> GatekeeperRunResult:
+        if self._uses_managed_gatekeeper_runtime():
+            handle = await self._start_managed_gatekeeper_run(
+                request,
+                resume_latest_thread=resume_latest_thread,
+            )
+            execution_result = await self.agent_manager.wait_for_agent(handle.agent_record.agent_id)
+            result = execution_result.normalized_result
+            if result is None:
+                raise RuntimeError(f"Gatekeeper run {handle.agent_record.agent_id} did not produce a normalized result")
+            return result
+
+        run_gatekeeper = self.gatekeeper.run
+        try:
+            from inspect import signature
+
+            parameters = signature(run_gatekeeper).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+
+        if "resume_latest_thread" in parameters:
+            return await run_gatekeeper(request, resume_latest_thread=resume_latest_thread)
+        return await run_gatekeeper(request)
+
+    async def _answer_gatekeeper_question(self, question: str, answer: str) -> GatekeeperRunResult:
+        request = GatekeeperRequest(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description=f"Question: {question}\nUser Answer: {answer}",
+            agent_summary=answer,
+        )
+        return await self._run_gatekeeper_request(request, resume_latest_thread=True)
 
     def reload_from_disk(self) -> RoadmapDocument:
         self.config = load_config(start_path=self.project_root)
         self.state_store.refresh()
+        self.agent_store.refresh()
         return self.roadmap_service.reload(
             project_name=self.project_root.name,
             concurrency_limit=self.engine.state.concurrency_limit,
@@ -219,25 +377,33 @@ class CodeAgentLifecycle:
         )
         resume_latest_thread = trigger is GatekeeperTrigger.USER_CONVERSATION
 
+        if self._uses_managed_gatekeeper_runtime():
+            return await self._start_managed_gatekeeper_run(
+                request,
+                resume_latest_thread=resume_latest_thread,
+                on_result=self._apply_gatekeeper_result_async,
+            )
+
         start_run = getattr(self.gatekeeper, "start_run", None)
         if callable(start_run):
+            from inspect import signature
+
             kwargs: dict[str, Any] = {}
             supports_on_result = False
             try:
-                signature = inspect.signature(start_run)
+                parameters = signature(start_run).parameters
             except (TypeError, ValueError):
-                signature = None
+                parameters = {}
 
-            if signature is not None:
-                if "resume_latest_thread" in signature.parameters:
-                    kwargs["resume_latest_thread"] = resume_latest_thread
-                if "on_result" in signature.parameters:
-                    kwargs["on_result"] = self._apply_gatekeeper_result_async
-                    supports_on_result = True
+            if "resume_latest_thread" in parameters:
+                kwargs["resume_latest_thread"] = resume_latest_thread
+            if "on_result" in parameters:
+                kwargs["on_result"] = self._apply_gatekeeper_result_async
+                supports_on_result = True
 
             handle = await start_run(request, **kwargs)
             if supports_on_result:
-                self._track_gatekeeper_future(handle.result_future)
+                self._track_gatekeeper_future(asyncio.create_task(handle.wait(), name=f"gatekeeper-wait-{trigger.value}"))
                 return handle
 
             async def wait_and_apply() -> GatekeeperRunResult:
@@ -263,9 +429,15 @@ class CodeAgentLifecycle:
         handle = await self.start_gatekeeper_message(text)
         return await handle.wait()
 
+    async def answer_pending_question(self, answer: str, *, question: str | None = None) -> GatekeeperRunResult:
+        return await self.question_service.answer(answer, question=question)
+
     async def _apply_gatekeeper_result_async(self, result: GatekeeperRunResult) -> None:
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
+        self.roadmap_service.reload(
+            project_name=self.roadmap_service.project_name,
+            concurrency_limit=self.state_store.state.concurrency_limit,
+        )
         self.roadmap_service.persist()
         self.workflow_service.maybe_complete_workflow()
         self.state_store.refresh()
@@ -280,11 +452,18 @@ class CodeAgentLifecycle:
 
     async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
         self.reload_from_disk()
-        return await self.execution_service.execute_until_blocked()
+        return await self.agent_manager.execute_until_blocked()
 
     async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
         self.reload_from_disk()
-        return await self.execution_service.execute_next_task()
+        return await self.agent_manager.execute_next_task()
 
 
 __all__ = ["CodeAgentLifecycle", "CodeAgentLifecycleResult"]
+
+
+def _extract_provider_thread_id(resume_cursor: object) -> str | None:
+    if not isinstance(resume_cursor, dict):
+        return None
+    thread_id = resume_cursor.get("threadId")
+    return thread_id if isinstance(thread_id, str) and thread_id else None
