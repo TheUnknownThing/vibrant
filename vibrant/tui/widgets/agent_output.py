@@ -576,6 +576,8 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
         return [_compose_line(event, f"✗ runtime.error {_error_text(event)}".rstrip())]
     if event_type == "content.delta":
         return []
+    if event_type == "reasoning.summary.delta":
+        return []
 
     payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "provider", "agent_id", "task_id"}}
     compact = json.dumps(payload, ensure_ascii=False, sort_keys=True) if payload else ""

@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
+import shlex
 from typing import Any, Callable
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
@@ -49,6 +50,7 @@ class CodexProviderAdapter(ProviderAdapter):
         self.provider_thread_id: str | None = None
         self.thread_metadata: dict[str, Any] = {}
         self.current_turn_id: str | None = None
+        self._item_states: dict[str, dict[str, Any]] = {}
         self._session_started = False
         self._pending_requests: dict[int | str, dict[str, Any]] = {}
         self._awaiting_thread_started_for: str | None = None
@@ -367,6 +369,7 @@ class CodexProviderAdapter(ProviderAdapter):
         params = dict(original_params)
 
         if method.startswith("codex/event/"):
+            await self._handle_legacy_notification(method, params)
             await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
             return
 
@@ -404,6 +407,13 @@ class CodexProviderAdapter(ProviderAdapter):
                 turn_status=_turn_status_from_payload(turn_payload),
                 turn=turn_payload,
             )
+        elif method == "item/started":
+            item_payload = _sanitize_progress_item(params.get("item", params))
+            turn_id = params.get("turnId") or self.current_turn_id
+            item_id = self._remember_item_state(item_payload, turn_id=turn_id)
+            item_type = _normalize_item_type(item_payload.get("type"))
+            if item_type == "commandexecution":
+                await self._emit_command_started(item_payload, turn_id=turn_id, raw=params, item_id=item_id)
         elif method == "item/agentMessage/delta":
             await self._emit_canonical(
                 "content.delta",
@@ -413,6 +423,14 @@ class CodexProviderAdapter(ProviderAdapter):
                 provider_payload=dict(params),
             )
         elif method == "item/reasoning/summaryTextDelta":
+            await self._handle_reasoning_delta(
+                item_id=params.get("itemId") or params.get("item_id"),
+                turn_id=params.get("turnId") or self.current_turn_id,
+                delta=params.get("delta", ""),
+                summary_index=params.get("summaryIndex"),
+                raw=params,
+                redacted_for_log=False,
+            )
             await self._emit_canonical(
                 "reasoning.summary.delta",
                 item_id=params.get("itemId") or params.get("item_id"),
@@ -421,16 +439,30 @@ class CodexProviderAdapter(ProviderAdapter):
                 summary_index=params.get("summaryIndex"),
                 provider_payload=dict(params),
             )
+        elif method == "item/reasoning/summaryPartAdded":
+            item_id = params.get("itemId") or params.get("item_id")
+            if isinstance(item_id, str) and item_id:
+                self._ensure_item_state(item_id)["pending_reasoning_break"] = True
+        elif method == "item/reasoning/textDelta":
+            await self._handle_reasoning_delta(
+                item_id=params.get("itemId") or params.get("item_id"),
+                turn_id=params.get("turnId") or self.current_turn_id,
+                delta=params.get("delta", ""),
+                raw=params,
+                redacted_for_log=True,
+            )
+        elif method == "item/commandExecution/outputDelta":
+            await self._handle_command_output_delta(
+                item_id=params.get("itemId") or params.get("item_id"),
+                turn_id=params.get("turnId") or self.current_turn_id,
+                delta=params.get("delta", ""),
+                raw=params,
+            )
         elif method == "item/completed":
             item_payload = params.get("item", params)
             item_payload = _sanitize_progress_item(item_payload)
-            item_type = item_payload.get("type") if isinstance(item_payload, Mapping) else None
-            await self._emit_canonical(
-                "task.progress",
-                item=item_payload,
-                item_type=item_type,
-                text=_progress_text_from_item(item_payload),
-            )
+            turn_id = params.get("turnId") or self.current_turn_id
+            await self._handle_item_completed(item_payload, turn_id=turn_id, raw=params)
         elif method == "turn/completed":
             turn_payload = params.get("turn", params)
             self.current_turn_id = turn_payload.get("id") or self.current_turn_id
@@ -450,6 +482,7 @@ class CodexProviderAdapter(ProviderAdapter):
                 turn=turn_payload,
                 provider_payload=dict(params),
             )
+            self._item_states.clear()
         elif method in {"error", "turn/error"}:
             error_payload = params.get("error", params)
             await self._emit_canonical(
@@ -459,6 +492,7 @@ class CodexProviderAdapter(ProviderAdapter):
                 error_code=_error_code(error_payload),
                 provider_payload=dict(params),
             )
+            self._item_states.clear()
 
         await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
 
@@ -559,7 +593,215 @@ class CodexProviderAdapter(ProviderAdapter):
             return "approval"
         return "request"
 
-    async def _emit_canonical(self, event_type: str, **payload: Any) -> None:
+    async def _handle_legacy_notification(self, method: str, params: Mapping[str, Any]) -> None:
+        msg = params.get("msg")
+        if method == "codex/event/exec_command_begin" and isinstance(msg, Mapping):
+            item = _legacy_command_item(msg, status="inProgress")
+            turn_id = str(msg.get("turn_id") or self.current_turn_id or "")
+            item_id = self._remember_item_state(item, turn_id=turn_id)
+            await self._emit_command_started(item, turn_id=turn_id or None, raw=params, item_id=item_id)
+        elif method == "codex/event/exec_command_end" and isinstance(msg, Mapping):
+            item = _legacy_command_item(msg, status="completed")
+            turn_id = str(msg.get("turn_id") or self.current_turn_id or "")
+            item_id = self._remember_item_state(item, turn_id=turn_id)
+            await self._emit_command_completed(item, turn_id=turn_id or None, raw=params, item_id=item_id)
+
+    async def _handle_reasoning_delta(
+        self,
+        *,
+        item_id: Any,
+        turn_id: str | None,
+        delta: Any,
+        raw: Mapping[str, Any],
+        summary_index: Any | None = None,
+        redacted_for_log: bool,
+    ) -> None:
+        if not isinstance(item_id, str) or not item_id:
+            return
+
+        text = str(delta or "")
+        if not text:
+            return
+
+        state = self._ensure_item_state(item_id)
+        if state.pop("pending_reasoning_break", False) and state.get("visible_reasoning_text"):
+            text = f"\n{text}"
+        state["visible_reasoning_text"] = f"{state.get('visible_reasoning_text', '')}{text}"
+        item = {
+            "type": "reasoning",
+            "id": item_id,
+            "text": text,
+        }
+        if summary_index is not None:
+            item["summaryIndex"] = summary_index
+
+        log_item = dict(item)
+        if redacted_for_log:
+            log_item["text"] = "[reasoning redacted]"
+
+        await self._emit_task_progress(
+            item=item,
+            turn_id=turn_id,
+            raw=raw,
+            log_item=log_item,
+        )
+
+    async def _handle_command_output_delta(
+        self,
+        *,
+        item_id: Any,
+        turn_id: str | None,
+        delta: Any,
+        raw: Mapping[str, Any],
+    ) -> None:
+        if not isinstance(item_id, str) or not item_id:
+            return
+
+        text = str(delta or "")
+        if not text:
+            return
+
+        state = self._ensure_item_state(item_id)
+        state["command_output_emitted"] = True
+        state["visible_command_output"] = f"{state.get('visible_command_output', '')}{text}"
+
+        item = self._command_progress_item(
+            state.get("item"),
+            text=text,
+            status="inProgress",
+        )
+        await self._emit_task_progress(item=item, turn_id=turn_id, raw=raw)
+
+    async def _handle_item_completed(
+        self,
+        item_payload: Mapping[str, Any],
+        *,
+        turn_id: str | None,
+        raw: Mapping[str, Any],
+    ) -> None:
+        item_id = self._remember_item_state(item_payload, turn_id=turn_id)
+        item_type = _normalize_item_type(item_payload.get("type"))
+
+        if item_type == "commandexecution":
+            await self._emit_command_completed(item_payload, turn_id=turn_id, raw=raw, item_id=item_id)
+            return
+
+        if item_type == "reasoning":
+            state = self._ensure_item_state(item_id) if item_id else None
+            completed_text = _reasoning_summary_text(item_payload.get("summary")) or str(item_payload.get("text") or "").strip()
+            visible_text = str((state or {}).get("visible_reasoning_text") or "").strip()
+            if not completed_text and visible_text:
+                return
+            if completed_text and completed_text == visible_text:
+                return
+
+        await self._emit_task_progress(item=item_payload, turn_id=turn_id, raw=raw)
+
+    async def _emit_command_started(
+        self,
+        item_payload: Mapping[str, Any],
+        *,
+        turn_id: str | None,
+        raw: Mapping[str, Any],
+        item_id: str | None,
+    ) -> None:
+        if not item_id:
+            return
+        state = self._ensure_item_state(item_id)
+        if state.get("command_started_emitted"):
+            return
+        state["command_started_emitted"] = True
+        item = self._command_progress_item(item_payload, text=_command_start_text(item_payload), status="inProgress")
+        await self._emit_task_progress(item=item, turn_id=turn_id, raw=raw)
+
+    async def _emit_command_completed(
+        self,
+        item_payload: Mapping[str, Any],
+        *,
+        turn_id: str | None,
+        raw: Mapping[str, Any],
+        item_id: str | None,
+    ) -> None:
+        if not item_id:
+            return
+        state = self._ensure_item_state(item_id)
+        if state.get("command_completed_emitted"):
+            return
+        state["command_completed_emitted"] = True
+        include_output = not bool(state.get("command_output_emitted"))
+        item = self._command_progress_item(
+            item_payload,
+            text=_command_completion_text(item_payload, include_output=include_output),
+            status=item_payload.get("status") or "completed",
+        )
+        await self._emit_task_progress(item=item, turn_id=turn_id, raw=raw)
+
+    async def _emit_task_progress(
+        self,
+        *,
+        item: Mapping[str, Any],
+        turn_id: str | None,
+        raw: Mapping[str, Any],
+        log_item: Mapping[str, Any] | None = None,
+    ) -> None:
+        item_payload = dict(item)
+        provider_payload = dict(raw)
+        payload = {
+            "item": item_payload,
+            "item_type": item.get("type"),
+            "turn_id": turn_id or self.current_turn_id,
+            "text": _progress_text_from_item(item_payload),
+            "provider_payload": provider_payload,
+        }
+        logged_item = dict(log_item) if log_item is not None else item_payload
+        log_payload = {
+            **payload,
+            "item": logged_item,
+            "text": _progress_text_from_item(logged_item),
+            "provider_payload": provider_payload,
+        }
+        await self._emit_canonical("task.progress", _log_payload=log_payload, **payload)
+
+    def _remember_item_state(self, item_payload: Mapping[str, Any], *, turn_id: str | None = None) -> str | None:
+        item_id = item_payload.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            return None
+        state = self._ensure_item_state(item_id)
+        state["item"] = dict(item_payload)
+        if turn_id:
+            state["turn_id"] = turn_id
+        return item_id
+
+    def _ensure_item_state(self, item_id: str) -> dict[str, Any]:
+        state = self._item_states.get(item_id)
+        if state is None:
+            state = {
+                "pending_reasoning_break": False,
+                "visible_reasoning_text": "",
+                "visible_command_output": "",
+                "command_started_emitted": False,
+                "command_completed_emitted": False,
+                "command_output_emitted": False,
+            }
+            self._item_states[item_id] = state
+        return state
+
+    def _command_progress_item(
+        self,
+        item_payload: Mapping[str, Any] | None,
+        *,
+        text: str,
+        status: Any,
+    ) -> dict[str, Any]:
+        item = dict(item_payload or {})
+        item["type"] = item.get("type") or "commandExecution"
+        if isinstance(text, str) and text:
+            item["text"] = text
+        if status is not None:
+            item["status"] = status
+        return item
+
+    async def _emit_canonical(self, event_type: str, _log_payload: Mapping[str, Any] | None = None, **payload: Any) -> None:
         event: CanonicalEvent = {
             "type": event_type,
             "timestamp": _timestamp_now(),
@@ -574,9 +816,10 @@ class CodexProviderAdapter(ProviderAdapter):
         event.update(payload)
 
         if self._canonical_logger is not None:
+            log_data = dict(_log_payload) if _log_payload is not None else {key: value for key, value in event.items() if key not in {"type", "timestamp"}}
             self._canonical_logger.log_canonical(
                 event_type,
-                {key: value for key, value in event.items() if key not in {"type", "timestamp"}},
+                log_data,
                 timestamp=event["timestamp"],
             )
         await self.on_canonical_event(event)
@@ -757,6 +1000,79 @@ def _sanitize_progress_item(item_payload: Any) -> Any:
     # Avoid writing raw reasoning content to canonical logs.
     item.pop("content", None)
     return item
+
+
+def _normalize_item_type(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def _legacy_command_item(msg: Mapping[str, Any], *, status: str) -> dict[str, Any]:
+    stdout = str(msg.get("stdout") or "")
+    stderr = str(msg.get("stderr") or "")
+    output = str(msg.get("aggregated_output") or msg.get("formatted_output") or "")
+    if not output:
+        output = stdout
+        if stderr:
+            output = f"{output}{stderr}" if output else stderr
+
+    item: dict[str, Any] = {
+        "type": "commandExecution",
+        "id": msg.get("call_id"),
+        "command": _stringify_command(msg.get("command")),
+        "cwd": msg.get("cwd"),
+        "processId": msg.get("process_id"),
+        "status": status,
+        "commandActions": list(msg.get("parsed_cmd", [])) if isinstance(msg.get("parsed_cmd"), Sequence) else [],
+        "aggregatedOutput": output or None,
+        "exitCode": msg.get("exit_code"),
+        "durationMs": _duration_to_ms(msg.get("duration")),
+    }
+    return item
+
+
+def _stringify_command(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        parts = [str(entry) for entry in value if entry is not None]
+        return shlex.join(parts) if parts else ""
+    return ""
+
+
+def _duration_to_ms(value: Any) -> int | None:
+    if isinstance(value, Mapping):
+        secs = value.get("secs")
+        nanos = value.get("nanos")
+        if isinstance(secs, int) and isinstance(nanos, int):
+            return secs * 1000 + nanos // 1_000_000
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
+
+
+def _command_start_text(item_payload: Mapping[str, Any]) -> str:
+    command = str(item_payload.get("command") or "").strip()
+    return f"$ {command}" if command else "command started"
+
+
+def _command_completion_text(item_payload: Mapping[str, Any], *, include_output: bool) -> str:
+    exit_code = item_payload.get("exitCode")
+    duration_ms = item_payload.get("durationMs")
+    summary = "command completed"
+    if isinstance(exit_code, int):
+        summary = f"{summary} (exit {exit_code})"
+    if isinstance(duration_ms, int):
+        summary = f"{summary} [{duration_ms}ms]"
+
+    if not include_output:
+        return summary
+
+    output = str(item_payload.get("aggregatedOutput") or "").rstrip()
+    if not output:
+        return summary
+    return f"{summary}\n{output}"
 
 
 def _reasoning_summary_text(value: object) -> str:

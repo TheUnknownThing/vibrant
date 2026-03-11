@@ -499,7 +499,7 @@ Known event-specific top-level fields should stay provider-neutral. In particula
 - `turn.started` / `turn.completed` / `task.completed`: `turn_id`, optional `turn_status`, optional `turn`
 - `content.delta`: `item_id`, `turn_id`, `delta`
 - `reasoning.summary.delta`: `item_id`, `turn_id`, `delta`, optional `summary_index`
-- `task.progress`: `item`, optional `item_type`, optional `text`
+- `task.progress`: `item`, optional `turn_id`, optional `item_type`, optional `text`
 - `request.opened`: `request_id`, `request_kind`, `method`, optional `params`
 - `request.resolved`: `request_id`, `request_kind`, `method`, optional `result`, optional `error`, optional `error_message`
 - `user-input.requested` / `user-input.resolved`: the request fields above, plus orchestrator-generated question fields when applicable

@@ -138,6 +138,7 @@ class UserInputResolvedEvent(CanonicalEventEnvelope):
 class TaskProgressEvent(CanonicalEventEnvelope):
     type: Required[Literal["task.progress"]]
     item: Required[Any]
+    turn_id: NotRequired[str]
     item_type: NotRequired[str]
     text: NotRequired[str]
 

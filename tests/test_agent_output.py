@@ -136,3 +136,33 @@ def test_agent_output_debug_view_tails_native_log(tmp_path: Path):
 
     rendered = widget.get_rendered_text("agent-1", debug=True)
     assert "stderr boom" in rendered
+
+
+def test_agent_output_hides_structured_reasoning_summary_delta():
+    record = _agent_record("agent-1", task_id="task-001")
+    widget = AgentOutput()
+    widget.sync_agents([record])
+
+    widget.ingest_canonical_event(
+        {
+            "type": "task.progress",
+            "timestamp": "2026-03-08T10:00:00Z",
+            "agent_id": "agent-1",
+            "task_id": "task-001",
+            "item": {"type": "reasoning", "text": "considering options"},
+        }
+    )
+    widget.ingest_canonical_event(
+        {
+            "type": "reasoning.summary.delta",
+            "timestamp": "2026-03-08T10:00:01Z",
+            "agent_id": "agent-1",
+            "task_id": "task-001",
+            "delta": "considering options",
+            "item_id": "rs-1",
+        }
+    )
+
+    rendered = widget.get_rendered_text("agent-1")
+    assert "considering options" in rendered
+    assert "reasoning.summary.delta" not in rendered
