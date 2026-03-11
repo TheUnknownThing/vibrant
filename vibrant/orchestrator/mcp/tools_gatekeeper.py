@@ -43,8 +43,36 @@ class GatekeeperToolHandlers:
         created = self.facade.add_task(TaskInfo.model_validate(task), index=index)
         return created.model_dump(mode="json")
 
-    def roadmap_update_task(self, task_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-        updated = self.facade.update_task(task_id, **updates)
+    def roadmap_update_task(
+        self,
+        task_id: str,
+        *,
+        title: str | None = None,
+        acceptance_criteria: Sequence[str] | None = None,
+        status: str | None = None,
+        branch: str | None = None,
+        retry_count: int | None = None,
+        max_retries: int | None = None,
+        prompt: str | None = None,
+        skills: Sequence[str] | None = None,
+        dependencies: Sequence[str] | None = None,
+        priority: int | None = None,
+        failure_reason: str | None = None,
+    ) -> dict[str, Any]:
+        updated = self.facade.update_task(
+            task_id,
+            title=title,
+            acceptance_criteria=acceptance_criteria,
+            status=status,
+            branch=branch,
+            retry_count=retry_count,
+            max_retries=max_retries,
+            prompt=prompt,
+            skills=skills,
+            dependencies=dependencies,
+            priority=priority,
+            failure_reason=failure_reason,
+        )
         return updated.model_dump(mode="json")
 
     def roadmap_reorder_tasks(self, ordered_task_ids: list[str]) -> dict[str, Any]:
@@ -153,7 +181,10 @@ class GatekeeperToolHandlers:
         )
 
     def update_roadmap(self, *, tasks: Sequence[dict[str, Any]], project: str | None = None) -> dict[str, Any]:
-        roadmap = self.facade.replace_roadmap(tasks=list(tasks), project=project)
+        roadmap = self.facade.replace_roadmap(
+            tasks=[TaskInfo.model_validate(task) for task in tasks],
+            project=project,
+        )
         return {
             "project": roadmap.project,
             "tasks": [task.model_dump(mode="json") for task in roadmap.tasks],
