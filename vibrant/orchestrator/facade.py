@@ -27,8 +27,8 @@ from vibrant.models.consensus import ConsensusStatus
 from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 
-from .lifecycle import CodeAgentLifecycle
-from .execution.dispatcher import TaskDispatcher
+from .bootstrap import Orchestrator
+from .task_dispatch import TaskDispatcher
 from .types import AgentOutput, CodeAgentLifecycleResult, OrchestratorAgentSnapshot
 
 _WORKFLOW_TO_CONSENSUS = {
@@ -72,18 +72,21 @@ class OrchestratorFacade:
     - generic state-transition helpers
     """
 
-    def __init__(self, lifecycle: CodeAgentLifecycle | Any) -> None:
-        self.lifecycle = lifecycle
-        self.questions = getattr(lifecycle, "question_service", None)
+    def __init__(self, orchestrator: Orchestrator | Any) -> None:
+        self.orchestrator = orchestrator
+        self.questions = getattr(orchestrator, "question_service", None)
 
     def _engine(self) -> Any | None:
-        return getattr(self.lifecycle, "engine", None)
+        backend = getattr(self.orchestrator, "state_backend", None)
+        if backend is not None:
+            return backend
+        return getattr(self.orchestrator, "engine", None)
 
     def _state_store(self) -> Any | None:
-        return getattr(self.lifecycle, "state_store", None)
+        return getattr(self.orchestrator, "state_store", None)
 
     def _agent_manager(self) -> Any | None:
-        return getattr(self.lifecycle, "agent_manager", None)
+        return getattr(self.orchestrator, "agent_manager", None)
 
     def _pending_questions_from_engine(self) -> list[str]:
         state_store = self._state_store()
@@ -155,8 +158,18 @@ class OrchestratorFacade:
                 raise ValueError(f"Unsupported agent status: {value!r}") from exc
         raise TypeError(f"agent status must be AgentStatus, str, or None; got {type(value).__name__}")
 
+    def _agent_output_service(self) -> Any | None:
+        service = getattr(self.orchestrator, "agent_output_service", None)
+        if service is not None:
+            return service
+
+        agent_manager = self._agent_manager()
+        if agent_manager is None:
+            return None
+        return getattr(agent_manager, "_output_service", None)
+
     def _output_for_record(self, record: AgentRecord) -> AgentOutput | None:
-        service = getattr(self.lifecycle, "agent_output_service", None)
+        service = self._agent_output_service()
         if service is None:
             return None
         getter = getattr(service, "output_for_record", None)
@@ -165,7 +178,7 @@ class OrchestratorFacade:
         return getter(record)
 
     def _output_for_agent(self, agent_id: str) -> AgentOutput | None:
-        service = getattr(self.lifecycle, "agent_output_service", None)
+        service = self._agent_output_service()
         if service is None:
             return None
         getter = getattr(service, "output_for_agent", None)
@@ -283,11 +296,11 @@ class OrchestratorFacade:
 
     @property
     def roadmap_document(self) -> RoadmapDocument | None:
-        return getattr(self.lifecycle, "roadmap_document", None)
+        return getattr(self.orchestrator, "roadmap_document", None)
 
     @property
     def execution_mode(self) -> RoadmapExecutionMode | None:
-        return self._normalize_execution_mode(getattr(self.lifecycle, "execution_mode", None))
+        return self._normalize_execution_mode(getattr(self.orchestrator, "execution_mode", None))
 
     @staticmethod
     def _normalize_status(value: object) -> OrchestratorStatus:
@@ -322,7 +335,7 @@ class OrchestratorFacade:
         state_store = self._state_store()
         state = getattr(state_store, "state", None) or getattr(engine, "state", None)
         status = getattr(state, "status", OrchestratorStatus.INIT)
-        roadmap_document = getattr(self.lifecycle, "roadmap_document", None)
+        roadmap_document = getattr(self.orchestrator, "roadmap_document", None)
         consensus_document = getattr(state_store, "consensus", None)
         if consensus_document is None:
             consensus_document = getattr(engine, "consensus", None)
@@ -420,7 +433,7 @@ class OrchestratorFacade:
         *,
         agent_id: str | None = None,
     ) -> Any:
-        subscribe_raw_events = getattr(self.lifecycle, "subscribe_raw_events", None)
+        subscribe_raw_events = getattr(self.orchestrator, "subscribe_raw_events", None)
         if not callable(subscribe_raw_events):
             return lambda: None
 
@@ -445,7 +458,7 @@ class OrchestratorFacade:
         task_id: str | None = None,
         event_types: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> Any:
-        subscribe_raw_events = getattr(self.lifecycle, "subscribe_raw_events", None)
+        subscribe_raw_events = getattr(self.orchestrator, "subscribe_raw_events", None)
         if not callable(subscribe_raw_events):
             return lambda: None
         return subscribe_raw_events(
@@ -473,7 +486,7 @@ class OrchestratorFacade:
         return []
 
     def task(self, task_id: str) -> TaskInfo | None:
-        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
         get_task = getattr(roadmap_service, "get_task", None)
         if callable(get_task):
             return get_task(task_id)
@@ -486,7 +499,7 @@ class OrchestratorFacade:
         return None
 
     def add_task(self, task: TaskInfo | dict[str, Any], *, index: int | None = None) -> TaskInfo:
-        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
         add_task = getattr(roadmap_service, "add_task", None)
         if not callable(add_task):
             raise AttributeError("Lifecycle does not support roadmap task creation")
@@ -494,21 +507,21 @@ class OrchestratorFacade:
         return add_task(task_info, index=index)
 
     def update_task(self, task_id: str, **updates: Any) -> TaskInfo:
-        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
         update_task = getattr(roadmap_service, "update_task", None)
         if not callable(update_task):
             raise AttributeError("Lifecycle does not support roadmap task updates")
         return update_task(task_id, **updates)
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
-        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
         reorder_tasks = getattr(roadmap_service, "reorder_tasks", None)
         if not callable(reorder_tasks):
             raise AttributeError("Lifecycle does not support roadmap reordering")
         return reorder_tasks(ordered_task_ids)
 
     def replace_roadmap(self, *, tasks: list[TaskInfo | dict[str, Any]], project: str | None = None) -> RoadmapDocument:
-        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        roadmap_service = getattr(self.orchestrator, "roadmap_service", None)
         ensure_document = getattr(roadmap_service, "_ensure_document", None)
         persist = getattr(roadmap_service, "persist", None)
         parser = getattr(roadmap_service, "parser", None)
@@ -528,7 +541,7 @@ class OrchestratorFacade:
         return document
 
     def update_consensus(self, **updates: Any) -> ConsensusDocument:
-        consensus_service = getattr(self.lifecycle, "consensus_service", None)
+        consensus_service = getattr(self.orchestrator, "consensus_service", None)
         update = getattr(consensus_service, "update", None)
         if not callable(update):
             raise AttributeError("Lifecycle does not support consensus updates")
@@ -606,11 +619,11 @@ class OrchestratorFacade:
         if consensus_path:
             return Path(consensus_path)
 
-        project_root = getattr(self.lifecycle, "project_root", None)
+        project_root = getattr(self.orchestrator, "project_root", None)
         if project_root:
             return Path(project_root) / ".vibrant" / "consensus.md"
 
-        default_cwd = getattr(getattr(self.lifecycle, "settings", None), "default_cwd", None)
+        default_cwd = getattr(getattr(self.orchestrator, "settings", None), "default_cwd", None)
         if default_cwd:
             return Path(default_cwd) / ".vibrant" / "consensus.md"
 
@@ -623,7 +636,7 @@ class OrchestratorFacade:
         return self.snapshot().notification_bell_enabled
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
-        consensus_service = getattr(self.lifecycle, "consensus_service", None)
+        consensus_service = getattr(self.orchestrator, "consensus_service", None)
         write = getattr(consensus_service, "write", None)
         if callable(write):
             written = write(document)
@@ -646,7 +659,7 @@ class OrchestratorFacade:
         return written
 
     async def submit_gatekeeper_message(self, text: str) -> Any:
-        submit = getattr(self.lifecycle, "submit_gatekeeper_message", None)
+        submit = getattr(self.orchestrator, "submit_gatekeeper_message", None)
         if callable(submit):
             return await submit(text)
         raise AttributeError("Lifecycle does not support Gatekeeper planning messages")
@@ -655,7 +668,7 @@ class OrchestratorFacade:
         if self.questions is not None:
             return await self.questions.answer(answer, question=question)
 
-        answer_pending = getattr(self.lifecycle, "answer_pending_question", None)
+        answer_pending = getattr(self.orchestrator, "answer_pending_question", None)
         if callable(answer_pending):
             return await answer_pending(answer, question=question)
 
@@ -675,7 +688,7 @@ class OrchestratorFacade:
         self.transition_workflow_state(OrchestratorStatus.EXECUTING)
 
     def end_planning_phase(self) -> OrchestratorStatus:
-        workflow_service = getattr(self.lifecycle, "workflow_service", None)
+        workflow_service = getattr(self.orchestrator, "workflow_service", None)
         begin_execution_if_needed = getattr(workflow_service, "begin_execution_if_needed", None)
         if callable(begin_execution_if_needed):
             begin_execution_if_needed()
@@ -771,19 +784,19 @@ class OrchestratorFacade:
         return questions[0] if questions else None
 
     def reload_from_disk(self) -> RoadmapDocument:
-        reload_from_disk = getattr(self.lifecycle, "reload_from_disk", None)
+        reload_from_disk = getattr(self.orchestrator, "reload_from_disk", None)
         if not callable(reload_from_disk):
             raise AttributeError("Lifecycle does not support reload_from_disk")
         return reload_from_disk()
 
     async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
-        execute = getattr(self.lifecycle, "execute_until_blocked", None)
+        execute = getattr(self.orchestrator, "execute_until_blocked", None)
         if not callable(execute):
             raise AttributeError("Lifecycle does not support execute_until_blocked")
         return await execute()
 
     async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
-        execute = getattr(self.lifecycle, "execute_next_task", None)
+        execute = getattr(self.orchestrator, "execute_next_task", None)
         if not callable(execute):
             raise AttributeError("Lifecycle does not support execute_next_task")
         return await execute()
@@ -839,7 +852,7 @@ class OrchestratorFacade:
         if target_consensus_status is None:
             return
 
-        consensus_service = getattr(self.lifecycle, "consensus_service", None)
+        consensus_service = getattr(self.orchestrator, "consensus_service", None)
         set_status = getattr(consensus_service, "set_status", None)
         if callable(set_status):
             set_status(target_consensus_status)

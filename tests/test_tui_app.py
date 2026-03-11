@@ -15,7 +15,7 @@ from textual.widgets import Input, OptionList, Static, TextArea
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
 from vibrant.history import HistoryStore
 from vibrant.models import AppSettings, ConsensusStatus, OrchestratorStatus
-from vibrant.orchestrator import OrchestratorEngine
+from vibrant.orchestrator import OrchestratorStateBackend
 from vibrant.project_init import initialize_project
 from vibrant.tui.app import HelpScreen, InitializationScreen, VibrantApp
 from vibrant.tui.widgets.chat_panel import ChatPanel
@@ -59,7 +59,7 @@ class ExecutingLifecycle:
     def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
         self.project_root = Path(project_root)
         self.on_canonical_event = on_canonical_event
-        self.engine = OrchestratorEngine.load(self.project_root)
+        self.engine = OrchestratorStateBackend.load(self.project_root)
         self.gatekeeper = object()
         self._ensure_status(ConsensusStatus.EXECUTING, OrchestratorStatus.EXECUTING)
 
@@ -93,7 +93,7 @@ class PlanningLifecycle(ExecutingLifecycle):
     def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
         self.project_root = Path(project_root)
         self.on_canonical_event = on_canonical_event
-        self.engine = OrchestratorEngine.load(self.project_root)
+        self.engine = OrchestratorStateBackend.load(self.project_root)
         self.gatekeeper = object()
 
         if self.engine.state.status is OrchestratorStatus.INIT:
@@ -117,7 +117,7 @@ class InitLifecycle:
     def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
         self.project_root = Path(project_root)
         self.on_canonical_event = on_canonical_event
-        self.engine = OrchestratorEngine.load(self.project_root)
+        self.engine = OrchestratorStateBackend.load(self.project_root)
         self.gatekeeper = object()
 
     def reload_from_disk(self) -> RoadmapDocument:
