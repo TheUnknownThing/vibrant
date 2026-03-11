@@ -121,6 +121,11 @@ This removes the current split where the UI reaches into both lifecycle and engi
 
 The MCP layer should sit on top of orchestrator services and expose role-scoped tools and resources.
 
+`OrchestratorFacade` is a useful stable surface for many MCP handlers, but it is
+not the only allowed dependency. First-party MCP wiring may call internal
+services directly when that gives a cleaner implementation or exposes runtime
+capabilities that have not been promoted into the facade yet.
+
 For shared transport and enforcement, the role-based HTTP MCP authorization layer should be treated as its own internal library. See [mcp_http_authz.md](/home/rogerw/project/vibrant/docs/mcp_http_authz.md).
 
 ### MCP TODO / Status

@@ -10,7 +10,6 @@ from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
-from ..agent_output import AgentOutputProjectionService
 from ..types import (
     AgentOutput,
     AgentSnapshotIdentity,
@@ -22,6 +21,7 @@ from ..types import (
     RuntimeExecutionResult,
     TaskResult,
 )
+from .output_projection import AgentOutputProjectionService
 from .registry import AgentRegistry
 from .runtime import AgentRuntimeService, RuntimeHandleSnapshot
 from ..execution.service import TaskExecutionAttempt, TaskExecutionService

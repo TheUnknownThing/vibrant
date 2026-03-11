@@ -195,6 +195,14 @@ class OrchestratorFacade:
             return None
         return getter(agent_id)
 
+    def agent_output(self, agent_id: str) -> AgentOutput | None:
+        """Return the latest projected output for one agent."""
+
+        snapshot = self.get_agent(agent_id)
+        if snapshot is not None:
+            return snapshot.outcome.output
+        return self._output_for_agent(agent_id)
+
     def _snapshot_from_record(self, record: AgentRecord) -> OrchestratorAgentSnapshot:
         status = record.lifecycle.status.value
         done = record.lifecycle.status in AgentRecord.TERMINAL_STATUSES
