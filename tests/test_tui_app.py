@@ -148,7 +148,7 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=ExecutingLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
@@ -210,7 +210,7 @@ async def test_initialization_screen_can_initialize_current_workspace(tmp_path: 
     repo.mkdir()
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=ExecutingLifecycle)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -222,7 +222,7 @@ async def test_initialization_screen_can_initialize_current_workspace(tmp_path: 
 
         assert (repo / ".vibrant").is_dir()
         assert not isinstance(app.screen_stack[-1], InitializationScreen)
-        assert app._lifecycle is not None  # noqa: SLF001 - verifies app reloaded lifecycle
+        assert app._orchestrator is not None  # noqa: SLF001 - verifies app reloaded lifecycle
 
 
 @pytest.mark.asyncio
@@ -233,7 +233,7 @@ async def test_initialization_screen_can_initialize_selected_workspace(tmp_path:
     target_repo.mkdir()
 
     settings = AppSettings(default_cwd=str(current_repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(current_repo), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(current_repo), orchestrator_factory=ExecutingLifecycle)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -297,10 +297,10 @@ async def test_app_f2_toggles_pause_and_updates_consensus(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=ExecutingLifecycle)
 
     async with _run_test(app) as pilot:
-        engine = app._lifecycle.engine  # noqa: SLF001 - verifying app wiring
+        engine = app._orchestrator.engine  # noqa: SLF001 - verifying app wiring
         assert engine.state.status is OrchestratorStatus.EXECUTING
         assert ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md").status is ConsensusStatus.EXECUTING
 
@@ -320,7 +320,7 @@ async def test_notification_banner_appears_on_gatekeeper_escalation(tmp_path: Pa
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=EscalationLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=EscalationLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
@@ -337,7 +337,7 @@ async def test_planning_mode_shows_consensus_building_screen(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=PlanningLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=PlanningLifecycle)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -359,20 +359,20 @@ async def test_vibe_command_transitions_init_through_planning_into_execution(tmp
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=InitLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=InitLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
 
         assert app.has_class("planning-mode") is True
-        assert app._lifecycle is not None  # noqa: SLF001 - verifies transition result
-        assert app._lifecycle.engine.state.status is OrchestratorStatus.INIT  # noqa: SLF001
+        assert app._orchestrator is not None  # noqa: SLF001 - verifies transition result
+        assert app._orchestrator.engine.state.status is OrchestratorStatus.INIT  # noqa: SLF001
 
         await app.on_input_bar_slash_command(InputBar.SlashCommand("vibe", ""))
         await pilot.pause()
 
         assert app.has_class("vibing-mode") is True
-        assert app._lifecycle.engine.state.status is OrchestratorStatus.EXECUTING  # noqa: SLF001
+        assert app._orchestrator.engine.state.status is OrchestratorStatus.EXECUTING  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -382,17 +382,17 @@ async def test_transition_workflow_state_ignores_same_status_requests(tmp_path: 
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=PlanningLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=PlanningLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
 
-        assert app._lifecycle is not None  # noqa: SLF001 - verifies lifecycle state
-        assert app._lifecycle.engine.state.status is OrchestratorStatus.PLANNING  # noqa: SLF001
+        assert app._orchestrator is not None  # noqa: SLF001 - verifies lifecycle state
+        assert app._orchestrator.engine.state.status is OrchestratorStatus.PLANNING  # noqa: SLF001
 
         app._transition_workflow_state(OrchestratorStatus.PLANNING)  # noqa: SLF001
 
-        assert app._lifecycle.engine.state.status is OrchestratorStatus.PLANNING  # noqa: SLF001
+        assert app._orchestrator.engine.state.status is OrchestratorStatus.PLANNING  # noqa: SLF001
 
 
 @pytest.mark.asyncio
@@ -407,7 +407,7 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
     first_app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        lifecycle_factory=PlanningLifecycle,
+        orchestrator_factory=PlanningLifecycle,
     )
     async with _run_test(first_app):
         await first_app.on_input_bar_message_submitted(InputBar.MessageSubmitted("Build an auth MVP."))
@@ -423,7 +423,7 @@ async def test_app_restores_persisted_gatekeeper_thread_on_reload(tmp_path: Path
     reloaded_app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        lifecycle_factory=ExecutingLifecycle,
+        orchestrator_factory=ExecutingLifecycle,
     )
     async with _run_test(reloaded_app) as pilot:
         await pilot.pause()
@@ -444,7 +444,7 @@ async def test_app_resolves_project_relative_history_dir(tmp_path: Path):
     app = VibrantApp(
         settings=settings,
         cwd=str(repo),
-        lifecycle_factory=PlanningLifecycle,
+        orchestrator_factory=PlanningLifecycle,
     )
 
     async with _run_test(app):
@@ -468,7 +468,7 @@ async def test_f4_toggles_planning_consensus_panel(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=PlanningLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=PlanningLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
@@ -492,7 +492,7 @@ async def test_f4_shows_consensus_tab_in_vibing_mode(tmp_path: Path):
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=ExecutingLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()
@@ -511,7 +511,7 @@ async def test_consensus_editor_save_updates_body_without_editing_metadata(tmp_p
     initialize_project(repo)
 
     settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
-    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
+    app = VibrantApp(settings=settings, cwd=str(repo), orchestrator_factory=ExecutingLifecycle)
 
     async with _run_test(app) as pilot:
         await pilot.pause()

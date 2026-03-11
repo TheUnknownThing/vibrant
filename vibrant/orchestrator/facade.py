@@ -29,7 +29,7 @@ from vibrant.models.task import TaskInfo, TaskStatus
 
 from .bootstrap import Orchestrator
 from .task_dispatch import TaskDispatcher
-from .types import AgentOutput, CodeAgentLifecycleResult, OrchestratorAgentSnapshot
+from .types import AgentOutput, TaskResult, OrchestratorAgentSnapshot
 
 _WORKFLOW_TO_CONSENSUS = {
     OrchestratorStatus.INIT: ConsensusStatus.INIT,
@@ -789,13 +789,13 @@ class OrchestratorFacade:
             raise AttributeError("Lifecycle does not support reload_from_disk")
         return reload_from_disk()
 
-    async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
+    async def execute_until_blocked(self) -> list[TaskResult]:
         execute = getattr(self.orchestrator, "execute_until_blocked", None)
         if not callable(execute):
             raise AttributeError("Lifecycle does not support execute_until_blocked")
         return await execute()
 
-    async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
+    async def execute_next_task(self) -> TaskResult | None:
         execute = getattr(self.orchestrator, "execute_next_task", None)
         if not callable(execute):
             raise AttributeError("Lifecycle does not support execute_next_task")

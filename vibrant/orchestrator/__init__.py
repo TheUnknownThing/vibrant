@@ -6,10 +6,10 @@ from .git_manager import GitManager
 from .mcp import OrchestratorMCPServer
 from .state.backend import OrchestratorStateBackend
 from .task_dispatch import TaskDispatcher
-from .types import CodeAgentLifecycleResult, OrchestratorAgentSnapshot
+from .types import TaskResult, OrchestratorAgentSnapshot
 
 __all__ = [
-    "CodeAgentLifecycleResult",
+    "TaskResult",
     "GitManager",
     "Orchestrator",
     "OrchestratorFacade",

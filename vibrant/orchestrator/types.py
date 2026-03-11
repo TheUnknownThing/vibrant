@@ -15,7 +15,7 @@ from vibrant.providers.base import CanonicalEvent
 
 
 @dataclass(slots=True)
-class CodeAgentLifecycleResult:
+class TaskResult:
     """Structured outcome for one code-agent execution attempt."""
 
     task_id: str | None
