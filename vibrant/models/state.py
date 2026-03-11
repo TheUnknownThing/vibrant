@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from vibrant.orchestrator.tasks.models import TaskWorkflowState
+
 
 class OrchestratorStatus(str, enum.Enum):
     INIT = "init"
@@ -104,6 +106,7 @@ class OrchestratorState(BaseModel):
     last_consensus_version: int = 0
     concurrency_limit: int = 4
     provider_runtime: dict[str, ProviderRuntimeState] = Field(default_factory=dict)
+    tasks: dict[str, TaskWorkflowState] = Field(default_factory=dict)
     completed_tasks: list[str] = Field(default_factory=list)
     failed_tasks: list[str] = Field(default_factory=list)
     total_agent_spawns: int = 0

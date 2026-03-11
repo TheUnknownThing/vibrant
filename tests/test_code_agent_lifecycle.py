@@ -17,6 +17,7 @@ from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator import OrchestratorFacade, OrchestratorStateBackend, create_orchestrator
+from vibrant.orchestrator.tasks.models import TaskReviewDecision, TaskRunStatus
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -425,6 +426,34 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     assert lifecycle.state_backend.state.total_agent_spawns == 2
     assert lifecycle.state_backend.state.active_agents == []
     assert lifecycle.state_backend.state.status is OrchestratorStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_task_history_is_persisted_in_orchestrator_state(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature\n"]
+    gatekeeper = FakeGatekeeper(repo)
+
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    task_state = lifecycle.state_backend.state.tasks["task-001"]
+    assert task_state.status is TaskStatus.ACCEPTED
+    assert len(task_state.runs) == 1
+    assert task_state.runs[0].status is TaskRunStatus.SUCCEEDED
+    assert len(task_state.reviews) == 1
+    assert task_state.reviews[0].decision is TaskReviewDecision.ACCEPTED
+
+    reloaded = OrchestratorStateBackend.load(repo)
+    reloaded_task_state = reloaded.state.tasks["task-001"]
+    assert reloaded_task_state.status is TaskStatus.ACCEPTED
+    assert reloaded_task_state.runs[0].status is TaskRunStatus.SUCCEEDED
+    assert reloaded_task_state.reviews[0].decision is TaskReviewDecision.ACCEPTED
 
 
 @pytest.mark.asyncio

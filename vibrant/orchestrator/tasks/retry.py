@@ -5,12 +5,12 @@ from __future__ import annotations
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
-from .git_manager import GitWorktreeInfo
 
-from ..types import TaskResult
-from .git_workspace import GitWorkspaceService
-from .review import ReviewService
 from ..artifacts.roadmap import RoadmapService
+from ..execution.git_manager import GitWorktreeInfo
+from ..execution.git_workspace import GitWorkspaceService
+from ..types import TaskResult
+from .review import ReviewService
 
 
 class RetryPolicyService:

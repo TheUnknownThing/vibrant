@@ -30,15 +30,17 @@ from .artifacts.planning import PlanningService
 from .artifacts.questions import QuestionService
 from .artifacts.roadmap import RoadmapService
 from .artifacts.workflow import WorkflowService
+from .execution.git_manager import GitManager
 from .execution.git_workspace import GitWorkspaceService, scoped_worktree_root
 from .execution.prompts import PromptService
-from .execution.retry_policy import RetryPolicyService
-from .execution.review import ReviewService
-from .execution.service import TaskExecutionService
 from .gatekeeper_runtime import GatekeeperRuntimeService
-from .execution.dispatcher import TaskDispatcher
-from .execution.git_manager import GitManager
 from .state.store import StateStore
+from .tasks.dispatcher import TaskDispatcher
+from .tasks.execution import TaskExecutionService
+from .tasks.retry import RetryPolicyService
+from .tasks.review import ReviewService
+from .tasks.store import TaskStore
+from .tasks.workflow import TaskWorkflowService
 from .types import TaskResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
@@ -86,6 +88,8 @@ class Orchestrator:
     agent_manager: AgentManagementService
     _config_holder: dict[str, VibrantConfig] = field(repr=False)
     _raw_event_subscribers: list[_RawEventSubscription] = field(default_factory=list, repr=False)
+    task_store: TaskStore | None = None
+    task_workflow: TaskWorkflowService | None = None
 
     @classmethod
     def load(
@@ -137,6 +141,9 @@ class Orchestrator:
         )
         state_store.bind_agent_store(agent_store)
         roadmap_service = RoadmapService(roadmap_path, project_name=root.name)
+        task_store = TaskStore(state_store=state_store)
+        task_workflow = TaskWorkflowService(task_store=task_store)
+        roadmap_service.bind_task_state(task_store=task_store, task_workflow=task_workflow)
         consensus_service = ConsensusService(consensus_path, state_store=state_store)
         agent_registry = AgentRegistry(agent_store=agent_store, vibrant_dir=vibrant_dir)
         question_service = QuestionService(
@@ -185,6 +192,7 @@ class Orchestrator:
             state_store=state_store,
             roadmap_service=roadmap_service,
             git_service=git_service,
+            task_store=task_store,
             gatekeeper_runner=gatekeeper_runtime.run_request,
         )
         planning_service = PlanningService(
@@ -209,6 +217,7 @@ class Orchestrator:
             runtime_service=runtime_service,
             review_service=review_service,
             retry_service=retry_service,
+            task_store=task_store,
         )
         agent_manager = AgentManagementService(
             agent_registry=agent_registry,
@@ -233,6 +242,8 @@ class Orchestrator:
             state_store=state_store,
             agent_store=agent_store,
             roadmap_service=roadmap_service,
+            task_store=task_store,
+            task_workflow=task_workflow,
             consensus_service=consensus_service,
             agent_registry=agent_registry,
             question_service=question_service,

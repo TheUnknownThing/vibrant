@@ -24,7 +24,7 @@ from ..types import (
 from .output_projection import AgentOutputProjectionService
 from .registry import AgentRegistry
 from .runtime import AgentRuntimeService, RuntimeHandleSnapshot
-from ..execution.service import TaskExecutionAttempt, TaskExecutionService
+from ..tasks.execution import TaskExecutionAttempt, TaskExecutionService
 
 ManagedAgentSnapshot = OrchestratorAgentSnapshot
 

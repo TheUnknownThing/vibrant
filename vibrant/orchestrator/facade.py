@@ -23,7 +23,7 @@ from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionR
 from vibrant.models.task import TaskInfo, TaskStatus
 
 from .bootstrap import Orchestrator
-from .execution.dispatcher import TaskDispatcher
+from .tasks.dispatcher import TaskDispatcher
 from .types import (
     AgentOutput,
     AgentSnapshotIdentity,
@@ -557,7 +557,15 @@ class OrchestratorFacade:
         concurrency_limit = getattr(getattr(state_store, "state", None), "concurrency_limit", 1)
         document.project = project or document.project
         document.tasks = normalized_tasks
-        roadmap_service.dispatcher = TaskDispatcher(normalized_tasks, concurrency_limit=concurrency_limit)
+        task_workflow = getattr(roadmap_service, "task_workflow", None)
+        sync_task_state = getattr(roadmap_service, "_sync_task_state", None)
+        if callable(sync_task_state):
+            sync_task_state(prefer_store=False)
+        roadmap_service.dispatcher = TaskDispatcher(
+            normalized_tasks,
+            concurrency_limit=concurrency_limit,
+            workflow_service=task_workflow,
+        )
         persist()
         return document
 
@@ -693,6 +701,12 @@ class OrchestratorFacade:
 
         raise AttributeError("Lifecycle does not support answering pending Gatekeeper questions")
 
+    async def execute_next_task(self) -> Any:
+        execute_next_task = getattr(self.orchestrator, "execute_next_task", None)
+        if not callable(execute_next_task):
+            raise AttributeError("Lifecycle does not support task execution")
+        return await execute_next_task()
+
     def pause_workflow(self) -> None:
         if self.workflow_status() is OrchestratorStatus.PAUSED:
             return
@@ -729,18 +743,25 @@ class OrchestratorFacade:
                 return task
             if task.status is not TaskStatus.COMPLETED:
                 raise ValueError(f"Cannot accept task from status {task.status.value}")
-            return self.update_task(task_id, status=TaskStatus.ACCEPTED.value)
+            task = self.update_task(task_id, status=TaskStatus.ACCEPTED.value)
+            task_workflow = getattr(self.orchestrator, "task_workflow", None)
+            if task_workflow is not None:
+                task_workflow.record_review(task, decision="accepted")
+            return task
 
         if normalized_decision in {"needs_input", "awaiting_input"}:
             return task
 
         if normalized_decision in {"reject", "rejected", "retry", "needs_changes"}:
             if task.status is TaskStatus.COMPLETED:
-                return self.update_task(
+                task = self.update_task(
                     task_id,
                     status=TaskStatus.FAILED.value,
                     failure_reason=failure_reason or "Gatekeeper requested changes",
                 )
+            task_workflow = getattr(self.orchestrator, "task_workflow", None)
+            if task_workflow is not None:
+                task_workflow.record_review(task, decision="retry", reason=failure_reason or "Gatekeeper requested changes")
             return task
 
         if normalized_decision in {"escalate", "escalated"}:
@@ -753,8 +774,11 @@ class OrchestratorFacade:
                     failure_reason=failure_reason or "Gatekeeper escalated the task",
                 )
             if task.status is TaskStatus.FAILED and task.can_transition_to(TaskStatus.ESCALATED):
-                return self.update_task(task_id, status=TaskStatus.ESCALATED.value)
-            return task
+                task = self.update_task(task_id, status=TaskStatus.ESCALATED.value)
+                task_workflow = getattr(self.orchestrator, "task_workflow", None)
+                if task_workflow is not None:
+                    task_workflow.record_review(task, decision="escalated", reason=failure_reason or "Gatekeeper escalated the task")
+                return task
 
         raise ValueError(f"Unsupported Gatekeeper review decision: {decision}")
 

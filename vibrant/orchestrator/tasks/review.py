@@ -1,4 +1,4 @@
-"""Review orchestration service."""
+"""Task review orchestration service."""
 
 from __future__ import annotations
 
@@ -14,11 +14,12 @@ from vibrant.prompts import (
     build_task_failure_trigger_description,
 )
 
-from .git_manager import GitWorktreeInfo
-
-from .git_workspace import GitWorkspaceService
 from ..artifacts.roadmap import RoadmapService
+from ..execution.git_manager import GitWorktreeInfo
+from ..execution.git_workspace import GitWorkspaceService
 from ..state.store import StateStore
+from .models import TaskReviewDecision
+from .store import TaskStore
 
 
 class ReviewService:
@@ -34,12 +35,14 @@ class ReviewService:
         state_store: StateStore,
         roadmap_service: RoadmapService,
         git_service: GitWorkspaceService,
+        task_store: TaskStore,
         gatekeeper_runner: Callable[[GatekeeperRequest, bool | None], Awaitable[GatekeeperRunResult]] | None = None,
     ) -> None:
         self.gatekeeper = gatekeeper
         self.state_store = state_store
         self.roadmap_service = roadmap_service
         self.git_service = git_service
+        self.task_store = task_store
         self.gatekeeper_runner = gatekeeper_runner
 
     async def run_gatekeeper_request(
@@ -70,7 +73,9 @@ class ReviewService:
         result = await self.run_gatekeeper_request(self.build_completion_request(task, agent_record, worktree))
         self.state_store.apply_gatekeeper_result(result)
         self._reload_roadmap()
-        return result, self.resolve_decision(result, task.id)
+        decision = self.resolve_decision(result, task.id)
+        self._record_review(task, result, decision=decision, reason=result.error)
+        return result, decision
 
     async def review_failure(
         self,
@@ -82,6 +87,8 @@ class ReviewService:
         result = await self.run_gatekeeper_request(self.build_failure_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
         self._reload_roadmap()
+        decision = TaskReviewDecision.NEEDS_INPUT if result.awaiting_input or result.input_requests else TaskReviewDecision.RETRY
+        self._record_review(task, result, decision=decision, reason=reason)
         return result
 
     async def review_escalation(
@@ -94,6 +101,8 @@ class ReviewService:
         result = await self.run_gatekeeper_request(self.build_escalation_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
         self._reload_roadmap()
+        decision = TaskReviewDecision.NEEDS_INPUT if result.awaiting_input or result.input_requests else TaskReviewDecision.ESCALATED
+        self._record_review(task, result, decision=decision, reason=reason)
         return result
 
     def build_completion_request(
@@ -160,11 +169,27 @@ class ReviewService:
             agent_summary=agent_record.outcome.summary or reason,
         )
 
-
     def _reload_roadmap(self) -> None:
         self.roadmap_service.reload(
             project_name=self.roadmap_service.project_name,
             concurrency_limit=self.state_store.state.concurrency_limit,
+        )
+
+    def _record_review(
+        self,
+        task: TaskInfo,
+        result: GatekeeperRunResult,
+        *,
+        decision: TaskReviewDecision | str,
+        reason: str | None,
+    ) -> None:
+        current_task = self.roadmap_service.get_task(task.id) or task
+        self.task_store.record_review(
+            task=current_task,
+            decision=decision,
+            reason=reason,
+            summary=getattr(getattr(result, "agent_record", None), "outcome", None).summary if result.agent_record else None,
+            gatekeeper_agent_id=result.agent_record.identity.agent_id if result.agent_record is not None else None,
         )
 
     def resolve_decision(self, result: GatekeeperRunResult, task_id: str) -> str:
