@@ -22,8 +22,10 @@ from vibrant.orchestrator.state.backend import OrchestratorStateBackend
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
+from vibrant.agents.utils import maybe_forward_event
 
 from .agents import AgentManagementService, AgentRecordStore, AgentRegistry, AgentRuntimeService
+from .agent_output import AgentOutputProjectionService
 from .execution.dispatcher import TaskDispatcher
 from .execution import GitWorkspaceService, PromptService, RetryPolicyService, ReviewService, TaskExecutionService, scoped_worktree_root
 from .artifacts import ConsensusService, PlanningService, QuestionService, RoadmapService, WorkflowService
@@ -81,6 +83,7 @@ class CodeAgentLifecycle:
         )
         self.adapter_factory = adapter_factory or CodexProviderAdapter
         self.on_canonical_event = on_canonical_event
+        self.agent_output_service = AgentOutputProjectionService()
 
         self.state_store = StateStore(self.engine)
         self.agent_store = AgentRecordStore(
@@ -135,7 +138,7 @@ class CodeAgentLifecycle:
             agent_registry=self.agent_registry,
             adapter_factory=self.adapter_factory,
             config_getter=lambda: self.config,
-            on_canonical_event=self.on_canonical_event,
+            on_canonical_event=self._handle_runtime_canonical_event,
             agent_runtime=self._agent_runtime,
         )
         self.retry_service = RetryPolicyService(
@@ -158,6 +161,7 @@ class CodeAgentLifecycle:
             agent_registry=self.agent_registry,
             runtime_service=self.runtime_service,
             execution_service=self.execution_service,
+            output_service=self.agent_output_service,
         )
         self._active_gatekeeper_futures: set[asyncio.Future[Any]] = set()
 
@@ -175,7 +179,7 @@ class CodeAgentLifecycle:
                 self.project_root,
                 gatekeeper_agent.config,
                 adapter_factory=gatekeeper_agent.adapter_factory,
-                on_canonical_event=self.on_canonical_event,
+                on_canonical_event=self._handle_runtime_canonical_event,
                 on_agent_record_updated=self.agent_registry.make_record_callback(),
                 timeout_seconds=gatekeeper_agent.timeout_seconds,
             )
@@ -184,7 +188,7 @@ class CodeAgentLifecycle:
                 self.project_root,
                 self.config,
                 adapter_factory=self.adapter_factory,
-                on_canonical_event=self.on_canonical_event,
+                on_canonical_event=self._handle_runtime_canonical_event,
                 on_agent_record_updated=self.agent_registry.make_record_callback(),
             )
         else:
@@ -192,10 +196,14 @@ class CodeAgentLifecycle:
                 self.project_root,
                 self.config,
                 adapter_factory=self.adapter_factory,
-                on_canonical_event=self.on_canonical_event,
+                on_canonical_event=self._handle_runtime_canonical_event,
                 on_agent_record_updated=self.agent_registry.make_record_callback(),
             )
         return BaseAgentRuntime(agent)
+
+    async def _handle_runtime_canonical_event(self, event: CanonicalEvent) -> None:
+        self.agent_output_service.ingest(event)
+        await maybe_forward_event(self.on_canonical_event, event)
 
     @property
     def roadmap_parser(self) -> RoadmapParser:

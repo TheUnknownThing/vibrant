@@ -58,6 +58,16 @@ class AgentOutputError:
 
 
 @dataclass(slots=True)
+class AgentThinkingState:
+    """Structured reasoning/thinking state derived from canonical events."""
+
+    text: str = ""
+    status: str = "idle"
+    item_id: str | None = None
+    timestamp: datetime | None = None
+
+
+@dataclass(slots=True)
 class AgentOutput:
     """Processed, TUI-friendly projection of one agent's output state."""
 
@@ -70,6 +80,7 @@ class AgentOutput:
     partial_text: str = ""
     progress: list[AgentProgressItem] = field(default_factory=list)
     pending_requests: list[InputRequest] = field(default_factory=list)
+    thinking: AgentThinkingState = field(default_factory=AgentThinkingState)
     error: AgentOutputError | None = None
     updated_at: datetime | None = None
     canonical_event_log: str | None = None
