@@ -18,6 +18,7 @@ from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus, DecisionAuthor
+from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
@@ -325,7 +326,7 @@ class Gatekeeper:
 
         request = GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
-            trigger_description=f"Question: {question}\nUser Answer: {answer}",
+            trigger_description=build_user_answer_trigger_description(question=question, answer=answer),
             agent_summary=answer,
         )
         return await self.run(request, resume_latest_thread=True)
@@ -341,7 +342,7 @@ class Gatekeeper:
 
         request = GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
-            trigger_description=f"Question: {question}\nUser Answer: {answer}",
+            trigger_description=build_user_answer_trigger_description(question=question, answer=answer),
             agent_summary=answer,
         )
         return await self.start_run(request, resume_latest_thread=True, on_result=on_result)
@@ -351,42 +352,16 @@ class Gatekeeper:
 
         consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
         consensus_contract_text = _render_consensus_contract()
-        skills_text = self._render_available_skills()
-        summary_text = request.agent_summary.strip() if request.agent_summary else "N/A"
-
-        return "\n".join(
-            [
-                f"You are the Gatekeeper for Project {self.project_root.name}. You are the sole authority over the project plan.",
-                "## Your Responsibilities",
-                "1. Evaluate agent output against the plan's acceptance criteria.",
-                "2. Update .vibrant/consensus.md when tasks are completed or when the plan needs adjustment.",
-                "3. If an agent failed, analyze the failure and modify the task's prompt or acceptance criteria.",
-                "4. If you encounter a high-level decision (product direction, UX, architecture), ask the user",
-                "   by adding a question to the Questions section of consensus.md.",
-                "   Questions will block progress on their own, so only use a blocking question when the work truly cannot proceed",
-                "   without a user-level decision.",
-                "5. If the decision is purely technical, make it yourself and log it in the Decisions section.",
-                "## Consensus Contract",
-                consensus_contract_text,
-                "## Current Consensus",
-                consensus_text,
-                "## Trigger",
-                f"{request.trigger.value}: {request.trigger_description}",
-                "## Agent Summary (if applicable)",
-                summary_text,
-                "## Rules",
-                "1. Always update consensus.md directly — it is the source of truth.",
-                "2. Increment the version number in META on every update.",
-                "3. Never remove completed decisions from the log.",
-                "4. When re-planning a failed task, keep the failure history in Gatekeeper Notes.",
-                "5. You have read/write access to the .vibrant/ directory ONLY.",
-                f"6. Planning stays open until you call `{PLANNING_COMPLETE_MCP_TOOL}`.",
-                f"7. When planning is complete, call `{PLANNING_COMPLETE_MCP_TOOL}` instead of asking the user to type `/vibe`.",
-                f"8. Until the MCP bridge is wired, also emit `{PLANNING_COMPLETE_MCP_SENTINEL}` on its own line before you finish.",
-                "## Available Skills",
-                "The following skills are available for agents. Assign them to tasks as needed:",
-                skills_text,
-            ]
+        return build_gatekeeper_prompt(
+            project_name=self.project_root.name,
+            consensus_text=consensus_text,
+            consensus_contract_text=consensus_contract_text,
+            trigger_value=request.trigger.value,
+            trigger_description=request.trigger_description,
+            agent_summary=request.agent_summary,
+            skills_text=self._render_available_skills(),
+            planning_complete_mcp_tool=PLANNING_COMPLETE_MCP_TOOL,
+            planning_complete_mcp_sentinel=PLANNING_COMPLETE_MCP_SENTINEL,
         )
 
     def parse_run_artifacts(

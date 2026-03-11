@@ -10,6 +10,7 @@ from pathlib import Path
 
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.prompts import build_task_execution_prompt
 
 
 PRIORITY_NAME_TO_VALUE = {
@@ -133,11 +134,6 @@ class RoadmapParser:
         additional_context: str = "",
         skill_contents: str | list[str] | None = None,
     ) -> str:
-        acceptance_lines = (
-            "\n".join(f"- [ ] {criterion}" for criterion in task.acceptance_criteria)
-            if task.acceptance_criteria
-            else "- [ ] Complete the assigned task"
-        )
         context_parts = [
             f"Consensus Status: {consensus.status.value}",
             f"Consensus Version: {consensus.version}",
@@ -161,27 +157,14 @@ class RoadmapParser:
             rendered_skills = "No additional skills loaded."
 
         branch = task.branch or f"vibrant/{task.id}"
-        return "\n".join(
-            [
-                f"You are a code agent working on Project {consensus.project}.",
-                "## Your Task",
-                task.title,
-                "## Acceptance Criteria",
-                acceptance_lines,
-                "## Context",
-                "\n\n".join(context_parts),
-                "## Skills",
-                rendered_skills,
-                "## Rules",
-                f"1. You are working in a git worktree on branch `{branch}`.",
-                "2. Do NOT modify files outside your task scope.",
-                "3. When you are done, provide a summary (~500 words) of:",
-                "   - What you changed and why",
-                "   - What tests you wrote or ran",
-                "   - How your implementation satisfies each acceptance criterion",
-                "   - Any issues or concerns for the next agent",
-                f"4. Commit your changes with a descriptive message prefixed with `[vibrant:{task.id}]`.",
-            ]
+        return build_task_execution_prompt(
+            project=consensus.project,
+            task_title=task.title,
+            acceptance_criteria=task.acceptance_criteria,
+            context_sections=context_parts,
+            skills_text=rendered_skills,
+            branch=branch,
+            task_id=task.id,
         )
 
     def _parse_project(self, markdown_text: str) -> str:
