@@ -10,14 +10,14 @@ The `vibrant/agents/*` runtime and protocol code is intentionally unchanged.
 
 ## What Changed
 
-- Added `AgentRecordStore` in `vibrant/orchestrator/services/agent_records.py`
+- Added `AgentRecordStore` in `vibrant/orchestrator/agents/store.py`
 - Refactored `AgentRegistry` to read/write agent records through that store
 - Updated `StateStore` to coordinate Gatekeeper result persistence with the
   agent store instead of always routing through `OrchestratorEngine`
-- Updated `QuestionService.answer()` to use orchestrator services instead of
+- Updated `QuestionService.answer()` to use orchestrator artifacts/state components instead of
   calling `engine.answer_pending_question()` directly
 - Updated lifecycle/facade/TUI compatibility reads to prefer orchestrator
-  services over the engine's in-memory `agents` dict
+  domain packages over the engine's in-memory `agents` dict
 
 ## New Ownership Model
 
@@ -48,12 +48,12 @@ legacy surfaces. The source of truth is the per-agent JSON file set.
 
 ## Files Touched
 
-- `vibrant/orchestrator/services/agent_records.py`
-- `vibrant/orchestrator/services/agents.py`
-- `vibrant/orchestrator/services/state_store.py`
-- `vibrant/orchestrator/services/questions.py`
+- `vibrant/orchestrator/agents/store.py`
+- `vibrant/orchestrator/agents/registry.py`
+- `vibrant/orchestrator/state/store.py`
+- `vibrant/orchestrator/artifacts/questions.py`
 - `vibrant/orchestrator/lifecycle.py`
-- `vibrant/orchestrator/services/__init__.py`
+- `vibrant/orchestrator/agents/__init__.py`, `vibrant/orchestrator/artifacts/__init__.py`, `vibrant/orchestrator/execution/__init__.py`, and `vibrant/orchestrator/state/__init__.py`
 - `vibrant/orchestrator/facade.py`
 - `vibrant/tui/app.py`
 
