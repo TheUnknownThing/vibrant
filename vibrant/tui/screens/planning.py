@@ -24,14 +24,14 @@ class PlanningScreen(Static):
     }
 
     PlanningScreen #planning-consensus-panel {
-        width: 44;
-        min-width: 32;
-        max-width: 56;
+        width: 1fr;
+        min-width: 48;
         margin-right: 1;
         display: none;
     }
 
     PlanningScreen #planning-shell {
+        width: 1fr;
         height: 1fr;
         border: round $primary-background;
         background: $surface;
