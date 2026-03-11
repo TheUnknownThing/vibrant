@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from vibrant.models.agent import AgentType
+from uuid import uuid4
+
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.providers.base import RuntimeMode
 from vibrant.prompts import build_merge_prompt as render_merge_prompt
 
@@ -45,4 +47,28 @@ class MergeAgent(AgentBase):
             conflicted_files=conflicted_files,
             conflict_diff=conflict_diff,
             task_summary=task_summary,
+        )
+
+    def build_agent_record(
+        self,
+        *,
+        task_id: str,
+        branch: str,
+    ) -> AgentRecord:
+        """Create an AgentRecord for a merge agent run."""
+        agent_id = f"merge-{task_id}-{uuid4().hex[:8]}"
+        return AgentRecord(
+            identity={
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "type": AgentType.MERGE,
+            },
+            lifecycle={"status": AgentStatus.SPAWNING},
+            context={
+                "branch": branch,
+                "worktree_path": str(self.project_root),
+            },
+            provider=AgentProviderMetadata(
+                runtime_mode="danger-full-access",
+            ),
         )

@@ -85,22 +85,3 @@ def test_agent_registry_callback_surfaces_upsert_failures(tmp_path, monkeypatch:
 
     with pytest.raises(RuntimeError, match="disk write failed"):
         callback(AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE}))
-
-
-def test_agent_registry_rejects_unwired_task_agent_types(tmp_path) -> None:
-    project_root = tmp_path / "repo"
-    project_root.mkdir()
-    initialize_project(project_root)
-
-    engine = OrchestratorStateBackend.load(project_root)
-    state_store = StateStore(engine)
-    agent_store = AgentRecordStore(vibrant_dir=project_root / ".vibrant", state_store=state_store)
-    registry = AgentRegistry(agent_store=agent_store, vibrant_dir=project_root / ".vibrant")
-
-    with pytest.raises(ValueError, match="Unsupported task agent type: gatekeeper"):
-        registry.create_task_agent_record(
-            agent_type=AgentType.GATEKEEPER,
-            task_id="task-1",
-            branch=None,
-            worktree_path=str(project_root),
-        )

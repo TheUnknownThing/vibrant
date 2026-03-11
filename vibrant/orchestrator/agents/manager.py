@@ -254,6 +254,30 @@ class AgentManagementService:
             runtime_mode=runtime_mode,
         )
 
+    def create_merge_agent_record(self, *, task_id: str, branch: str, worktree_path: str) -> AgentRecord:
+        """Build a merge-agent record."""
+        return self._agent_registry.create_merge_agent_record(
+            task_id=task_id,
+            branch=branch,
+            worktree_path=worktree_path,
+        )
+
+    def create_test_agent_record(
+        self,
+        *,
+        task_id: str,
+        branch: str | None,
+        worktree_path: str,
+        prompt: str | None = None,
+    ) -> AgentRecord:
+        """Build a validation/test-agent record."""
+        return self._agent_registry.create_test_agent_record(
+            task_id=task_id,
+            branch=branch,
+            worktree_path=worktree_path,
+            prompt=prompt,
+        )
+
     # ------------------------------------------------------------------
     # Live handle inspection and control
     # ------------------------------------------------------------------
