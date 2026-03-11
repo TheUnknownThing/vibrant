@@ -12,14 +12,15 @@ from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
 from ..agent_output import AgentOutputProjectionService
 from ..types import (
+    AgentOutput,
     AgentSnapshotIdentity,
     AgentSnapshotOutcome,
     AgentSnapshotProvider,
     AgentSnapshotRuntime,
     AgentSnapshotWorkspace,
-    CodeAgentLifecycleResult,
     OrchestratorAgentSnapshot,
     RuntimeExecutionResult,
+    TaskResult,
 )
 from .registry import AgentRegistry
 from .runtime import AgentRuntimeService, RuntimeHandleSnapshot
@@ -439,14 +440,14 @@ class AgentManagementService:
         """Start a task-scoped agent run without waiting for completion."""
         return await self._execution_service.start_task_attempt(task, resume_thread_id=resume_thread_id)
 
-    async def wait_for_task(self, attempt: TaskExecutionAttempt) -> CodeAgentLifecycleResult:
+    async def wait_for_task(self, attempt: TaskExecutionAttempt) -> TaskResult:
         """Wait for a previously started task attempt through review/merge."""
         return await self._execution_service.wait_for_task_attempt(attempt)
 
-    async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
+    async def execute_next_task(self) -> TaskResult | None:
         """Execute the next queued task through the full agent pipeline."""
         return await self._execution_service.execute_next_task()
 
-    async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
+    async def execute_until_blocked(self) -> list[TaskResult]:
         """Run queued tasks until user input or workflow state blocks progress."""
         return await self._execution_service.execute_until_blocked()
