@@ -20,15 +20,21 @@ class GitWorkspaceService:
     def create_fresh_worktree(self, task_id: str) -> GitWorktreeInfo:
         try:
             return self.git_manager.create_worktree(task_id)
-        except GitManagerError:
-            self.cleanup_worktree(task_id)
+        except GitManagerError as exc:
+            try:
+                self.cleanup_worktree(task_id)
+            except Exception as cleanup_exc:
+                raise GitManagerError(
+                    f"Failed to recreate worktree for {task_id}: "
+                    f"initial create failed ({exc}) and cleanup also failed ({cleanup_exc})"
+                ) from cleanup_exc
             return self.git_manager.create_worktree(task_id)
 
     def cleanup_worktree(self, task_id: str) -> None:
         try:
             self.git_manager.remove_worktree(task_id)
-        except Exception:
-            return
+        except Exception as exc:
+            raise GitManagerError(f"Failed to clean up worktree for {task_id}: {exc}") from exc
 
     def branch_name(self, task_id: str) -> str:
         return self.git_manager.branch_name(task_id)
@@ -100,5 +106,6 @@ def _run_git_capture(cwd: Path, *args: str) -> str:
         check=False,
     )
     if completed.returncode != 0:
-        return ""
+        details = (completed.stderr or completed.stdout).strip() or f"exit code {completed.returncode}"
+        raise GitManagerError(f"git {' '.join(args)} failed in {cwd}: {details}")
     return completed.stdout.strip()

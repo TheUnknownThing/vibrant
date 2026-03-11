@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -13,8 +12,6 @@ from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
 from .store import AgentRecordStore
-
-logger = logging.getLogger(__name__)
 
 AgentRecordCallback = Callable[[AgentRecord], Any]
 """Callback type matching ``vibrant.agents.runtime.AgentRecordCallback``."""
@@ -49,10 +46,7 @@ class AgentRegistry:
         """
 
         def _persist(record: AgentRecord) -> None:
-            try:
-                self.upsert(record, increment_spawn=increment_spawn)
-            except Exception:
-                logger.debug("AgentRegistry.make_record_callback: upsert failed", exc_info=True)
+            self.upsert(record, increment_spawn=increment_spawn)
 
         return _persist
 
