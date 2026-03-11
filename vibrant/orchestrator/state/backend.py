@@ -135,7 +135,7 @@ class OrchestratorStateBackend:
         records: dict[str, AgentRecord] = {}
         for path in sorted(agents_dir.glob("*.json")):
             record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
-            records[record.agent_id] = record
+            records[record.identity.agent_id] = record
         return records
 
     @staticmethod
@@ -176,11 +176,11 @@ class OrchestratorStateBackend:
         """Persist one agent record and refresh derived orchestrator state."""
 
         existing_agent_ids = {agent.agent_id for agent in self.list_agent_records()}
-        if increment_spawn and record.agent_id not in existing_agent_ids:
+        if increment_spawn and record.identity.agent_id not in existing_agent_ids:
             self.state.total_agent_spawns += 1
 
         self.agents_dir.mkdir(parents=True, exist_ok=True)
-        path = self.agents_dir / f"{record.agent_id}.json"
+        path = self.agents_dir / f"{record.identity.agent_id}.json"
         _atomic_write_text(path, record.model_dump_json(indent=2) + "\n")
 
         self._reconstruct_state()
@@ -220,22 +220,22 @@ class OrchestratorStateBackend:
         records = list(agent_records) if agent_records is not None else self.list_agent_records()
 
         for record in records:
-            if record.status not in AgentRecord.TERMINAL_STATUSES:
-                active_agents.append(record.agent_id)
-                if record.type is AgentType.GATEKEEPER:
+            if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+                active_agents.append(record.identity.agent_id)
+                if record.identity.type is AgentType.GATEKEEPER:
                     active_gatekeeper = True
 
-            if record.status is AgentStatus.COMPLETED:
-                completed_tasks.append(record.task_id)
-            elif record.status in {AgentStatus.FAILED, AgentStatus.KILLED}:
-                failed_tasks.append(record.task_id)
+            if record.lifecycle.status is AgentStatus.COMPLETED:
+                completed_tasks.append(record.identity.task_id)
+            elif record.lifecycle.status in {AgentStatus.FAILED, AgentStatus.KILLED}:
+                failed_tasks.append(record.identity.task_id)
 
             provider_thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(
                 record.provider.resume_cursor
             )
-            if provider_thread_id or record.status not in AgentRecord.TERMINAL_STATUSES:
-                provider_runtime[record.agent_id] = ProviderRuntimeState(
-                    status=record.status.value,
+            if provider_thread_id or record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+                provider_runtime[record.identity.agent_id] = ProviderRuntimeState(
+                    status=record.lifecycle.status.value,
                     provider_thread_id=provider_thread_id,
                 )
 
@@ -245,7 +245,7 @@ class OrchestratorStateBackend:
         self.state.provider_runtime = provider_runtime
 
         awaiting_user_gatekeeper = any(
-            record.type is AgentType.GATEKEEPER and record.status is AgentStatus.AWAITING_INPUT
+            record.identity.type is AgentType.GATEKEEPER and record.lifecycle.status is AgentStatus.AWAITING_INPUT
             for record in records
         )
         if self.consensus is not None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import enum
-import re
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
@@ -261,214 +260,26 @@ class AgentRecord(BaseModel):
     retry: AgentRetryState = Field(default_factory=AgentRetryState)
     provider: AgentProviderMetadata = Field(default_factory=AgentProviderMetadata)
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_fields(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-
-        data = dict(value)
-        _move_if_missing(data, "provider_binding", "provider")
-
-        identity_payload = _coerce_model_input(data.pop("identity", None))
-        lifecycle_payload = _coerce_model_input(data.pop("lifecycle", None))
-        context_payload = _coerce_model_input(data.pop("context", None))
-        outcome_payload = _coerce_model_input(data.pop("outcome", None))
-        retry_payload = _coerce_model_input(data.pop("retry", None))
-
-        _move_if_missing(data, "agent_kind", "type")
-        _move_if_missing(data, "branch_name", "branch")
-
-        _move_if_present(data, identity_payload, "agent_id")
-        _move_if_present(data, identity_payload, "task_id")
-        _move_if_present(data, identity_payload, "type")
-
-        _move_if_present(data, lifecycle_payload, "status")
-        _move_if_present(data, lifecycle_payload, "pid")
-        _move_if_present(data, lifecycle_payload, "started_at")
-        _move_if_present(data, lifecycle_payload, "finished_at")
-
-        _move_if_present(data, context_payload, "branch")
-        _move_if_present(data, context_payload, "worktree_path")
-        _move_if_present(data, context_payload, "prompt_used")
-        _move_if_present(data, context_payload, "skills_loaded")
-
-        _move_if_present(data, outcome_payload, "exit_code")
-        _move_if_present(data, outcome_payload, "summary")
-        _move_if_present(data, outcome_payload, "error")
-
-        _move_if_present(data, retry_payload, "retry_count")
-        _move_if_present(data, retry_payload, "max_retries")
-
-        if not isinstance(identity_payload.get("task_id"), str) or not identity_payload["task_id"].strip():
-            identity_payload["task_id"] = _infer_task_id(identity_payload)
-
-        data.pop("pending_requests", None)
-        data.pop("validation_result", None)
-        data["identity"] = identity_payload
-        data["lifecycle"] = lifecycle_payload
-        data["context"] = context_payload
-        data["outcome"] = outcome_payload
-        data["retry"] = retry_payload
-        return data
-
-    @model_serializer(mode="wrap")
-    def serialize_record(self, handler: Any, info: Any) -> dict[str, Any]:
-        data = handler(self)
-        flattened = {
-            **data.pop("identity"),
-            **data.pop("lifecycle"),
-            **data.pop("context"),
-            **data.pop("outcome"),
-            **data.pop("retry"),
-            **data,
-        }
-        return flattened
-
     @model_validator(mode="after")
     def validate_record(self) -> AgentRecord:
-        if self.retry_count < 0:
+        if self.retry.retry_count < 0:
             raise ValueError("retry_count must be >= 0")
-        if self.max_retries < 0:
+        if self.retry.max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        if self.retry_count > self.max_retries:
+        if self.retry.retry_count > self.retry.max_retries:
             raise ValueError("retry_count cannot exceed max_retries")
-        if self.started_at and self.finished_at and self.finished_at < self.started_at:
+        if (
+            self.lifecycle.started_at
+            and self.lifecycle.finished_at
+            and self.lifecycle.finished_at < self.lifecycle.started_at
+        ):
             raise ValueError("finished_at cannot be earlier than started_at")
         return self
-
-    @property
-    def agent_id(self) -> str:
-        return self.identity.agent_id
-
-    @agent_id.setter
-    def agent_id(self, value: str) -> None:
-        self.identity.agent_id = value
-
-    @property
-    def task_id(self) -> str:
-        return self.identity.task_id
-
-    @task_id.setter
-    def task_id(self, value: str) -> None:
-        self.identity.task_id = value
-
-    @property
-    def type(self) -> AgentType:
-        return self.identity.type
-
-    @type.setter
-    def type(self, value: AgentType) -> None:
-        self.identity.type = value
-
-    @property
-    def status(self) -> AgentStatus:
-        return self.lifecycle.status
-
-    @status.setter
-    def status(self, value: AgentStatus) -> None:
-        self.lifecycle.status = value
-
-    @property
-    def pid(self) -> int | None:
-        return self.lifecycle.pid
-
-    @pid.setter
-    def pid(self, value: int | None) -> None:
-        self.lifecycle.pid = value
-
-    @property
-    def started_at(self) -> datetime | None:
-        return self.lifecycle.started_at
-
-    @started_at.setter
-    def started_at(self, value: datetime | None) -> None:
-        self.lifecycle.started_at = value
-
-    @property
-    def finished_at(self) -> datetime | None:
-        return self.lifecycle.finished_at
-
-    @finished_at.setter
-    def finished_at(self, value: datetime | None) -> None:
-        self.lifecycle.finished_at = value
-
-    @property
-    def branch(self) -> str | None:
-        return self.context.branch
-
-    @branch.setter
-    def branch(self, value: str | None) -> None:
-        self.context.branch = value
-
-    @property
-    def worktree_path(self) -> str | None:
-        return self.context.worktree_path
-
-    @worktree_path.setter
-    def worktree_path(self, value: str | None) -> None:
-        self.context.worktree_path = value
-
-    @property
-    def prompt_used(self) -> str | None:
-        return self.context.prompt_used
-
-    @prompt_used.setter
-    def prompt_used(self, value: str | None) -> None:
-        self.context.prompt_used = value
-
-    @property
-    def skills_loaded(self) -> list[str]:
-        return self.context.skills_loaded
-
-    @skills_loaded.setter
-    def skills_loaded(self, value: list[str]) -> None:
-        self.context.skills_loaded = value
-
-    @property
-    def exit_code(self) -> int | None:
-        return self.outcome.exit_code
-
-    @exit_code.setter
-    def exit_code(self, value: int | None) -> None:
-        self.outcome.exit_code = value
-
-    @property
-    def summary(self) -> str | None:
-        return self.outcome.summary
-
-    @summary.setter
-    def summary(self, value: str | None) -> None:
-        self.outcome.summary = value
-
-    @property
-    def error(self) -> str | None:
-        return self.outcome.error
-
-    @error.setter
-    def error(self, value: str | None) -> None:
-        self.outcome.error = value
-
-    @property
-    def retry_count(self) -> int:
-        return self.retry.retry_count
-
-    @retry_count.setter
-    def retry_count(self, value: int) -> None:
-        self.retry.retry_count = value
-
-    @property
-    def max_retries(self) -> int:
-        return self.retry.max_retries
-
-    @max_retries.setter
-    def max_retries(self, value: int) -> None:
-        self.retry.max_retries = value
 
     def can_transition_to(self, next_status: AgentStatus) -> bool:
         """Return whether the current agent status may transition to ``next_status``."""
 
-        return next_status in self.ALLOWED_TRANSITIONS[self.status]
+        return next_status in self.ALLOWED_TRANSITIONS[self.lifecycle.status]
 
     def transition_to(
         self,
@@ -481,16 +292,18 @@ class AgentRecord(BaseModel):
         """Transition the agent to a new status, enforcing the lifecycle graph."""
 
         if not self.can_transition_to(next_status):
-            raise ValueError(f"Invalid agent status transition: {self.status.value} -> {next_status.value}")
+            raise ValueError(
+                f"Invalid agent status transition: {self.lifecycle.status.value} -> {next_status.value}"
+            )
 
-        self.status = next_status
+        self.lifecycle.status = next_status
         if exit_code is not None:
-            self.exit_code = exit_code
+            self.outcome.exit_code = exit_code
         if error is not None:
-            self.error = error
+            self.outcome.error = error
 
         if next_status in self.TERMINAL_STATUSES:
-            self.finished_at = finished_at or self.finished_at or datetime.now(timezone.utc)
+            self.lifecycle.finished_at = finished_at or self.lifecycle.finished_at or datetime.now(timezone.utc)
 
 
 def _move_if_missing(data: dict[str, Any], old_key: str, new_key: str) -> None:
@@ -503,16 +316,6 @@ def _move_if_missing(data: dict[str, Any], old_key: str, new_key: str) -> None:
 def _move_if_present(source: dict[str, Any], destination: dict[str, Any], key: str) -> None:
     if key in source and key not in destination:
         destination[key] = source.pop(key)
-
-
-def _coerce_model_input(value: object) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    if isinstance(value, dict):
-        return dict(value)
-    raise TypeError(f"Expected mapping or model input, got {type(value).__name__}")
 
 
 def _normalize_runtime_mode(value: str) -> str:
@@ -531,15 +334,3 @@ def _normalize_runtime_mode(value: str) -> str:
         return mapping[normalized]
     except KeyError as exc:
         raise ValueError(f"Unsupported provider runtime mode: {value!r}") from exc
-
-
-def _infer_task_id(data: dict[str, Any]) -> str:
-    agent_id = data.get("agent_id")
-    if not isinstance(agent_id, str) or not agent_id.strip():
-        raise ValueError("Cannot infer task_id from legacy agent record without a valid agent_id")
-
-    normalized_agent_id = agent_id.removeprefix("agent-")
-    agent_type = data.get("type") or data.get("agent_kind")
-    if isinstance(agent_type, str) and agent_type.strip().lower() == AgentType.GATEKEEPER.value:
-        return re.sub(r"-\d+$", "", normalized_agent_id)
-    return normalized_agent_id

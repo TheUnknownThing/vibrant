@@ -6,7 +6,7 @@
 
 ## Goal
 
-Split the current `CodeAgentLifecycle` coordinator into explicit domain packages under `vibrant/orchestrator/agents/`, `vibrant/orchestrator/execution/`, `vibrant/orchestrator/artifacts/`, and `vibrant/orchestrator/state/`, with `OrchestratorFacade` as the only public entrypoint for the TUI, Gatekeeper integration, and future MCP tools.
+Split the current `CodeAgentLifecycle` coordinator into explicit domain packages under `vibrant/orchestrator/agents/`, `vibrant/orchestrator/execution/`, `vibrant/orchestrator/artifacts/`, and `vibrant/orchestrator/state/`, with `OrchestratorFacade` as the preferred stable public entrypoint for the TUI and external integrations. First-party MCP wiring may depend on the facade, internal services, or both as needed.
 
 The file name is historical; the implementation now uses domain packages rather than a single flat `services/` directory.
 

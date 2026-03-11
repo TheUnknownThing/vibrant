@@ -41,13 +41,13 @@ class AgentRecordStore:
         return [self._records[agent_id] for agent_id in sorted(self._records)]
 
     def records_for_task(self, task_id: str) -> list[AgentRecord]:
-        records = [record for record in self._records.values() if record.task_id == task_id]
+        records = [record for record in self._records.values() if record.identity.task_id == task_id]
         return sorted(
             records,
             key=lambda record: (
-                (record.started_at or record.finished_at) is None,
-                record.started_at or record.finished_at,
-                record.agent_id,
+                (record.lifecycle.started_at or record.lifecycle.finished_at) is None,
+                record.lifecycle.started_at or record.lifecycle.finished_at,
+                record.identity.agent_id,
             ),
         )
 
@@ -59,7 +59,7 @@ class AgentRecordStore:
     ) -> AgentRecord | None:
         matches = self.records_for_task(task_id)
         if agent_type is not None:
-            matches = [record for record in matches if record.type is agent_type]
+            matches = [record for record in matches if record.identity.type is agent_type]
         return matches[-1] if matches else None
 
     def provider_thread_handle(self, agent_id: str) -> ProviderThreadHandle | None:
@@ -73,7 +73,7 @@ class AgentRecordStore:
         if self.agents_dir.exists():
             for path in sorted(self.agents_dir.glob("*.json")):
                 record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
-                records[record.agent_id] = record
+                records[record.identity.agent_id] = record
         self._records = records
         return dict(self._records)
 
@@ -84,13 +84,13 @@ class AgentRecordStore:
         increment_spawn: bool = False,
         rebuild_state: bool = True,
     ) -> Path:
-        if increment_spawn and record.agent_id not in self._records:
+        if increment_spawn and record.identity.agent_id not in self._records:
             self.state_store.increment_total_agent_spawns()
 
-        path = self.agents_dir / f"{record.agent_id}.json"
+        path = self.agents_dir / f"{record.identity.agent_id}.json"
         _atomic_write_text(path, record.model_dump_json(indent=2) + "\n")
 
-        self._records[record.agent_id] = record
+        self._records[record.identity.agent_id] = record
         if rebuild_state:
             self.state_store.rebuild_derived_state()
         return path

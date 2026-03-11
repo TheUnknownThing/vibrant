@@ -12,7 +12,7 @@ from .base import AgentBase
 
 if TYPE_CHECKING:
     from vibrant.models.task import TaskInfo
-    from vibrant.orchestrator.git_manager import GitWorktreeInfo
+    from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
 
 class CodeAgent(AgentBase):
@@ -49,15 +49,21 @@ class CodeAgent(AgentBase):
             provider_kwargs["canonical_event_log"] = str(canonical_log)
 
         return AgentRecord(
-            agent_id=agent_id,
-            task_id=task.id,
-            type=AgentType.CODE,
-            status=AgentStatus.SPAWNING,
-            branch=task.branch,
-            worktree_path=str(worktree.path),
-            prompt_used=prompt,
-            skills_loaded=list(task.skills),
-            retry_count=task.retry_count,
-            max_retries=task.max_retries,
+            identity={
+                "agent_id": agent_id,
+                "task_id": task.id,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": AgentStatus.SPAWNING},
+            context={
+                "branch": task.branch,
+                "worktree_path": str(worktree.path),
+                "prompt_used": prompt,
+                "skills_loaded": list(task.skills),
+            },
+            retry={
+                "retry_count": task.retry_count,
+                "max_retries": task.max_retries,
+            },
             provider=AgentProviderMetadata(**provider_kwargs),
         )

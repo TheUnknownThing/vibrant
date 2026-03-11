@@ -112,11 +112,13 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
 
         return AgentRecord(
-            agent_id=agent_id,
-            task_id=task_id,
-            type=AgentType.GATEKEEPER,
-            status=AgentStatus.SPAWNING,
-            worktree_path=str(self.project_root),
+            identity={
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "type": AgentType.GATEKEEPER,
+            },
+            lifecycle={"status": AgentStatus.SPAWNING},
+            context={"worktree_path": str(self.project_root)},
             provider=AgentProviderMetadata(
                 runtime_mode=RuntimeMode.READ_ONLY.codex_thread_sandbox,
                 native_event_log=str(native_log),
@@ -205,7 +207,7 @@ class Gatekeeper:
     ) -> GatekeeperRunHandle:
         prompt = self.render_prompt(request)
         agent_record = self.build_agent_record(request)
-        agent_record.prompt_used = prompt
+        agent_record.context.prompt_used = prompt
 
         should_resume = (
             resume_latest_thread
@@ -229,7 +231,7 @@ class Gatekeeper:
         if on_result is not None:
             asyncio.create_task(
                 self._forward_result(handle, on_result),
-                name=f"gatekeeper-result-callback-{agent_record.agent_id}",
+                name=f"gatekeeper-result-callback-{agent_record.identity.agent_id}",
             )
 
         return handle
@@ -283,15 +285,15 @@ class Gatekeeper:
                 record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if record.type is not AgentType.GATEKEEPER:
+            if record.identity.type is not AgentType.GATEKEEPER:
                 continue
 
             thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
             if not thread_id:
                 continue
 
-            started = record.started_at or datetime.min.replace(tzinfo=timezone.utc)
-            finished = record.finished_at or started
+            started = record.lifecycle.started_at or datetime.min.replace(tzinfo=timezone.utc)
+            finished = record.lifecycle.finished_at or started
             sort_key = (started, finished)
             if latest_sort_key is None or sort_key > latest_sort_key:
                 latest_record = record
@@ -306,7 +308,7 @@ class Gatekeeper:
 
     def _persist_agent_record(self, agent_record: AgentRecord) -> None:
         self.agents_dir.mkdir(parents=True, exist_ok=True)
-        path = self.agents_dir / f"{agent_record.agent_id}.json"
+        path = self.agents_dir / f"{agent_record.identity.agent_id}.json"
         _atomic_write_text(path, agent_record.model_dump_json(indent=2) + "\n")
 
 

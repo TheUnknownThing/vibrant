@@ -6,7 +6,6 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
-import shlex
 from typing import Any, Callable
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
@@ -104,10 +103,10 @@ class CodexProviderAdapter(ProviderAdapter):
 
         base_cwd = Path(cwd or self._cwd or Path.cwd()).expanduser().resolve()
         native_path = self.agent_record.provider.native_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.agent_id}.ndjson"
         )
         canonical_path = self.agent_record.provider.canonical_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.agent_id}.ndjson"
         )
 
         self.agent_record.provider.native_event_log = native_path
@@ -368,11 +367,6 @@ class CodexProviderAdapter(ProviderAdapter):
         original_params = dict(notification.params or {})
         params = dict(original_params)
 
-        if method.startswith("codex/event/"):
-            await self._handle_legacy_notification(method, params)
-            await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
-            return
-
         request_id = params.pop("_jsonrpc_id", None)
         if request_id is not None:
             await self._handle_server_request(method, request_id, params)
@@ -601,19 +595,6 @@ class CodexProviderAdapter(ProviderAdapter):
             return "approval"
         return "request"
 
-    async def _handle_legacy_notification(self, method: str, params: Mapping[str, Any]) -> None:
-        msg = params.get("msg")
-        if method == "codex/event/exec_command_begin" and isinstance(msg, Mapping):
-            item = _legacy_command_item(msg, status="inProgress")
-            turn_id = str(msg.get("turn_id") or self.current_turn_id or "")
-            item_id = self._remember_item_state(item, turn_id=turn_id)
-            await self._emit_command_started(item, turn_id=turn_id or None, raw=params, item_id=item_id)
-        elif method == "codex/event/exec_command_end" and isinstance(msg, Mapping):
-            item = _legacy_command_item(msg, status="completed")
-            turn_id = str(msg.get("turn_id") or self.current_turn_id or "")
-            item_id = self._remember_item_state(item, turn_id=turn_id)
-            await self._emit_command_completed(item, turn_id=turn_id or None, raw=params, item_id=item_id)
-
     async def _handle_reasoning_delta(
         self,
         *,
@@ -817,8 +798,8 @@ class CodexProviderAdapter(ProviderAdapter):
             "provider": "codex",
         }
         if self.agent_record is not None:
-            event["agent_id"] = self.agent_record.agent_id
-            event["task_id"] = self.agent_record.task_id
+            event["agent_id"] = self.agent_record.identity.agent_id
+            event["task_id"] = self.agent_record.identity.task_id
         if self.provider_thread_id is not None:
             event["provider_thread_id"] = self.provider_thread_id
         event.update(payload)
@@ -1014,50 +995,6 @@ def _normalize_item_type(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return "".join(ch for ch in value.lower() if ch.isalnum())
-
-
-def _legacy_command_item(msg: Mapping[str, Any], *, status: str) -> dict[str, Any]:
-    stdout = str(msg.get("stdout") or "")
-    stderr = str(msg.get("stderr") or "")
-    output = str(msg.get("aggregated_output") or msg.get("formatted_output") or "")
-    if not output:
-        output = stdout
-        if stderr:
-            output = f"{output}{stderr}" if output else stderr
-
-    item: dict[str, Any] = {
-        "type": "commandExecution",
-        "id": msg.get("call_id"),
-        "command": _stringify_command(msg.get("command")),
-        "cwd": msg.get("cwd"),
-        "processId": msg.get("process_id"),
-        "status": status,
-        "commandActions": list(msg.get("parsed_cmd", [])) if isinstance(msg.get("parsed_cmd"), Sequence) else [],
-        "aggregatedOutput": output or None,
-        "exitCode": msg.get("exit_code"),
-        "durationMs": _duration_to_ms(msg.get("duration")),
-    }
-    return item
-
-
-def _stringify_command(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
-        parts = [str(entry) for entry in value if entry is not None]
-        return shlex.join(parts) if parts else ""
-    return ""
-
-
-def _duration_to_ms(value: Any) -> int | None:
-    if isinstance(value, Mapping):
-        secs = value.get("secs")
-        nanos = value.get("nanos")
-        if isinstance(secs, int) and isinstance(nanos, int):
-            return secs * 1000 + nanos // 1_000_000
-    if isinstance(value, (int, float)):
-        return int(value)
-    return None
 
 
 def _command_start_text(item_payload: Mapping[str, Any]) -> str:

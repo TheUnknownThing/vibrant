@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from vibrant.agents.runtime import AgentHandle, InputRequest, ProviderThreadHandle
@@ -12,45 +10,23 @@ from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
-from ..agent_output import AgentOutputProjectionService
-from ..types import AgentOutput, TaskResult, RuntimeExecutionResult
+from ..types import (
+    AgentOutput,
+    AgentSnapshotIdentity,
+    AgentSnapshotOutcome,
+    AgentSnapshotProvider,
+    AgentSnapshotRuntime,
+    AgentSnapshotWorkspace,
+    OrchestratorAgentSnapshot,
+    RuntimeExecutionResult,
+    TaskResult,
+)
+from .output_projection import AgentOutputProjectionService
 from .registry import AgentRegistry
 from .runtime import AgentRuntimeService, RuntimeHandleSnapshot
 from ..execution.service import TaskExecutionAttempt, TaskExecutionService
 
-
-@dataclass(slots=True)
-class ManagedAgentSnapshot:
-    """Unified orchestrator-facing view of one agent run.
-
-    This merges durable ``AgentRecord`` state with any live runtime handle state
-    so callers do not need to know whether a run is currently in-flight,
-    suspended, or already persisted to disk.
-    """
-
-    agent_id: str
-    task_id: str
-    agent_type: str
-    status: str
-    state: str
-    has_handle: bool
-    active: bool
-    done: bool
-    awaiting_input: bool
-    pid: int | None = None
-    branch: str | None = None
-    worktree_path: str | None = None
-    started_at: datetime | None = None
-    finished_at: datetime | None = None
-    summary: str | None = None
-    error: str | None = None
-    provider_thread_id: str | None = None
-    provider_thread_path: str | None = None
-    provider_resume_cursor: dict[str, Any] | None = None
-    input_requests: list[InputRequest] = field(default_factory=list)
-    native_event_log: str | None = None
-    canonical_event_log: str | None = None
-    output: AgentOutput | None = None
+ManagedAgentSnapshot = OrchestratorAgentSnapshot
 
 
 class AgentManagementService:
@@ -124,55 +100,71 @@ class AgentManagementService:
 
     def snapshot_for_record(self, record: AgentRecord) -> ManagedAgentSnapshot:
         """Return a unified snapshot for a persisted record."""
-        handle = self._runtime_service.get_handle(record.agent_id)
-        done = record.status in AgentRecord.TERMINAL_STATUSES
+        handle = self._runtime_service.get_handle(record.identity.agent_id)
+        done = record.lifecycle.status in AgentRecord.TERMINAL_STATUSES
         if handle is not None:
             handle_snapshot = self._runtime_service.snapshot_handle(handle=handle, agent_record=record)
-            state = handle_snapshot.state
-            done = handle_snapshot.done
-            awaiting_input = handle_snapshot.awaiting_input
-            provider_thread_id = handle_snapshot.provider_thread_id
-            provider_thread_path = handle_snapshot.provider_thread_path
-            provider_resume_cursor = handle_snapshot.provider_resume_cursor
-            input_requests = list(handle_snapshot.input_requests)
+            runtime = AgentSnapshotRuntime(
+                status=record.lifecycle.status.value,
+                state=handle_snapshot.runtime.state,
+                has_handle=True,
+                active=True,
+                done=handle_snapshot.runtime.done,
+                awaiting_input=handle_snapshot.runtime.awaiting_input,
+                pid=record.lifecycle.pid,
+                started_at=record.lifecycle.started_at,
+                finished_at=record.lifecycle.finished_at,
+                input_requests=list(handle_snapshot.runtime.input_requests),
+            )
+            provider = AgentSnapshotProvider(
+                thread_id=handle_snapshot.provider.thread_id,
+                thread_path=handle_snapshot.provider.thread_path,
+                resume_cursor=handle_snapshot.provider.resume_cursor,
+                native_event_log=record.provider.native_event_log,
+                canonical_event_log=record.provider.canonical_event_log,
+            )
         else:
             provider_thread = ProviderResumeHandle.from_provider_metadata(record.provider) or ProviderResumeHandle(
                 kind=record.provider.kind
             )
-            state = record.status.value
-            done = record.status in AgentRecord.TERMINAL_STATUSES
-            awaiting_input = record.status.value == "awaiting_input"
-            provider_thread_id = provider_thread.thread_id
-            provider_thread_path = provider_thread.thread_path
-            provider_resume_cursor = provider_thread.resume_cursor
-            input_requests = []
+            runtime = AgentSnapshotRuntime(
+                status=record.lifecycle.status.value,
+                state=record.lifecycle.status.value,
+                has_handle=False,
+                active=not done,
+                done=done,
+                awaiting_input=record.lifecycle.status.value == "awaiting_input",
+                pid=record.lifecycle.pid,
+                started_at=record.lifecycle.started_at,
+                finished_at=record.lifecycle.finished_at,
+            )
+            provider = AgentSnapshotProvider(
+                thread_id=provider_thread.thread_id,
+                thread_path=provider_thread.thread_path,
+                resume_cursor=provider_thread.resume_cursor,
+                native_event_log=record.provider.native_event_log,
+                canonical_event_log=record.provider.canonical_event_log,
+            )
 
         output = self._output_service.output_for_record(record) if self._output_service is not None else None
 
         return ManagedAgentSnapshot(
-            agent_id=record.agent_id,
-            task_id=record.task_id,
-            agent_type=record.type.value,
-            status=record.status.value,
-            state=state,
-            has_handle=handle is not None,
-            active=handle is not None or not done,
-            done=done,
-            awaiting_input=awaiting_input,
-            pid=record.pid,
-            branch=record.branch,
-            worktree_path=record.worktree_path,
-            started_at=record.started_at,
-            finished_at=record.finished_at,
-            summary=record.summary,
-            error=record.error,
-            provider_thread_id=provider_thread_id,
-            provider_thread_path=provider_thread_path,
-            provider_resume_cursor=provider_resume_cursor,
-            input_requests=input_requests,
-            native_event_log=record.provider.native_event_log,
-            canonical_event_log=record.provider.canonical_event_log,
-            output=output,
+            identity=AgentSnapshotIdentity(
+                agent_id=record.identity.agent_id,
+                task_id=record.identity.task_id,
+                agent_type=record.identity.type.value,
+            ),
+            runtime=runtime,
+            workspace=AgentSnapshotWorkspace(
+                branch=record.context.branch,
+                worktree_path=record.context.worktree_path,
+            ),
+            outcome=AgentSnapshotOutcome(
+                summary=record.outcome.summary,
+                error=record.outcome.error,
+                output=output,
+            ),
+            provider=provider,
         )
 
     def get_agent(self, agent_id: str) -> ManagedAgentSnapshot | None:
@@ -194,15 +186,19 @@ class AgentManagementService:
         resolved_type = self._coerce_agent_type(agent_type)
         records = self._agent_registry.list_records()
         if task_id is not None:
-            records = [record for record in records if record.task_id == task_id]
+            records = [record for record in records if record.identity.task_id == task_id]
         if resolved_type is not None:
-            records = [record for record in records if record.type is resolved_type]
+            records = [record for record in records if record.identity.type is resolved_type]
 
         snapshots = [self.snapshot_for_record(record) for record in records]
         if active_only:
-            return [snapshot for snapshot in snapshots if snapshot.active]
+            return [snapshot for snapshot in snapshots if snapshot.runtime.active]
         if not include_completed:
-            return [snapshot for snapshot in snapshots if not snapshot.done or snapshot.awaiting_input]
+            return [
+                snapshot
+                for snapshot in snapshots
+                if not snapshot.runtime.done or snapshot.runtime.awaiting_input
+            ]
         return snapshots
 
     def list_active_agents(self) -> list[ManagedAgentSnapshot]:

@@ -126,8 +126,8 @@ class AgentBase(ABC):
         agent_record: AgentRecord,
     ) -> dict[str, Any]:
         """Add agent-specific metadata to a canonical event before forwarding."""
-        event.setdefault("agent_id", agent_record.agent_id)
-        event.setdefault("task_id", agent_record.task_id)
+        event.setdefault("agent_id", agent_record.identity.agent_id)
+        event.setdefault("task_id", agent_record.identity.task_id)
         return event
 
     def extract_summary(
@@ -168,7 +168,7 @@ class AgentBase(ABC):
         5. Stops the adapter.
         6. Returns an ``AgentRunResult``.
         """
-        working_dir = str(cwd or agent_record.worktree_path or self.project_root)
+        working_dir = str(cwd or agent_record.context.worktree_path or self.project_root)
         events: list[CanonicalEvent] = []
         transcript_chunks: list[str] = []
         turn_finished = asyncio.Event()
@@ -209,7 +209,7 @@ class AgentBase(ABC):
                     agent_record.transition_to(AgentStatus.AWAITING_INPUT)
                     self._notify_record_updated(agent_record)
             elif event_type == "request.resolved":
-                if agent_record.status is AgentStatus.AWAITING_INPUT and agent_record.can_transition_to(
+                if agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT and agent_record.can_transition_to(
                     AgentStatus.RUNNING
                 ):
                     agent_record.transition_to(AgentStatus.RUNNING)
@@ -217,7 +217,7 @@ class AgentBase(ABC):
 
             await maybe_forward_event(self.on_canonical_event, event_copy)
 
-        agent_record.started_at = datetime.now(timezone.utc)
+        agent_record.lifecycle.started_at = datetime.now(timezone.utc)
         self._notify_record_updated(agent_record)
         self.on_run_started(agent_record)
 
@@ -238,7 +238,7 @@ class AgentBase(ABC):
             )
             self._live_adapter = adapter
             await adapter.start_session(cwd=working_dir)
-            agent_record.pid = extract_pid(adapter)
+            agent_record.lifecycle.pid = extract_pid(adapter)
             self._notify_record_updated(agent_record)
 
             thread_kwargs = self.get_thread_kwargs()
@@ -273,7 +273,7 @@ class AgentBase(ABC):
         exit_code = extract_exit_code(adapter)
 
         if runtime_error:
-            agent_record.summary = transcript or agent_record.summary
+            agent_record.outcome.summary = transcript or agent_record.outcome.summary
             transition_terminal_agent(
                 agent_record,
                 AgentStatus.FAILED,
@@ -281,7 +281,7 @@ class AgentBase(ABC):
                 error=runtime_error,
             )
         else:
-            agent_record.summary = self.extract_summary(transcript, turn_result)
+            agent_record.outcome.summary = self.extract_summary(transcript, turn_result)
             transition_terminal_agent(
                 agent_record,
                 AgentStatus.COMPLETED,
@@ -295,8 +295,8 @@ class AgentBase(ABC):
             events=events,
             agent_record=agent_record,
             turn_result=turn_result,
-            exit_code=agent_record.exit_code,
-            pid=agent_record.pid,
+            exit_code=agent_record.outcome.exit_code,
+            pid=agent_record.lifecycle.pid,
             error=runtime_error,
         )
         self.on_run_completed(result)

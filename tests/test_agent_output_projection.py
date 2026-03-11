@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from vibrant.orchestrator.agent_output import AgentOutputProjectionService
+from vibrant.orchestrator.agents.output_projection import AgentOutputProjectionService
 from vibrant.orchestrator.types import AgentOutput
 
 
