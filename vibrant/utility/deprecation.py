@@ -13,10 +13,10 @@ _stdlib_deprecated = getattr(warnings, "deprecated", None)
 def deprecated(func: Callable[..., Any]) -> Callable[..., Any]:
     """Provide a runtime deprecation decorator when ``warnings.deprecated`` is unavailable."""
 
-    if _stdlib_deprecated is not None:
-        return _stdlib_deprecated(func)
-
     message = f"{func.__qualname__} is deprecated and will be removed in a future release."
+
+    if _stdlib_deprecated is not None:
+        return _stdlib_deprecated(message)(func)
 
     if inspect.iscoroutinefunction(func):
 
