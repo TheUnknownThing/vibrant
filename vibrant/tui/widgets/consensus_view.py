@@ -13,6 +13,8 @@ from textual.containers import Horizontal, Vertical, Center
 from textual.message import Message
 from textual.widgets import Button, Markdown, Static, TextArea
 
+from vibrant.orchestrator.facade import OrchestratorFacade
+
 from ...consensus import ConsensusParser, ConsensusWriter
 from ...models.consensus import ConsensusDocument, ConsensusStatus
 from ...models.task import TaskInfo
@@ -130,7 +132,7 @@ class ConsensusView(Static):
         super().__init__(**kwargs)
         self._writer = ConsensusWriter()
         self._parser = ConsensusParser()
-        self._document: ConsensusDocument | None = None
+        self._document: ConsensusDocument | None = self._get_consensus()
         self._source_path: Path | None = None
         self._tasks: tuple[TaskInfo, ...] = ()
         self._summary_message = "Consensus.md does not exist."
@@ -378,6 +380,16 @@ class ConsensusView(Static):
             decisions=[],
             getting_started=_DEFAULT_GETTING_STARTED,
         )
+    
+    @property
+    def _orchestrator_facade(self) -> OrchestratorFacade:
+        """Access the app's orchestrator facade"""
+        assert self.app is not None
+        return self.app.orchestrator_facade
+    
+    def _get_consensus(self) -> ConsensusDocument | None:
+        """Get the current consensus from the orchestrator."""
+        return self._orchestrator_facade.consensus_document
 
 
 def _extract_editable_markdown(markdown_text: str) -> str:
