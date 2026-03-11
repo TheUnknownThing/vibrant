@@ -2,7 +2,7 @@
 
 from .help import HelpScreen
 from .initialization import DirectorySelectionScreen, InitializationScreen
-from .planning import PlanningScreen
+from .artifacts import PlanningScreen
 from .vibing import VibingScreen
 
 __all__ = [

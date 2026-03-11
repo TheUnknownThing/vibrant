@@ -20,7 +20,7 @@ from vibrant.orchestrator.git_manager import GitWorktreeInfo
 from vibrant.providers.base import CanonicalEvent
 
 from ..types import RuntimeExecutionResult
-from .agents import AgentRegistry
+from .registry import AgentRegistry
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
 RuntimeFactory = Callable[[AgentRecord], AgentRuntime]

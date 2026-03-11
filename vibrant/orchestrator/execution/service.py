@@ -10,15 +10,15 @@ from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
 from ..types import CodeAgentLifecycleResult
-from .agents import AgentRegistry
 from .git_workspace import GitWorkspaceService, format_merge_error
 from .prompts import PromptService
-from .retries import RetryPolicyService
+from .retry_policy import RetryPolicyService
 from .review import ReviewService
-from .roadmap import RoadmapService
-from .runtime import AgentRuntimeService
-from .state_store import StateStore
-from .workflow import WorkflowService
+from ..agents.registry import AgentRegistry
+from ..agents.runtime import AgentRuntimeService
+from ..artifacts.roadmap import RoadmapService
+from ..artifacts.workflow import WorkflowService
+from ..state.store import StateStore
 
 
 @dataclass(slots=True)

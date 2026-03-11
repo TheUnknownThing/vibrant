@@ -12,9 +12,9 @@ from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
 from ..types import CodeAgentLifecycleResult, RuntimeExecutionResult
-from .agents import AgentRegistry
-from .execution import TaskExecutionAttempt, TaskExecutionService
+from .registry import AgentRegistry
 from .runtime import AgentRuntimeService, RuntimeHandleSnapshot
+from ..execution.service import TaskExecutionAttempt, TaskExecutionService
 
 
 @dataclass(slots=True)
@@ -88,7 +88,12 @@ class AgentManagementService:
     def _coerce_agent_type(self, agent_type: AgentType | str | None) -> AgentType | None:
         if agent_type is None or isinstance(agent_type, AgentType):
             return agent_type
-        return AgentType(agent_type)
+        if isinstance(agent_type, str):
+            try:
+                return AgentType(agent_type.strip().lower())
+            except ValueError:
+                return None
+        return None
 
     # ------------------------------------------------------------------
     # Durable record / snapshot access
@@ -113,6 +118,7 @@ class AgentManagementService:
     def snapshot_for_record(self, record: AgentRecord) -> ManagedAgentSnapshot:
         """Return a unified snapshot for a persisted record."""
         handle = self._runtime_service.get_handle(record.agent_id)
+        done = record.status in AgentRecord.TERMINAL_STATUSES
         if handle is not None:
             handle_snapshot = self._runtime_service.snapshot_handle(handle=handle, agent_record=record)
             state = handle_snapshot.state
@@ -138,7 +144,7 @@ class AgentManagementService:
             status=record.status.value,
             state=state,
             has_handle=handle is not None,
-            active=handle is not None,
+            active=handle is not None or not done,
             done=done,
             awaiting_input=awaiting_input,
             pid=record.pid,

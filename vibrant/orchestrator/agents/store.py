@@ -10,7 +10,7 @@ from vibrant.agents.runtime import ProviderThreadHandle
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.orchestrator.engine import OrchestratorEngine
 
-from .state_store import StateStore
+from ..state.store import StateStore
 
 
 class AgentRecordStore:

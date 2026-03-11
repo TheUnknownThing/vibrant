@@ -11,7 +11,7 @@ import pytest
 
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
@@ -256,6 +256,21 @@ class AsyncHandle:
 
     async def wait(self) -> GatekeeperRunResult:
         return await self.result_future
+
+
+def _agent_record(
+    agent_id: str,
+    *,
+    task_id: str = "task-001",
+    agent_type: AgentType = AgentType.CODE,
+    status: AgentStatus = AgentStatus.RUNNING,
+) -> AgentRecord:
+    return AgentRecord(
+        agent_id=agent_id,
+        task_id=task_id,
+        type=agent_type,
+        status=status,
+    )
 
 
 class AsyncFakeGatekeeper(FakeGatekeeper):
@@ -519,3 +534,37 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
     latest = lifecycle.agent_manager.latest_for_task(task.id)
     assert latest is not None
     assert latest.agent_id == attempt.agent_record.agent_id
+
+
+def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+
+    record = _agent_record(
+        "agent-task-001-awaiting",
+        status=AgentStatus.AWAITING_INPUT,
+    )
+    record.provider.provider_thread_id = "thread-task-001-persisted"
+    record.provider.resume_cursor = {"threadId": "thread-task-001-persisted"}
+    lifecycle.agent_registry.upsert(record, increment_spawn=True)
+
+    active = lifecycle.agent_manager.list_active_agents()
+
+    assert [snapshot.agent_id for snapshot in active] == [record.agent_id]
+    assert active[0].has_handle is False
+    assert active[0].active is True
+    assert active[0].awaiting_input is True
+
+
+def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+
+    code_record = _agent_record("agent-task-001-code", agent_type=AgentType.CODE)
+    merge_record = _agent_record("merge-task-001-merge", agent_type=AgentType.MERGE)
+    lifecycle.agent_registry.upsert(code_record, increment_spawn=True)
+    lifecycle.agent_registry.upsert(merge_record, increment_spawn=True)
+
+    snapshots = lifecycle.agent_manager.list_agents(agent_type=" CODE ")
+
+    assert [snapshot.agent_id for snapshot in snapshots] == [code_record.agent_id]

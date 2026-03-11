@@ -12,7 +12,7 @@ from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
-from .agent_records import AgentRecordStore
+from .store import AgentRecordStore
 
 logger = logging.getLogger(__name__)
 

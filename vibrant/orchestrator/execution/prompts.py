@@ -8,7 +8,7 @@ from vibrant.consensus import RoadmapParser
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
-from .consensus import ConsensusService
+from ..artifacts.consensus import ConsensusService
 
 
 class PromptService:

@@ -8,7 +8,7 @@ from typing import Sequence
 from vibrant.consensus import ConsensusParser, ConsensusWriter
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 
-from .state_store import StateStore
+from ..state.store import StateStore
 
 
 class ConsensusService:

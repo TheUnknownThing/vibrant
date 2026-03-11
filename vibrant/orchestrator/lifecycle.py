@@ -22,24 +22,10 @@ from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
-from .services import (
-    AgentManagementService,
-    AgentRegistry,
-    AgentRecordStore,
-    AgentRuntimeService,
-    ConsensusService,
-    GitWorkspaceService,
-    PlanningService,
-    PromptService,
-    QuestionService,
-    RetryPolicyService,
-    ReviewService,
-    RoadmapService,
-    StateStore,
-    TaskExecutionService,
-    WorkflowService,
-)
-from .services.git_workspace import scoped_worktree_root
+from .agents import AgentManagementService, AgentRecordStore, AgentRegistry, AgentRuntimeService
+from .execution import GitWorkspaceService, PromptService, RetryPolicyService, ReviewService, TaskExecutionService, scoped_worktree_root
+from .artifacts import ConsensusService, PlanningService, QuestionService, RoadmapService, WorkflowService
+from .state import StateStore
 from .task_dispatch import TaskDispatcher
 from .types import CodeAgentLifecycleResult
 

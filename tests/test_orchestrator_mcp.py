@@ -16,10 +16,10 @@ from vibrant.models.state import OrchestratorState, OrchestratorStatus, Question
 from vibrant.orchestrator.engine import OrchestratorEngine
 from vibrant.orchestrator.facade import OrchestratorFacade
 from vibrant.orchestrator.mcp import OrchestratorMCPServer
-from vibrant.orchestrator.services.consensus import ConsensusService
-from vibrant.orchestrator.services.questions import QuestionService
-from vibrant.orchestrator.services.roadmap import RoadmapService
-from vibrant.orchestrator.services.state_store import StateStore
+from vibrant.orchestrator.artifacts import ConsensusService
+from vibrant.orchestrator.artifacts import QuestionService
+from vibrant.orchestrator.artifacts import RoadmapService
+from vibrant.orchestrator.state import StateStore
 from vibrant.project_init import initialize_project
 
 

@@ -7,11 +7,11 @@ from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus
 from vibrant.orchestrator.engine import OrchestratorEngine
 
-from .state_projection import build_user_input_requested_event, rebuild_derived_state, sync_status_from_consensus
+from .projection import build_user_input_requested_event, rebuild_derived_state, sync_status_from_consensus
 
 
 if False:  # pragma: no cover
-    from .agent_records import AgentRecordStore
+    from ..agents.store import AgentRecordStore
 
 
 class StateStore:

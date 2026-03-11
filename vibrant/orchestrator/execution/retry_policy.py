@@ -10,7 +10,7 @@ from vibrant.orchestrator.git_manager import GitWorktreeInfo
 from ..types import CodeAgentLifecycleResult
 from .git_workspace import GitWorkspaceService
 from .review import ReviewService
-from .roadmap import RoadmapService
+from ..artifacts.roadmap import RoadmapService
 
 
 class RetryPolicyService:

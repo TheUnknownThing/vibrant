@@ -10,8 +10,8 @@ from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
 from .git_workspace import GitWorkspaceService
-from .roadmap import RoadmapService
-from .state_store import StateStore
+from ..artifacts.roadmap import RoadmapService
+from ..state.store import StateStore
 
 
 class ReviewService:

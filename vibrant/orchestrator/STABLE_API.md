@@ -184,7 +184,7 @@ The following are **not** stable external APIs and may change during future refa
 - direct access to `engine.agents`
 - direct access to `engine.consensus`
 - direct access to `engine.consensus_path`
-- orchestrator service classes under `vibrant/orchestrator/services/`
+- internal orchestrator domain classes under `vibrant/orchestrator/agents/`, `vibrant/orchestrator/execution/`, `vibrant/orchestrator/artifacts/`, and `vibrant/orchestrator/state/`
 - internal fallback behavior used only to preserve legacy callers
 
 If an external component needs one of these, prefer adding a facade method instead of reaching through to engine internals.

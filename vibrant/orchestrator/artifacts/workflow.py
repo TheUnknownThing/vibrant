@@ -8,7 +8,7 @@ from vibrant.models.task import TaskStatus
 
 from .consensus import ConsensusService
 from .roadmap import RoadmapService
-from .state_store import StateStore
+from ..state.store import StateStore
 
 
 class WorkflowService:

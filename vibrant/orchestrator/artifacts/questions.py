@@ -8,7 +8,7 @@ from uuid import uuid4
 from vibrant.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.models.state import GatekeeperStatus, QuestionPriority, QuestionRecord, QuestionStatus, reconcile_question_records
 
-from .state_store import StateStore
+from ..state.store import StateStore
 
 
 class QuestionService:
