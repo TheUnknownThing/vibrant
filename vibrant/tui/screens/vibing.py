@@ -37,6 +37,7 @@ class VibingScreen(Static):
     }
 
     VibingScreen #workspace-tabs {
+        margin-top: 1;
         height: 1fr;
     }
 

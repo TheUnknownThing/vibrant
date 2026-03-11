@@ -36,19 +36,19 @@ class HelpScreen(ModalScreen[None]):
 
 ## Screens
 - **Initialization**: create a `.vibrant` workspace in the current or selected directory
-- **Planning**: talk with the Gatekeeper until you are ready to type `/vibe`
+- **Planning**: talk with the Gatekeeper until it finalizes the roadmap and moves into execution
 - **Vibing**: monitor tasks, review consensus, inspect agent logs, and keep chatting with the Gatekeeper
 
 ## Keys
 - `F1` help
-- `F2` pause / resume workflow
-- `F3` show Task Status tab
-- `F4` toggle Consensus panel / tab
-- `F5` show Chat History tab
+- `F2` pause / resume workflow in vibing
+- `F5` show Task Status tab in vibing
+- `F6` show Chat History tab in vibing
+- `F7` toggle the Consensus panel / tab
+- `F8` show Agent Logs in vibing
 - `F10` quit
 
 ## Commands
-- `/vibe` move from planning to vibing
 - `/run` execute the next roadmap task
 - `/refresh` reload project state
 - `/settings` open settings

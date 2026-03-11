@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperTrigger
+from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperTrigger
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
