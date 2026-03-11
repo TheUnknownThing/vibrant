@@ -1,5 +1,9 @@
 # Orchestrator Services Plan
 
+> Historical note: this plan predates the `bootstrap.py` composition root and
+> the removal of `lifecycle.py` / `engine.py`. File references below describe
+> the pre-refactor extraction work.
+
 ## Goal
 
 Split the current `CodeAgentLifecycle` coordinator into explicit domain services under `vibrant/orchestrator/services/`, with `OrchestratorFacade` as the only public entrypoint for the TUI, Gatekeeper integration, and future MCP tools.

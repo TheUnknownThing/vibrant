@@ -1,5 +1,9 @@
 # Orchestrator Refactor: Central MCP for Vibrant
 
+> Historical note: this document describes the pre-bootstrap orchestrator
+> structure and migration plan. Current code now boots through `bootstrap.py`
+> and no longer includes `engine.py` or `lifecycle.py`.
+
 ## Goal
 
 Refactor `vibrant.orchestrator` into the central MCP-backed control plane for Vibrant.

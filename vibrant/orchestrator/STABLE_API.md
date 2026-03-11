@@ -16,12 +16,12 @@ As of **March 11, 2026**, the stable external surface is:
 - `OrchestratorAgentSnapshot`
 - `CodeAgentLifecycleResult`
 
-Other package-level exports may exist for compatibility or internal assembly,
+Other package-level exports may exist for internal assembly,
 but they are **not** stable unless they are listed in this document.
 
-In particular, `OrchestratorEngine`, `OrchestratorStateBackend`,
-`TaskDispatcher`, `GitManager`, and `CodeAgentLifecycle` should not be treated
-as long-term external contracts even if they are importable today.
+In particular, `Orchestrator`, `create_orchestrator`,
+`OrchestratorStateBackend`, `TaskDispatcher`, and `GitManager` should not be
+treated as long-term external contracts even if they are importable today.
 
 ## What "Stable" Means Here
 
@@ -36,9 +36,9 @@ The orchestrator may still change:
 
 - internal service composition
 - state storage layout
-- engine implementation details
+- backend implementation details
 - persistence plumbing
-- fallback logic retained only for compatibility
+- internal helper layering
 
 Additive evolution is allowed. For example, adding a new helper method or a new
 optional field to a model may be acceptable, but removing or redefining the
@@ -47,12 +47,12 @@ documented contract should be treated as a breaking change.
 ## Design Goal
 
 External components should depend on a **small, semantic facade** rather than
-reaching into engine-shaped internals such as:
+reaching into backend-shaped internals such as:
 
-- `OrchestratorEngine`
-- `engine.state`
-- `engine.consensus`
-- `engine.consensus_path`
+- `OrchestratorStateBackend`
+- `state_backend.state`
+- `state_backend.consensus`
+- `state_backend.consensus_path`
 - internal service instances and their private helpers
 
 This gives the orchestrator freedom to keep refactoring its runtime and storage
@@ -62,7 +62,7 @@ implementation without forcing matching changes in every caller.
 
 The intended integration pattern is:
 
-1. Create or obtain a lifecycle object through app/project bootstrapping.
+1. Create or obtain an orchestrator root through app/project bootstrapping.
 2. Wrap it in `OrchestratorFacade`.
 3. Read state through `snapshot()` or small projection helpers.
 4. Mutate state through semantic facade methods.
@@ -70,8 +70,9 @@ The intended integration pattern is:
    MCP control plane is needed.
 
 The stable consumer contract begins at the facade and the public read models.
-The exact shape of the lifecycle object consumed by `OrchestratorFacade(...)`
-is intentionally **not** the public integration contract.
+The exact shape of the orchestrator root consumed by
+`OrchestratorFacade(...)` is intentionally **not** the public integration
+contract.
 
 ## Sync vs Async Surface
 
@@ -110,7 +111,7 @@ Fields:
 - `consensus: ConsensusDocument | None`
   - Current consensus document if it is available.
 - `consensus_path: Path | None`
-  - Backing consensus file path when the lifecycle exposes one.
+  - Backing consensus file path when the orchestrator root exposes one.
 - `agent_records: tuple[AgentRecord, ...]`
   - Durable agent records known to the orchestrator state layer.
 - `execution_mode: RoadmapExecutionMode | None`
@@ -226,7 +227,7 @@ It is the intended long-term boundary for:
 - `roadmap() -> RoadmapDocument | None`
   - Returns the current roadmap document.
 - `consensus_source_path() -> Path | None`
-  - Returns the current consensus path when exposed by the lifecycle/engine.
+  - Returns the current consensus path when exposed by the orchestrator root.
 - `roadmap_document: RoadmapDocument | None`
   - Stable property alias for direct roadmap access.
 - `execution_mode: RoadmapExecutionMode | None`
@@ -357,7 +358,7 @@ unsupported or invalid behavior.
 Current notable cases include:
 
 - `AttributeError`
-  - when the underlying lifecycle does not support a requested capability
+  - when the underlying orchestrator root does not support a requested capability
 - `KeyError`
   - when a task id is required but not found for an operation such as review or
     retry preparation
@@ -443,19 +444,18 @@ These names are scope-gated through the shared authz model in
 The following are **not** stable external APIs and may change during future
 refactors:
 
-- `OrchestratorEngine`
+- `Orchestrator`
 - `OrchestratorStateBackend`
-- `CodeAgentLifecycle`
-- direct access to `engine.state`
-- direct access to `engine.consensus`
-- direct access to `engine.consensus_path`
-- direct access to lifecycle services such as `roadmap_service`,
+- `create_orchestrator`
+- direct access to `state_backend.state`
+- direct access to `state_backend.consensus`
+- direct access to `state_backend.consensus_path`
+- direct access to orchestrator services such as `roadmap_service`,
   `consensus_service`, `question_service`, `workflow_service`, or
   `agent_manager`
 - internal packages under `vibrant/orchestrator/agents/`,
   `vibrant/orchestrator/execution/`, `vibrant/orchestrator/artifacts/`, and
   `vibrant/orchestrator/state/`
-- internal fallback behavior that exists only to preserve legacy callers
 
 If an external component needs one of these capabilities, prefer promoting that
 need into a new facade method or stable read model instead of reaching through
@@ -463,16 +463,20 @@ to internals.
 
 ## Current Caveat
 
-The TUI no longer reaches through `OrchestratorFacade` to consume raw
-engine-shaped state.
+The TUI no longer reaches through `OrchestratorFacade` to consume raw backend
+state.
 
 Some runtime-driving helpers still exist on the facade while execution control
 continues moving toward stable workflow-oriented APIs.
 
+The remaining UI follow-up is mostly naming cleanup: `_lifecycle` terminology
+still exists in the TUI even though bootstrapping now uses
+`create_orchestrator(...)`.
+
 So the current state is:
 
 - a stable facade and stable read models are present
-- engine-shaped facade compatibility has been removed from normal consumers
+- backend-shaped facade compatibility has been removed from normal consumers
 - full execution-surface decoupling is still in progress
 
 ## Guidance For Future Refactors
@@ -483,7 +487,7 @@ When refactoring the orchestrator system:
 2. Preserve `OrchestratorSnapshot` field meanings.
 3. Preserve `OrchestratorAgentSnapshot` field meanings.
 4. Prefer semantic intent methods over generic runtime-driver methods.
-5. Avoid introducing new external dependencies on engine internals.
+5. Avoid introducing new external dependencies on backend internals.
 6. Add new public needs to the facade before exposing underlying services.
 7. Treat `execute_*` helpers as compatibility, not as the preferred direction.
 
@@ -492,9 +496,10 @@ When refactoring the orchestrator system:
 ### Read-oriented integration
 
 ```python
-from vibrant.orchestrator import OrchestratorFacade
+from vibrant.orchestrator import OrchestratorFacade, create_orchestrator
 
-facade = OrchestratorFacade(lifecycle)
+orchestrator = create_orchestrator(project_root)
+facade = OrchestratorFacade(orchestrator)
 
 snapshot = facade.snapshot()
 status = facade.workflow_status()

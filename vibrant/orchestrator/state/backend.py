@@ -329,7 +329,4 @@ def _extract_provider_thread_id(resume_cursor: object) -> str | None:
     thread_id = resume_cursor.get("threadId")
     return thread_id if isinstance(thread_id, str) and thread_id else None
 
-
-OrchestratorEngine = OrchestratorStateBackend
-
-__all__ = ["OrchestratorStateBackend", "OrchestratorEngine"]
+__all__ = ["OrchestratorStateBackend"]

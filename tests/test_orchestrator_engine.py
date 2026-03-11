@@ -14,7 +14,7 @@ from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, Gatekeepe
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
-from vibrant.orchestrator.engine import OrchestratorEngine
+from vibrant.orchestrator import OrchestratorStateBackend
 from vibrant.orchestrator.state import StateStore
 from vibrant.project_init import initialize_project
 
@@ -26,7 +26,7 @@ def _write_agent_record(path: Path, record: AgentRecord) -> None:
 class TestOrchestratorEngineTransitions:
     def test_valid_transitions_succeed(self, tmp_path):
         initialize_project(tmp_path)
-        engine = OrchestratorEngine.load(tmp_path)
+        engine = OrchestratorStateBackend.load(tmp_path)
 
         assert engine.state.status is OrchestratorStatus.INIT
 
@@ -43,7 +43,7 @@ class TestOrchestratorEngineTransitions:
 
     def test_invalid_transitions_raise(self, tmp_path):
         initialize_project(tmp_path)
-        engine = OrchestratorEngine.load(tmp_path)
+        engine = OrchestratorStateBackend.load(tmp_path)
 
         with pytest.raises(ValueError, match="Invalid orchestrator state transition"):
             engine.transition_to(OrchestratorStatus.EXECUTING)
@@ -59,7 +59,7 @@ class TestOrchestratorEngineTransitions:
 
     def test_paused_state_reachable_from_planning_and_executing(self, tmp_path):
         initialize_project(tmp_path)
-        engine = OrchestratorEngine.load(tmp_path)
+        engine = OrchestratorStateBackend.load(tmp_path)
 
         engine.transition_to(OrchestratorStatus.PLANNING)
         engine.transition_to(OrchestratorStatus.PAUSED)
@@ -74,7 +74,7 @@ class TestOrchestratorEngineTransitions:
 
 def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
     initialize_project(tmp_path)
-    engine = OrchestratorEngine.load(tmp_path)
+    engine = OrchestratorStateBackend.load(tmp_path)
     state_store = StateStore(engine)
     engine.transition_to(OrchestratorStatus.PLANNING)
     engine.transition_to(OrchestratorStatus.EXECUTING)
@@ -120,7 +120,7 @@ def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
 class TestOrchestratorEnginePersistence:
     def test_state_persisted_after_each_transition(self, tmp_path):
         initialize_project(tmp_path)
-        engine = OrchestratorEngine.load(tmp_path)
+        engine = OrchestratorStateBackend.load(tmp_path)
         state_path = tmp_path / ".vibrant" / "state.json"
 
         engine.transition_to(OrchestratorStatus.PLANNING)
@@ -131,7 +131,7 @@ class TestOrchestratorEnginePersistence:
         reloaded = OrchestratorState.model_validate_json(state_path.read_text(encoding="utf-8"))
         assert reloaded.status is OrchestratorStatus.EXECUTING
 
-        recovered = OrchestratorEngine.load(tmp_path)
+        recovered = OrchestratorStateBackend.load(tmp_path)
         assert recovered.state.status is OrchestratorStatus.EXECUTING
 
     def test_restart_recovers_from_state_agents_and_consensus(self, tmp_path):
@@ -189,7 +189,7 @@ class TestOrchestratorEnginePersistence:
             ),
         )
 
-        recovered = OrchestratorEngine.load(tmp_path)
+        recovered = OrchestratorStateBackend.load(tmp_path)
 
         assert recovered.state.session_id == "session-crash"
         assert recovered.state.status is OrchestratorStatus.EXECUTING
@@ -280,7 +280,7 @@ class TestOrchestratorEnginePersistence:
             encoding="utf-8",
         )
 
-        recovered = OrchestratorEngine.load(tmp_path)
+        recovered = OrchestratorStateBackend.load(tmp_path)
 
         assert recovered.state.session_id == "session-legacy"
         assert recovered.state.active_agents == ["agent-gatekeeper-user_discussion-001"]
