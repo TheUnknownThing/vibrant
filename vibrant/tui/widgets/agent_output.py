@@ -1,4 +1,4 @@
-"""Agent output streams widget for Panel B of the Vibrant TUI."""
+"""Agent log streams widget for the Vibrant TUI."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from typing import Any, Iterable
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.widgets import ContentSwitcher, Static
+from textual.containers import Horizontal, VerticalScroll
+from textual.widgets import Collapsible, ContentSwitcher, LoadingIndicator, Static
 
 from ...models.agent import AgentRecord, AgentStatus
 
@@ -40,15 +40,16 @@ class AgentStreamState:
     native_log_path: Path | None = None
     canonical_lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
     debug_lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
-    assistant_partial: str = ""
-    assistant_partial_timestamp: str | None = None
+    thought_text: str = ""
+    thought_timestamp: str | None = None
+    active_thought_item_id: str | None = None
     canonical_backfilled: bool = False
     native_offset: int = 0
     native_partial: str = ""
 
 
 class AgentOutput(Static):
-    """Live output panel for canonical agent events and raw debug logs."""
+    """Live output panel for operational agent logs and raw debug logs."""
 
     can_focus = True
 
@@ -98,10 +99,39 @@ class AgentOutput(Static):
         scrollbar-size: 1 1;
     }
 
+    #agent-output-thoughts {
+        margin: 0 1 1 1;
+    }
+
+    #agent-output-thoughts-status {
+        height: auto;
+        min-height: 1;
+        align: left middle;
+        padding: 0 1 1 1;
+    }
+
+    #agent-output-thoughts-spinner {
+        width: 3;
+        margin-right: 1;
+    }
+
+    #agent-output-thoughts-label {
+        color: $text-muted;
+    }
+
+    #agent-output-thoughts-body,
     #agent-output-stream,
     #agent-output-debug {
         width: 100%;
         padding: 0 1;
+    }
+
+    #agent-output-thoughts-body {
+        padding-bottom: 1;
+    }
+
+    #agent-output-stream {
+        margin-top: 1;
     }
     """
 
@@ -115,11 +145,16 @@ class AgentOutput(Static):
         self._empty_message = "No agent activity yet. Press F6 to run the next roadmap task."
 
     def compose(self) -> ComposeResult:
-        yield Static("[b]Agent Output[/b]", id="agent-output-header", markup=True)
+        yield Static("[b]Agent Logs[/b]", id="agent-output-header", markup=True)
         yield Static("", id="agent-output-meta")
         yield Static("", id="agent-output-tabs")
         with ContentSwitcher(initial="agent-output-stream-scroll", id="agent-output-switcher"):
             with VerticalScroll(id="agent-output-stream-scroll"):
+                with Collapsible(title="💭 Agent thoughts", collapsed=True, id="agent-output-thoughts"):
+                    with Horizontal(id="agent-output-thoughts-status"):
+                        yield LoadingIndicator(id="agent-output-thoughts-spinner")
+                        yield Static("", id="agent-output-thoughts-label")
+                    yield Static("", id="agent-output-thoughts-body", markup=False)
                 yield Static("", id="agent-output-stream", markup=False)
             with VerticalScroll(id="agent-output-debug-scroll"):
                 yield Static("", id="agent-output-debug", markup=False)
@@ -172,22 +207,28 @@ class AgentOutput(Static):
                 stream.canonical_backfilled = False
                 if canonical_path is not None:
                     stream.canonical_lines.clear()
-                    stream.assistant_partial = ""
-                    stream.assistant_partial_timestamp = None
 
             native_path = _path_or_none(record.provider.native_event_log)
             if native_path != stream.native_log_path:
                 stream.native_log_path = native_path
                 stream.native_offset = 0
                 stream.native_partial = ""
+                stream.thought_text = ""
+                stream.thought_timestamp = None
+                stream.active_thought_item_id = None
                 if native_path is not None:
                     stream.debug_lines.clear()
 
-            if not stream.canonical_backfilled and stream.canonical_log_path is not None and stream.canonical_log_path.exists():
+            if (
+                not stream.canonical_backfilled
+                and stream.canonical_log_path is not None
+                and stream.canonical_log_path.exists()
+            ):
                 self._backfill_canonical_log(stream)
 
         self._agent_order = [record.agent_id for record in ordered_records]
         self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
+        self._poll_native_logs()
         self._refresh_view()
 
     def clear_agents(self, message: str | None = None) -> None:
@@ -213,21 +254,10 @@ class AgentOutput(Static):
             stream.task_id = task_id
 
         event_type = str(event.get("type") or "event")
-        if event_type != "content.delta":
-            self._flush_assistant_partial(stream)
-
-        if event_type == "content.delta":
-            self._consume_assistant_delta(stream, str(event.get("delta") or ""), _timestamp_text(event.get("timestamp")))
-        elif event_type == "task.progress":
-            progress_text = _extract_progress_text(event.get("item"))
-            if progress_text:
-                for line in _split_visible_lines(progress_text):
-                    self._append_canonical_line(stream, _compose_line(event, f"⋯ {line}"))
-            else:
-                item_type = event.get("item_type")
-                detail = f"task.progress {item_type}".strip()
-                self._append_canonical_line(stream, _compose_line(event, detail))
-        else:
+        if event_type == "task.progress":
+            for line in _render_task_progress_lines(event):
+                self._append_canonical_line(stream, line)
+        elif event_type != "content.delta":
             for line in _render_canonical_event_lines(event):
                 self._append_canonical_line(stream, line)
 
@@ -255,17 +285,13 @@ class AgentOutput(Static):
         self._refresh_view(active_agent_changed=True)
 
     def action_toggle_debug_view(self) -> None:
-        """Switch between canonical stream and raw native debug output."""
+        """Switch between canonical logs and raw native debug output."""
 
         self._debug_view_enabled = not self._debug_view_enabled
         self._refresh_view(active_agent_changed=True)
 
     def poll_native_logs_now(self) -> None:
-        """Synchronously poll native logs once.
-
-        Exposed for deterministic tests and manual refresh points that should
-        not wait for the periodic interval timer.
-        """
+        """Synchronously poll native logs once."""
 
         self._poll_native_logs()
 
@@ -287,7 +313,29 @@ class AgentOutput(Static):
         stream = self._streams[agent_id]
         if debug:
             return len(stream.debug_lines)
-        return len(stream.canonical_lines) + (1 if stream.assistant_partial else 0)
+        return len(stream.canonical_lines)
+
+    def get_thoughts_text(self, agent_id: str | None = None) -> str:
+        """Return the latest visible thought text for tests and diagnostics."""
+
+        target_id = agent_id or self._active_agent_id
+        if target_id is None:
+            return ""
+        stream = self._streams.get(target_id)
+        if stream is None:
+            return ""
+        return stream.thought_text
+
+    def thoughts_running(self, agent_id: str | None = None) -> bool:
+        """Return whether the current agent is actively streaming thoughts."""
+
+        target_id = agent_id or self._active_agent_id
+        if target_id is None:
+            return False
+        stream = self._streams.get(target_id)
+        if stream is None:
+            return False
+        return bool(stream.active_thought_item_id and stream.status == AgentStatus.RUNNING.value)
 
     def _ensure_stream(self, agent_id: str) -> AgentStreamState:
         stream = self._streams.get(agent_id)
@@ -326,12 +374,12 @@ class AgentOutput(Static):
             return
 
         stream = self._streams[self._active_agent_id]
-        mode = "debug" if self._debug_view_enabled else "stream"
+        mode = "raw" if self._debug_view_enabled else "logs"
         follow = "follow" if self._auto_follow else "locked"
         status = stream.status or "unknown"
         task = stream.task_id or "n/a"
         meta.update(
-            f"Active: {stream.agent_id} · Task: {task} · Status: {status} · View: {mode} · {follow} · F5 next · S lock · D debug"
+            f"Active: {stream.agent_id} · Task: {task} · Status: {status} · View: {mode} · {follow} · F5 next · S lock · D raw"
         )
 
     def _update_tabs(self) -> None:
@@ -354,6 +402,8 @@ class AgentOutput(Static):
         switcher.current = "agent-output-debug-scroll" if self._debug_view_enabled else "agent-output-stream-scroll"
 
     def _update_active_body(self, *, active_agent_changed: bool = False) -> None:
+        self._update_thoughts()
+
         stream_body = self.query_one("#agent-output-stream", Static)
         debug_body = self.query_one("#agent-output-debug", Static)
 
@@ -373,12 +423,35 @@ class AgentOutput(Static):
             )
             scroll.scroll_end(animate=False)
 
+    def _update_thoughts(self) -> None:
+        thoughts = self.query_one("#agent-output-thoughts", Collapsible)
+        spinner = self.query_one("#agent-output-thoughts-spinner", LoadingIndicator)
+        label = self.query_one("#agent-output-thoughts-label", Static)
+        body = self.query_one("#agent-output-thoughts-body", Static)
+
+        if self._active_agent_id is None:
+            thoughts.title = "💭 Agent thoughts"
+            spinner.display = False
+            label.update("")
+            body.update("No agent thoughts yet.")
+            return
+
+        stream = self._streams[self._active_agent_id]
+        is_running = self.thoughts_running(stream.agent_id)
+        spinner.display = is_running
+        thoughts.title = "💭 Agent thoughts (thinking…)" if is_running else "💭 Agent thoughts"
+
+        if is_running:
+            label.update("Streaming live reasoning")
+        elif stream.thought_text:
+            label.update("Latest reasoning summary")
+        else:
+            label.update("No reasoning captured yet")
+
+        body.update(stream.thought_text or "No agent thoughts yet.")
+
     def _build_canonical_text(self, stream: AgentStreamState) -> str:
-        lines = list(stream.canonical_lines)
-        if stream.assistant_partial:
-            prefix = _timestamp_prefix(stream.assistant_partial_timestamp)
-            lines.append(f"{prefix}🤖 {stream.assistant_partial}" if prefix else f"🤖 {stream.assistant_partial}")
-        return "\n".join(lines) if lines else "Waiting for canonical events…"
+        return "\n".join(stream.canonical_lines) if stream.canonical_lines else "Operational activity will appear here…"
 
     def _build_debug_text(self, stream: AgentStreamState) -> str:
         return "\n".join(stream.debug_lines) if stream.debug_lines else "Waiting for native debug output…"
@@ -388,34 +461,6 @@ class AgentOutput(Static):
 
     def _append_debug_line(self, stream: AgentStreamState, line: str) -> None:
         stream.debug_lines.append(line)
-
-    def _consume_assistant_delta(self, stream: AgentStreamState, delta: str, timestamp: str | None) -> None:
-        if not delta:
-            return
-        if stream.assistant_partial_timestamp is None:
-            stream.assistant_partial_timestamp = timestamp
-
-        pending = f"{stream.assistant_partial}{delta}"
-        stream.assistant_partial = ""
-        for chunk in pending.splitlines(keepends=True):
-            if chunk.endswith(("\n", "\r")):
-                text = chunk.rstrip("\r\n")
-                prefix = _timestamp_prefix(stream.assistant_partial_timestamp or timestamp)
-                self._append_canonical_line(stream, f"{prefix}🤖 {text}" if prefix else f"🤖 {text}")
-                stream.assistant_partial_timestamp = timestamp
-            else:
-                stream.assistant_partial = chunk
-        if stream.assistant_partial and stream.assistant_partial_timestamp is None:
-            stream.assistant_partial_timestamp = timestamp
-
-    def _flush_assistant_partial(self, stream: AgentStreamState) -> None:
-        if not stream.assistant_partial:
-            stream.assistant_partial_timestamp = None
-            return
-        prefix = _timestamp_prefix(stream.assistant_partial_timestamp)
-        self._append_canonical_line(stream, f"{prefix}🤖 {stream.assistant_partial}" if prefix else f"🤖 {stream.assistant_partial}")
-        stream.assistant_partial = ""
-        stream.assistant_partial_timestamp = None
 
     def _backfill_canonical_log(self, stream: AgentStreamState) -> None:
         path = stream.canonical_log_path
@@ -452,7 +497,7 @@ class AgentOutput(Static):
             stream = self._streams[agent_id]
             if self._tail_native_log(stream) and agent_id == self._active_agent_id:
                 active_updated = True
-        if active_updated and self._debug_view_enabled:
+        if active_updated:
             self._refresh_view(active_agent_changed=False)
 
     def _tail_native_log(self, stream: AgentStreamState) -> bool:
@@ -469,6 +514,9 @@ class AgentOutput(Static):
             stream.native_offset = 0
             stream.native_partial = ""
             stream.debug_lines.clear()
+            stream.thought_text = ""
+            stream.thought_timestamp = None
+            stream.active_thought_item_id = None
 
         try:
             with path.open("r", encoding="utf-8") as handle:
@@ -496,8 +544,60 @@ class AgentOutput(Static):
             except json.JSONDecodeError:
                 self._append_debug_line(stream, raw_line)
                 continue
+            self._ingest_native_thought_event(stream, payload)
             self._append_debug_line(stream, _render_native_entry(payload))
         return updated
+
+    def _ingest_native_thought_event(self, stream: AgentStreamState, payload: dict[str, Any]) -> None:
+        event_name = payload.get("event")
+        if event_name != "jsonrpc.notification.received":
+            return
+
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        method = str(data.get("method") or "")
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        timestamp = _timestamp_text(payload.get("timestamp"))
+
+        if method == "item/started":
+            item = params.get("item") if isinstance(params.get("item"), dict) else {}
+            item_id = item.get("id")
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type == "reasoning" and isinstance(item_id, str) and item_id:
+                stream.active_thought_item_id = item_id
+                stream.thought_text = _extract_reasoning_text(item)
+                stream.thought_timestamp = timestamp
+            return
+
+        method_lower = method.lower()
+        if "reasoning" in method_lower and "delta" in method_lower:
+            item_id = params.get("itemId") or params.get("item_id")
+            if isinstance(item_id, str) and item_id:
+                if stream.active_thought_item_id is None:
+                    stream.active_thought_item_id = item_id
+                if item_id == stream.active_thought_item_id:
+                    delta = params.get("delta")
+                    if isinstance(delta, str) and delta:
+                        stream.thought_text = f"{stream.thought_text}{delta}"
+                        if stream.thought_timestamp is None:
+                            stream.thought_timestamp = timestamp
+            return
+
+        if method != "item/completed":
+            return
+
+        item = params.get("item") if isinstance(params.get("item"), dict) else {}
+        item_id = item.get("id")
+        item_type = str(item.get("type") or "").strip().lower()
+        if item_type != "reasoning":
+            return
+
+        final_text = _extract_reasoning_text(item, fallback=stream.thought_text)
+        if final_text:
+            stream.thought_text = final_text
+        if stream.active_thought_item_id is None or item_id == stream.active_thought_item_id:
+            stream.active_thought_item_id = None
+        if stream.thought_timestamp is None:
+            stream.thought_timestamp = timestamp
 
 
 def _path_or_none(value: str | None) -> Path | None:
@@ -506,10 +606,8 @@ def _path_or_none(value: str | None) -> Path | None:
     return Path(value)
 
 
-
 def _timestamp_text(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
-
 
 
 def _timestamp_prefix(timestamp: str | None) -> str:
@@ -527,61 +625,58 @@ def _timestamp_prefix(timestamp: str | None) -> str:
     return f"[{time_fragment}] " if time_fragment else ""
 
 
-
 def _compose_line(event: dict[str, Any], message: str) -> str:
     prefix = _timestamp_prefix(_timestamp_text(event.get("timestamp")))
     return f"{prefix}{message}" if prefix else message
 
 
-
 def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
     event_type = str(event.get("type") or "event")
 
-    if event_type == "session.started":
-        cwd = event.get("cwd")
-        return [_compose_line(event, f"session.started cwd={cwd}" if cwd else "session.started")]
-    if event_type == "session.state.changed":
-        state = event.get("state")
-        return [_compose_line(event, f"session.state.changed {state}".strip())]
-    if event_type == "thread.started":
-        thread = event.get("thread") if isinstance(event.get("thread"), dict) else {}
-        thread_id = thread.get("id")
-        resumed = " resumed" if event.get("resumed") else ""
-        detail = f"thread.started{resumed}"
-        if thread_id:
-            detail = f"{detail} id={thread_id}"
-        return [_compose_line(event, detail)]
-    if event_type == "turn.started":
-        turn = event.get("turn") if isinstance(event.get("turn"), dict) else {}
-        turn_id = turn.get("id")
-        return [_compose_line(event, f"turn.started id={turn_id}" if turn_id else "turn.started")]
-    if event_type == "turn.completed":
-        turn = event.get("turn") if isinstance(event.get("turn"), dict) else {}
-        turn_id = turn.get("id")
-        return [_compose_line(event, f"turn.completed id={turn_id}" if turn_id else "turn.completed")]
     if event_type == "task.completed":
-        return [_compose_line(event, "task.completed")]
-    if event_type == "request.opened":
-        request_kind = event.get("request_kind")
-        method = event.get("method")
-        detail = f"request.opened {request_kind or ''} {method or ''}".strip()
-        return [_compose_line(event, detail)]
-    if event_type == "request.resolved":
-        request_id = event.get("request_id")
-        detail = f"request.resolved id={request_id}" if request_id is not None else "request.resolved"
-        return [_compose_line(event, detail)]
+        return [_compose_line(event, "✓ Task completed")]
     if event_type == "user-input.requested":
-        return [_compose_line(event, "⚠ user-input.requested")]
+        return [_compose_line(event, "⚠ User input requested")]
     if event_type == "runtime.error":
-        return [_compose_line(event, f"✗ runtime.error {_error_text(event)}".rstrip())]
-    if event_type == "content.delta":
+        return [_compose_line(event, f"✗ {_error_text(event)}".rstrip())]
+    return []
+
+
+def _render_task_progress_lines(event: dict[str, Any]) -> list[str]:
+    item = event.get("item") if isinstance(event.get("item"), dict) else {}
+    item_type = str(item.get("type") or event.get("item_type") or "").strip().lower()
+
+    if item_type in {"", "usermessage", "agentmessage", "reasoning"}:
+        progress_text = _extract_progress_text(item)
+        if item_type in {"agentmessage", "reasoning", "usermessage"}:
+            return []
+        if progress_text:
+            return [_compose_line(event, f"⋯ {line}") for line in _split_visible_lines(progress_text)]
         return []
 
-    payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "provider", "agent_id", "task_id"}}
-    compact = json.dumps(payload, ensure_ascii=False, sort_keys=True) if payload else ""
-    message = f"{event_type} {compact}".strip()
-    return [_compose_line(event, message)]
+    if item_type in {"commandexecution", "command_execution"}:
+        command = item.get("command")
+        exit_code = item.get("exitCode")
+        duration_ms = item.get("durationMs")
+        status_icon = "✅" if exit_code == 0 else "❌" if exit_code is not None else "⏳"
+        detail = f"$ {command}" if isinstance(command, str) and command else "command"
+        if isinstance(duration_ms, int):
+            detail = f"{detail} ({duration_ms}ms)"
+        return [_compose_line(event, f"{status_icon} {detail}")]
 
+    if item_type in {"filechange", "file_change"}:
+        path = item.get("filename") or item.get("path")
+        return [_compose_line(event, f"✏ Modified {path}" if path else "✏ File modified")]
+
+    if item_type in {"fileread", "file_read"}:
+        path = item.get("filename") or item.get("path")
+        return [_compose_line(event, f"📖 Read {path}" if path else "📖 File read")]
+
+    progress_text = _extract_progress_text(item)
+    if progress_text:
+        return [_compose_line(event, f"⋯ {line}") for line in _split_visible_lines(progress_text)]
+
+    return [_compose_line(event, f"⋯ {item_type.replace('_', ' ')}")]
 
 
 def _extract_progress_text(item: Any) -> str:
@@ -599,6 +694,25 @@ def _extract_progress_text(item: Any) -> str:
     return ""
 
 
+def _extract_reasoning_text(item: Any, *, fallback: str = "") -> str:
+    if not isinstance(item, dict):
+        return fallback
+
+    text = _extract_progress_text(item)
+    if text:
+        return text
+
+    summary = item.get("summary")
+    if isinstance(summary, list):
+        parts = [entry if isinstance(entry, str) else str(entry) for entry in summary]
+        summary_text = "\n".join(part for part in parts if part)
+        if summary_text:
+            return summary_text
+    if isinstance(summary, str) and summary:
+        return summary
+
+    return fallback
+
 
 def _split_visible_lines(text: str) -> list[str]:
     lines = [line.rstrip("\r") for line in text.splitlines()]
@@ -607,13 +721,11 @@ def _split_visible_lines(text: str) -> list[str]:
     return lines or [text]
 
 
-
 def _error_text(event: dict[str, Any]) -> str:
     error = event.get("error")
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "")
-
 
 
 def _render_native_entry(payload: dict[str, Any]) -> str:

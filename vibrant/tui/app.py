@@ -12,6 +12,7 @@ from typing import Any, Callable
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, Static
 
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, resolve_project_path
@@ -661,16 +662,22 @@ class VibrantApp(App):
         orchestrator = self._orchestrator
         if orchestrator is None:
             if vibing_screen is not None:
-                vibing_screen.plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
-                vibing_screen.agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
-                vibing_screen.consensus_view.clear_summary("No `.vibrant/consensus.md` found for this workspace.")
-                vibing_screen.set_roadmap_loading(True)
+                try:
+                    vibing_screen.plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+                    vibing_screen.agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
+                    vibing_screen.consensus_view.clear_summary("No `.vibrant/consensus.md` found for this workspace.")
+                    vibing_screen.set_roadmap_loading(True)
+                except NoMatches:
+                    pass
             self._refresh_gatekeeper_state()
             return
 
         snapshot = orchestrator.snapshot()
         if vibing_screen is not None:
-            vibing_screen.agent_output.sync_agents(snapshot.agent_records)
+            try:
+                vibing_screen.agent_output.sync_agents(snapshot.agent_records)
+            except NoMatches:
+                vibing_screen = None
 
         consensus_document = snapshot.consensus
         consensus_path = snapshot.consensus_path
@@ -682,25 +689,31 @@ class VibrantApp(App):
         except Exception as exc:
             logger.exception("Failed to refresh roadmap view")
             if vibing_screen is not None:
-                vibing_screen.plan_tree.clear_tasks(f"Failed to load roadmap: {exc}")
-                vibing_screen.consensus_view.update_consensus(
-                    consensus_document,
-                    source_path=consensus_path,
-                )
+                try:
+                    vibing_screen.plan_tree.clear_tasks(f"Failed to load roadmap: {exc}")
+                    vibing_screen.consensus_view.update_consensus(
+                        consensus_document,
+                        source_path=consensus_path,
+                    )
+                except NoMatches:
+                    pass
             self._refresh_gatekeeper_state()
             return
 
         if vibing_screen is not None:
-            vibing_screen.plan_tree.update_tasks(
-                roadmap.tasks,
-                agent_summaries=self._collect_task_summaries(),
-            )
-            vibing_screen.consensus_view.update_consensus(
-                consensus_document,
-                tasks=roadmap.tasks,
-                source_path=consensus_path,
-            )
-            vibing_screen.set_roadmap_loading(not bool(roadmap.tasks))
+            try:
+                vibing_screen.plan_tree.update_tasks(
+                    roadmap.tasks,
+                    agent_summaries=self._collect_task_summaries(),
+                )
+                vibing_screen.consensus_view.update_consensus(
+                    consensus_document,
+                    tasks=roadmap.tasks,
+                    source_path=consensus_path,
+                )
+                vibing_screen.set_roadmap_loading(not bool(roadmap.tasks))
+            except NoMatches:
+                pass
 
         self._refresh_gatekeeper_state()
 
