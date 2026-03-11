@@ -157,9 +157,6 @@ class Orchestrator:
 
         runtime_service = AgentRuntimeService(
             agent_registry=agent_registry,
-            adapter_factory=resolved_adapter_factory,
-            config_getter=lambda: config_holder["value"],
-            on_canonical_event=handle_canonical_event,
             agent_runtime=runtime_factory,
         )
         gatekeeper_runtime = GatekeeperRuntimeService(
