@@ -62,9 +62,9 @@ class GatekeeperRuntimeService:
     @property
     def busy(self) -> bool:
         managed_busy = any(
-            record.type is AgentType.GATEKEEPER
-            and record.status not in AgentRecord.TERMINAL_STATUSES
-            and record.status is not AgentStatus.AWAITING_INPUT
+            record.identity.type is AgentType.GATEKEEPER
+            and record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES
+            and record.lifecycle.status is not AgentStatus.AWAITING_INPUT
             for record in self.agent_registry.list_records()
         )
         return managed_busy or any(not future.done() for future in self._active_futures)
@@ -76,13 +76,13 @@ class GatekeeperRuntimeService:
         latest_record: AgentRecord | None = None
         latest_sort_key: tuple[object, object] | None = None
         for record in self.agent_registry.list_records():
-            if record.type is not AgentType.GATEKEEPER:
+            if record.identity.type is not AgentType.GATEKEEPER:
                 continue
             thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
             if not thread_id:
                 continue
-            started = record.started_at or record.finished_at or _MIN_TIME
-            finished = record.finished_at or started
+            started = record.lifecycle.started_at or record.lifecycle.finished_at or _MIN_TIME
+            finished = record.lifecycle.finished_at or started
             sort_key = (started, finished)
             if latest_sort_key is None or sort_key > latest_sort_key:
                 latest_record = record
@@ -139,7 +139,7 @@ class GatekeeperRuntimeService:
         if self._uses_managed_runtime():
             prompt = self.gatekeeper.render_prompt(request)
             agent_record = self.gatekeeper.build_agent_record(request)
-            agent_record.prompt_used = prompt
+            agent_record.context.prompt_used = prompt
 
             should_resume = (
                 resume_latest_thread
@@ -160,8 +160,8 @@ class GatekeeperRuntimeService:
 
             if on_result is not None:
                 future = asyncio.create_task(
-                    self._forward_managed_result(agent_id=agent_record.agent_id, callback=on_result),
-                    name=f"gatekeeper-{request.trigger.value}-{agent_record.agent_id}",
+                    self._forward_managed_result(agent_id=agent_record.identity.agent_id, callback=on_result),
+                    name=f"gatekeeper-{request.trigger.value}-{agent_record.identity.agent_id}",
                 )
                 self.track_future(future)
 
@@ -228,7 +228,7 @@ class GatekeeperRuntimeService:
             execution_result = await self.runtime_service.wait_for_run(handle=handle)
             result = execution_result.normalized_result
             if result is None:
-                raise RuntimeError(f"Gatekeeper run {handle.agent_record.agent_id} did not produce a normalized result")
+                raise RuntimeError(f"Gatekeeper run {handle.agent_record.identity.agent_id} did not produce a normalized result")
             return result
 
         run_gatekeeper = self.gatekeeper.run

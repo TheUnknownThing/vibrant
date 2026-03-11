@@ -60,7 +60,7 @@ implementation without forcing matching changes in every caller.
 
 ## Integration Model
 
-The intended integration pattern is:
+The intended integration pattern for **stable external consumers** is:
 
 1. Create or obtain an orchestrator root through app/project bootstrapping.
 2. Wrap it in `OrchestratorFacade`.
@@ -74,6 +74,13 @@ The exact shape of the orchestrator root consumed by
 `OrchestratorFacade(...)` is intentionally **not** the public integration
 contract.
 
+For first-party orchestrator assembly, this does **not** mean MCP wiring must
+depend only on `OrchestratorFacade`. MCP resources and tools may call into
+internal orchestrator services directly when that produces a cleaner or more
+capable implementation. The stable contract is the exposed MCP resource/tool
+shape and the documented public facade surface for external consumers — not a
+hard rule that every MCP handler must route through the facade.
+
 ## Sync vs Async Surface
 
 Most of the stable facade is synchronous.
@@ -82,8 +89,6 @@ The current async methods are:
 
 - `submit_gatekeeper_message(text)`
 - `answer_pending_question(answer, *, question=None)`
-- `execute_until_blocked()`
-- `execute_next_task()`
 
 Everything else documented as part of the stable facade currently uses a normal
 synchronous call/return flow.
@@ -134,50 +139,39 @@ record state with live runtime-handle details when those details are available.
 
 Fields:
 
-- `agent_id: str`
-  - Stable identifier for the agent attempt.
-- `task_id: str`
-  - Roadmap task currently or previously associated with the agent.
-- `agent_type: str`
-  - Logical type such as `code`.
-- `status: str`
-  - Durable agent status value.
-- `state: str`
-  - Runtime-oriented state projection.
-- `has_handle: bool`
-  - Whether a live runtime handle is currently attached.
-- `active: bool`
-  - Whether the orchestrator considers the agent active now.
-- `done: bool`
-  - Whether the agent has completed its lifecycle.
-- `awaiting_input: bool`
-  - Whether the agent is blocked on user/provider input.
-- `pid: int | None`
-  - Process identifier when available.
-- `branch: str | None`
-  - Work branch name when applicable.
-- `worktree_path: str | None`
-  - Worktree used by the agent when applicable.
-- `started_at: datetime | None`
-  - Start timestamp.
-- `finished_at: datetime | None`
-  - Finish timestamp.
-- `summary: str | None`
-  - Best available summary of the run.
-- `error: str | None`
-  - Best available terminal error string.
-- `provider_thread_id: str | None`
-  - Provider-specific thread identifier, if tracked.
-- `provider_thread_path: str | None`
-  - Path to persisted provider thread data, if tracked.
-- `provider_resume_cursor: dict[str, Any] | None`
-  - Resume cursor for provider continuation, if tracked.
-- `input_requests: list[InputRequest]`
-  - Structured input requests currently associated with the run.
-- `native_event_log: str | None`
-  - Path or identifier for provider-native event logs.
-- `canonical_event_log: str | None`
-  - Path or identifier for normalized canonical event logs.
+- `identity: AgentSnapshotIdentity`
+  - Stable agent identifiers.
+  - `agent_id: str` — stable identifier for the agent attempt.
+  - `task_id: str` — roadmap task currently or previously associated with the agent.
+  - `agent_type: str` — logical type such as `code`.
+- `runtime: AgentSnapshotRuntime`
+  - Live/runtime-oriented lifecycle state.
+  - `status: str` — durable agent status value.
+  - `state: str` — runtime-oriented state projection.
+  - `has_handle: bool` — whether a live runtime handle is currently attached.
+  - `active: bool` — whether the orchestrator considers the agent active now.
+  - `done: bool` — whether the agent has completed its lifecycle.
+  - `awaiting_input: bool` — whether the agent is blocked on user/provider input.
+  - `pid: int | None` — process identifier when available.
+  - `started_at: datetime | None` — start timestamp.
+  - `finished_at: datetime | None` — finish timestamp.
+  - `input_requests: list[InputRequest]` — structured input requests currently associated with the run.
+- `workspace: AgentSnapshotWorkspace`
+  - Execution workspace context.
+  - `branch: str | None` — work branch name when applicable.
+  - `worktree_path: str | None` — worktree used by the agent when applicable.
+- `outcome: AgentSnapshotOutcome`
+  - Best-known result and output summary.
+  - `summary: str | None` — best available summary of the run.
+  - `error: str | None` — best available terminal error string.
+  - `output: AgentOutput | None` — projected renderable agent output when available.
+- `provider: AgentSnapshotProvider`
+  - Provider/session metadata tracked for the run.
+  - `thread_id: str | None` — provider-specific thread identifier, if tracked.
+  - `thread_path: str | None` — path to persisted provider thread data, if tracked.
+  - `resume_cursor: dict[str, Any] | None` — resume cursor for provider continuation, if tracked.
+  - `native_event_log: str | None` — path or identifier for provider-native event logs.
+  - `canonical_event_log: str | None` — path or identifier for normalized canonical event logs.
 
 ### `CodeAgentLifecycleResult`
 
@@ -367,38 +361,36 @@ Current notable cases include:
 
 Consumers should treat these as part of the operational contract.
 
-## Compatibility API
+## Workflow Control API
 
-The following facade methods remain available for legacy callers, but they are
-**compatibility entry points**, not the preferred long-term contract for new
-integrations:
+Workflow state transitions remain available on the facade:
 
-- `reload_from_disk()`
-- `execute_until_blocked()`
-- `execute_next_task()`
 - `can_transition_to(next_status)`
 - `transition_workflow_state(next_status)`
 
-These methods expose lower-level runtime-driving or persistence-shaped behavior
-that may continue to change as the orchestrator converges on a more explicit
-service-backed control plane.
+Task execution is driven by the concrete orchestrator (`run_next_task()` and
+`run_until_blocked()`), not by facade compatibility wrappers.
 
-`CodeAgentLifecycleResult` is stable for these compatibility flows, but new code
+`CodeAgentLifecycleResult` remains stable for concrete task-execution flows, but new code
 should avoid depending on raw merge details, Gatekeeper result internals, event
 lists, or worktree paths unless that information is later promoted into a more
 intentional stable read model.
 
 ## `OrchestratorMCPServer` Stable Surface
 
-`OrchestratorMCPServer` is the stable typed in-process MCP registry layered on
-top of `OrchestratorFacade`.
+`OrchestratorMCPServer` is the stable typed in-process MCP registry for the
+orchestrator control plane.
 
 It is responsible for:
 
 - listing scope-filtered MCP resources
 - listing scope-filtered MCP tools
 - enforcing shared authorization scopes from `vibrant.mcp.authz`
-- dispatching MCP calls into facade-backed handlers
+- dispatching MCP calls into orchestrator-backed handlers
+
+Current implementations may back those handlers with `OrchestratorFacade`,
+direct service calls, or a mix of both. That choice is an internal layering
+decision, not part of the stable MCP contract.
 
 It is **not** a promise about a specific network transport. The stable contract
 is the in-process registry shape and the resource/tool names documented here.
@@ -489,7 +481,7 @@ When refactoring the orchestrator system:
 4. Prefer semantic intent methods over generic runtime-driver methods.
 5. Avoid introducing new external dependencies on backend internals.
 6. Add new public needs to the facade before exposing underlying services.
-7. Treat `execute_*` helpers as compatibility, not as the preferred direction.
+7. Keep task-driving helpers on the concrete orchestrator, not on the facade.
 
 ## Minimal Examples
 

@@ -80,7 +80,6 @@ Persistence should continue to flow through existing structured helpers where po
 - `vibrant.consensus.writer`
 - `vibrant.consensus.roadmap`
 
-A small shared helper for machine-managed Markdown sections should be introduced as a support layer for consensus, roadmap, and future orchestrator-owned docs. See [docs/structured_markdown.md](/home/rogerw/project/vibrant/docs/structured_markdown.md).
 
 ## New Orchestrator Boundary
 
@@ -120,6 +119,11 @@ This removes the current split where the UI reaches into both lifecycle and engi
 ## MCP Surface
 
 The MCP layer should sit on top of orchestrator services and expose role-scoped tools and resources.
+
+`OrchestratorFacade` is a useful stable surface for many MCP handlers, but it is
+not the only allowed dependency. First-party MCP wiring may call internal
+services directly when that gives a cleaner implementation or exposes runtime
+capabilities that have not been promoted into the facade yet.
 
 For shared transport and enforcement, the role-based HTTP MCP authorization layer should be treated as its own internal library. See [mcp_http_authz.md](/home/rogerw/project/vibrant/docs/mcp_http_authz.md).
 

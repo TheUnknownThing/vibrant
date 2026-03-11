@@ -15,7 +15,7 @@ from vibrant.providers.base import CanonicalEvent
 
 
 @dataclass(slots=True)
-class CodeAgentLifecycleResult:
+class TaskResult:
     """Structured outcome for one code-agent execution attempt."""
 
     task_id: str | None
@@ -87,12 +87,18 @@ class AgentOutput:
 
 
 @dataclass(slots=True)
-class OrchestratorAgentSnapshot:
-    """Stable orchestrator-facing view of one agent run."""
+class AgentSnapshotIdentity:
+    """Stable identifiers for one orchestrator-facing agent snapshot."""
 
     agent_id: str
     task_id: str
     agent_type: str
+
+
+@dataclass(slots=True)
+class AgentSnapshotRuntime:
+    """Runtime and lifecycle state for one agent snapshot."""
+
     status: str
     state: str
     has_handle: bool
@@ -100,19 +106,48 @@ class OrchestratorAgentSnapshot:
     done: bool
     awaiting_input: bool
     pid: int | None = None
-    branch: str | None = None
-    worktree_path: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    input_requests: list[InputRequest] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class AgentSnapshotWorkspace:
+    """Workspace-specific execution context for one agent snapshot."""
+
+    branch: str | None = None
+    worktree_path: str | None = None
+
+
+@dataclass(slots=True)
+class AgentSnapshotOutcome:
+    """Best-known outcome/output view for one agent snapshot."""
+
     summary: str | None = None
     error: str | None = None
-    provider_thread_id: str | None = None
-    provider_thread_path: str | None = None
-    provider_resume_cursor: dict[str, Any] | None = None
-    input_requests: list[InputRequest] = field(default_factory=list)
+    output: AgentOutput | None = None
+
+
+@dataclass(slots=True)
+class AgentSnapshotProvider:
+    """Provider/session metadata for one agent snapshot."""
+
+    thread_id: str | None = None
+    thread_path: str | None = None
+    resume_cursor: dict[str, Any] | None = None
     native_event_log: str | None = None
     canonical_event_log: str | None = None
-    output: AgentOutput | None = None
+
+
+@dataclass(slots=True)
+class OrchestratorAgentSnapshot:
+    """Stable orchestrator-facing view of one agent run."""
+
+    identity: AgentSnapshotIdentity
+    runtime: AgentSnapshotRuntime
+    workspace: AgentSnapshotWorkspace = field(default_factory=AgentSnapshotWorkspace)
+    outcome: AgentSnapshotOutcome = field(default_factory=AgentSnapshotOutcome)
+    provider: AgentSnapshotProvider = field(default_factory=AgentSnapshotProvider)
 
 
 @dataclass(slots=True)

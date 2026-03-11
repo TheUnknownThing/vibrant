@@ -101,10 +101,10 @@ def transition_terminal_agent(
         agent_record.transition_to(status, exit_code=exit_code, error=error)
         return
 
-    agent_record.exit_code = exit_code
-    agent_record.error = error
-    if agent_record.finished_at is None:
-        agent_record.finished_at = datetime.now(timezone.utc)
+    agent_record.outcome.exit_code = exit_code
+    agent_record.outcome.error = error
+    if agent_record.lifecycle.finished_at is None:
+        agent_record.lifecycle.finished_at = datetime.now(timezone.utc)
 
 
 def parse_runtime_mode(value: str | None) -> RuntimeMode:

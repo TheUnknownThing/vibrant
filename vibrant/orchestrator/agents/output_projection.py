@@ -9,7 +9,7 @@ from vibrant.agents.utils import extract_error_message, extract_text_from_progre
 from vibrant.models.agent import AgentRecord
 from vibrant.providers.base import CanonicalEvent
 
-from .types import AgentOutput, AgentOutputError, AgentOutputSegment, AgentProgressItem
+from ..types import AgentOutput, AgentOutputError, AgentOutputSegment, AgentProgressItem
 
 
 class AgentOutputProjectionService:
@@ -24,7 +24,7 @@ class AgentOutputProjectionService:
 
     def output_for_record(self, record: AgentRecord) -> AgentOutput | None:
         """Return the latest projected output for one persisted agent record."""
-        return self.output_for_agent(record.agent_id)
+        return self.output_for_agent(record.identity.agent_id)
 
     def ingest(self, event: CanonicalEvent | dict[str, Any]) -> AgentOutput | None:
         """Apply one canonical event to the agent-output projection."""
@@ -164,10 +164,10 @@ def _is_reasoning_item(item: Any) -> bool:
 
 def _reasoning_summary_text(item: dict[str, Any]) -> str:
     summary = item.get("summary")
+    if isinstance(summary, list):
+        return "\n".join(str(part) for part in summary if part)
     if isinstance(summary, str):
         return summary
-    if isinstance(summary, list):
-        return " ".join(str(entry) for entry in summary if str(entry).strip())
     text = item.get("text")
     if isinstance(text, str):
         return text

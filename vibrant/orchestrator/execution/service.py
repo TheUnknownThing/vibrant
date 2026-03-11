@@ -8,7 +8,7 @@ from vibrant.agents.runtime import AgentHandle
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo
 
-from ..types import CodeAgentLifecycleResult
+from ..types import TaskResult
 from .git_manager import GitWorktreeInfo
 from .git_workspace import GitWorkspaceService, format_merge_error
 from .prompts import PromptService
@@ -63,8 +63,8 @@ class TaskExecutionService:
         self.review_service = review_service
         self.retry_service = retry_service
 
-    async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
-        results: list[CodeAgentLifecycleResult] = []
+    async def execute_until_blocked(self) -> list[TaskResult]:
+        results: list[TaskResult] = []
         while True:
             result = await self.execute_next_task()
             if result is None:
@@ -83,7 +83,7 @@ class TaskExecutionService:
         self.workflow_service.maybe_complete_workflow()
         return results
 
-    async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
+    async def execute_next_task(self) -> TaskResult | None:
         if self.state_store.has_pending_questions():
             return None
 
@@ -134,7 +134,7 @@ class TaskExecutionService:
             handle=handle,
         )
 
-    async def wait_for_task_attempt(self, attempt: TaskExecutionAttempt) -> CodeAgentLifecycleResult:
+    async def wait_for_task_attempt(self, attempt: TaskExecutionAttempt) -> TaskResult:
         """Resolve a started task attempt through runtime, review, and merge."""
         dispatcher = self.roadmap_service.dispatcher
         assert dispatcher is not None
@@ -144,7 +144,7 @@ class TaskExecutionService:
 
         if runtime_result.awaiting_input:
             self.roadmap_service.persist()
-            return CodeAgentLifecycleResult(
+            return TaskResult(
                 task_id=attempt.task.id,
                 outcome="awaiting_user",
                 task_status=attempt.task.status,
@@ -172,14 +172,14 @@ class TaskExecutionService:
         gatekeeper_result, decision = await self.review_service.review_completion(completed_task, agent_record, attempt.worktree)
         if decision in self.review_service.AWAITING_INPUT_VERDICTS:
             self.roadmap_service.persist()
-            return CodeAgentLifecycleResult(
+            return TaskResult(
                 task_id=completed_task.id,
                 outcome="awaiting_user",
                 task_status=completed_task.status,
                 agent_record=agent_record,
                 gatekeeper_result=gatekeeper_result,
                 events=runtime_result.events,
-                summary=agent_record.summary,
+                summary=agent_record.outcome.summary,
                 worktree_path=str(attempt.worktree.path),
             )
 
@@ -190,7 +190,7 @@ class TaskExecutionService:
                 self.roadmap_service.persist()
                 self.git_service.cleanup_worktree(completed_task.id)
                 self.workflow_service.maybe_complete_workflow()
-                return CodeAgentLifecycleResult(
+                return TaskResult(
                     task_id=accepted_task.id,
                     outcome="accepted",
                     task_status=accepted_task.status,
@@ -198,7 +198,7 @@ class TaskExecutionService:
                     gatekeeper_result=gatekeeper_result,
                     merge_result=merge_result,
                     events=runtime_result.events,
-                    summary=agent_record.summary,
+                    summary=agent_record.outcome.summary,
                 )
 
             self.git_service.abort_merge_if_needed()
@@ -209,7 +209,7 @@ class TaskExecutionService:
                 worktree=attempt.worktree,
                 events=runtime_result.events,
                 reason=merge_error,
-                summary=agent_record.summary,
+                summary=agent_record.outcome.summary,
                 prior_gatekeeper_result=gatekeeper_result,
                 notify_gatekeeper_on_retry=True,
             )
@@ -221,12 +221,7 @@ class TaskExecutionService:
             worktree=attempt.worktree,
             events=runtime_result.events,
             reason=rejection_reason,
-            summary=agent_record.summary,
+            summary=agent_record.outcome.summary,
             prior_gatekeeper_result=gatekeeper_result,
             notify_gatekeeper_on_retry=False,
         )
-
-    async def _execute_task(self, task: TaskInfo) -> CodeAgentLifecycleResult:
-        """Compatibility wrapper for the legacy one-shot flow."""
-        attempt = await self.start_task_attempt(task)
-        return await self.wait_for_task_attempt(attempt)

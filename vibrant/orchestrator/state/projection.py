@@ -31,22 +31,22 @@ def rebuild_derived_state(
     awaiting_user_gatekeeper = False
 
     for record in agent_records:
-        if record.status not in AgentRecord.TERMINAL_STATUSES:
-            active_agents.append(record.agent_id)
-            if record.type is AgentType.GATEKEEPER:
+        if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+            active_agents.append(record.identity.agent_id)
+            if record.identity.type is AgentType.GATEKEEPER:
                 active_gatekeeper = True
-                if record.status is AgentStatus.AWAITING_INPUT:
+                if record.lifecycle.status is AgentStatus.AWAITING_INPUT:
                     awaiting_user_gatekeeper = True
 
-        if record.status is AgentStatus.COMPLETED:
-            completed_tasks.append(record.task_id)
-        elif record.status in {AgentStatus.FAILED, AgentStatus.KILLED}:
-            failed_tasks.append(record.task_id)
+        if record.lifecycle.status is AgentStatus.COMPLETED:
+            completed_tasks.append(record.identity.task_id)
+        elif record.lifecycle.status in {AgentStatus.FAILED, AgentStatus.KILLED}:
+            failed_tasks.append(record.identity.task_id)
 
         provider_thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
-        if provider_thread_id or record.status not in AgentRecord.TERMINAL_STATUSES:
-            provider_runtime[record.agent_id] = ProviderRuntimeState(
-                status=record.status.value,
+        if provider_thread_id or record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+            provider_runtime[record.identity.agent_id] = ProviderRuntimeState(
+                status=record.lifecycle.status.value,
                 provider_thread_id=provider_thread_id,
             )
 

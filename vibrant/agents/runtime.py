@@ -475,21 +475,21 @@ class BaseAgentRuntime:
                 handle._set_provider_thread(provider_thread)
 
                 state = RunState.COMPLETED if run_result.error is None else RunState.FAILED
-                if agent_record.status is AgentStatus.AWAITING_INPUT:
+                if agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT:
                     state = RunState.AWAITING_INPUT
 
                 return NormalizedRunResult(
                     agent_record=agent_record,
                     state=state,
                     transcript=run_result.transcript,
-                    summary=agent_record.summary,
+                    summary=agent_record.outcome.summary,
                     events=run_result.events,
                     exit_code=run_result.exit_code,
                     error=run_result.error,
                     provider_thread=provider_thread,
                     input_requests=list(handle._input_requests),
-                    started_at=agent_record.started_at,
-                    finished_at=agent_record.finished_at,
+                    started_at=agent_record.lifecycle.started_at,
+                    finished_at=agent_record.lifecycle.finished_at,
                     turn_result=run_result.turn_result,
                 )
             except Exception as exc:
@@ -497,7 +497,7 @@ class BaseAgentRuntime:
                     agent_record=agent_record,
                     state=RunState.FAILED,
                     error=str(exc),
-                    started_at=agent_record.started_at,
+                    started_at=agent_record.lifecycle.started_at,
                     finished_at=datetime.now(timezone.utc),
                 )
 
@@ -506,7 +506,7 @@ class BaseAgentRuntime:
             if not future.done():
                 future.set_result(result)
 
-        asyncio.create_task(_run_and_resolve(), name=f"agent-runtime-{agent_record.agent_id}")
+        asyncio.create_task(_run_and_resolve(), name=f"agent-runtime-{agent_record.identity.agent_id}")
         # Yield control so the task has a chance to start.
         await asyncio.sleep(0)
         return handle
@@ -527,7 +527,7 @@ def _sync_handle_state(handle: AgentHandle, record: AgentRecord) -> None:
         AgentStatus.KILLED: RunState.FAILED,
     }
     try:
-        next_state = mapping[record.status]
+        next_state = mapping[record.lifecycle.status]
     except KeyError as exc:
-        raise ValueError(f"Unsupported agent status for runtime handle sync: {record.status!r}") from exc
+        raise ValueError(f"Unsupported agent status for runtime handle sync: {record.lifecycle.status!r}") from exc
     handle._set_state(next_state)

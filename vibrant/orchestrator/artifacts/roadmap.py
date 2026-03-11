@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Sequence
 
 from vibrant.consensus import RoadmapDocument, RoadmapParser
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.execution.dispatcher import TaskDispatcher
-
-
-_UNSET = object()
 
 
 class RoadmapService:
@@ -119,7 +116,22 @@ class RoadmapService:
         self.persist()
         return task
 
-    def update_task(self, task_id: str, **updates: Any) -> TaskInfo:
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        title: str | None = None,
+        acceptance_criteria: Sequence[str] | None = None,
+        status: TaskStatus | str | None = None,
+        branch: str | None = None,
+        retry_count: int | None = None,
+        max_retries: int | None = None,
+        prompt: str | None = None,
+        skills: Sequence[str] | None = None,
+        dependencies: Sequence[str] | None = None,
+        priority: int | None = None,
+        failure_reason: str | None = None,
+    ) -> TaskInfo:
         document = self._ensure_document()
         index = next((offset for offset, task in enumerate(document.tasks) if task.id == task_id), None)
         if index is None:
@@ -127,25 +139,41 @@ class RoadmapService:
 
         current = document.tasks[index]
         updated = current.model_copy(deep=True)
+        if title is not None:
+            updated.title = title
+        if acceptance_criteria is not None:
+            updated.acceptance_criteria = list(acceptance_criteria)
+        if branch is not None:
+            updated.branch = branch
+        if retry_count is not None:
+            updated.retry_count = retry_count
+        if max_retries is not None:
+            updated.max_retries = max_retries
+        if prompt is not None:
+            updated.prompt = prompt
+        if skills is not None:
+            updated.skills = list(skills)
+        if dependencies is not None:
+            updated.dependencies = list(dependencies)
+        if priority is not None:
+            updated.priority = priority
 
-        for field_name, value in updates.items():
-            if value is _UNSET:
-                continue
-            if field_name == "status":
-                normalized_status = value if isinstance(value, TaskStatus) else TaskStatus(str(value).strip().lower())
-                if updated.status is not normalized_status:
-                    updated.transition_to(normalized_status)
-                continue
-            if not hasattr(updated, field_name):
-                raise ValueError(f"Unsupported task field update: {field_name}")
-            setattr(updated, field_name, value)
+        normalized_status = None
+        if status is not None:
+            normalized_status = status if isinstance(status, TaskStatus) else TaskStatus(str(status).strip().lower())
+        if normalized_status is not None and updated.status is not normalized_status:
+            updated.transition_to(normalized_status, failure_reason=failure_reason)
+        elif failure_reason is not None:
+            updated.failure_reason = failure_reason
 
-        _copy_task(existing=current, updated=updated)
+        updated = TaskInfo.model_validate(updated.model_dump())
         updated_tasks = list(document.tasks)
+        updated_tasks[index] = updated
         self.parser.validate_dependency_graph(updated_tasks)
+        document.tasks[index] = updated
         self._sync_dispatcher()
         self.persist()
-        return current
+        return updated
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
         document = self._ensure_document()
@@ -178,8 +206,3 @@ def _apply_task_definition(existing: TaskInfo, incoming: TaskInfo) -> None:
     existing.dependencies = list(incoming.dependencies)
     existing.priority = incoming.priority
     existing.branch = incoming.branch or existing.branch
-
-
-def _copy_task(*, existing: TaskInfo, updated: TaskInfo) -> None:
-    for field_name in type(existing).model_fields:
-        setattr(existing, field_name, getattr(updated, field_name))
