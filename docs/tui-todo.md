@@ -22,7 +22,6 @@
 
 [ ] Implement `Ctrl + Backspace` to delete the last word in the input box.
 [ ] Implement autocompletion for commands (starting with `/`) and file paths (starting with `@`).
-[ ] Migrate to using `Ctrl + C` to kill the current agent execution. Remove the ambiguous `F2` keybinding.
 [ ] Implement a command history that can be navigated with the `Up` and `Down` arrow keys when the input box is focused. Query the history from the Orchestrator.
 
 ### Task Status
@@ -37,7 +36,10 @@
 
 ### Consensus Modal
 
-[ ] Rewrite the current `ConsensusView` tab so that it is rendered using the markdown tool.
+[x] Change the modal into a panel that is docked in these places:
+    - Planning: As a toggle-able side panel on the left side of the screen.
+    - Vibing: As one of the four tabs in the main screen.
+[x] Lookdev: Change it into a markdown viewer / writer so that the gatekeeper can update the consensus and the user can see the changes in real time, and edit if needed. (The metadata should not be editable). Wrap this into a component.
 
 ### Planning Screen
 
@@ -45,7 +47,7 @@
 
 ### Vibing Screen
 
-[ ] Use Tabs instead of buttons to select tab to display.
+[x] Use Tabs instead of buttons to select tab to display.
 [ ] Replace the `TaskStatusView` stub with a real task-status panel that shows the selected task, progress, and current execution details.
 [ ] Replace the temporary roadmap-loading notices with a proper loading spinner for the `Task Status` and `Chat History` tabs before roadmap generation finishes.
 [ ] Implement Roadmap-loading placeholder.

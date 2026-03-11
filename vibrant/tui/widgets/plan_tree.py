@@ -139,6 +139,7 @@ class PlanTree(Static):
     #plan-tree-widget {
         height: 1fr;
         padding: 0 1 1 1;
+        margin: 1 0;
     }
     """
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Static
+from textual.widgets import Static, TabbedContent, TabPane
 
 from ..widgets.agent_output import AgentOutput
 from ..widgets.chat_panel import ChatPanel
@@ -37,21 +37,12 @@ class VibingScreen(Static):
     }
 
     VibingScreen #workspace-tabs {
+        height: 1fr;
+    }
+
+    VibingScreen #workspace-tabs Tabs {
         height: auto;
         margin-bottom: 1;
-    }
-
-    VibingScreen .workspace-tab {
-        width: 1fr;
-        margin-right: 1;
-    }
-
-    VibingScreen .workspace-tab.-active {
-        text-style: bold;
-    }
-
-    VibingScreen #workspace-content {
-        height: 1fr;
     }
 
     VibingScreen #task-status-panel,
@@ -83,64 +74,57 @@ class VibingScreen(Static):
     }
     """
 
-    _BUTTON_TO_TAB = {
-        "workspace-tab-task-status": "task-status",
-        "workspace-tab-chat-history": "chat-history",
-        "workspace-tab-consensus": "consensus",
-        "workspace-tab-agent-logs": "agent-logs",
-    }
-
-    _TAB_TO_PANEL = {
-        "task-status": "#task-status-panel",
-        "chat-history": "#chat-history-panel",
-        "consensus": "#consensus-panel",
-        "agent-logs": "#agent-output-panel",
-    }
+    _VALID_TABS = {"task-status", "chat-history", "consensus", "agent-logs"}
 
     def __init__(self, *, initial_tab: str = "task-status") -> None:
         super().__init__()
-        self._initial_tab = initial_tab
-        self._active_tab = initial_tab
+        self._initial_tab = initial_tab if initial_tab in self._VALID_TABS else "task-status"
+        self._active_tab = self._initial_tab
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="vibing-shell"):
             yield PlanTree(id="plan-panel")
             with Vertical(id="vibing-main"):
-                with Horizontal(id="workspace-tabs"):
-                    yield Button("Task Status", id="workspace-tab-task-status", classes="workspace-tab")
-                    yield Button("Chat History", id="workspace-tab-chat-history", classes="workspace-tab")
-                    yield Button("Consensus File", id="workspace-tab-consensus", classes="workspace-tab")
-                    yield Button("Agent Logs", id="workspace-tab-agent-logs", classes="workspace-tab")
-                with Vertical(id="workspace-content"):
-                    yield TaskStatusView(id="task-status-panel")
-                    with Vertical(id="chat-history-panel"):
-                        yield Static("[b]Generating Roadmap[/b]\n\nChat history will appear here once roadmap generation finishes.", id="chat-roadmap-status", markup=True)
-                        yield ChatPanel(id="conversation-panel")
-                    yield ConsensusView(id="consensus-panel")
-                    yield AgentOutput(id="agent-output-panel")
+                with TabbedContent(initial=self._initial_tab, id="workspace-tabs"):
+                    with TabPane("Task Status", id="task-status"):
+                        yield TaskStatusView(id="task-status-panel")
+                    with TabPane("Chat History", id="chat-history"):
+                        with Vertical(id="chat-history-panel"):
+                            yield Static(
+                                "[b]Generating Roadmap[/b]\n\nChat history will appear here once roadmap generation finishes.",
+                                id="chat-roadmap-status",
+                                markup=True,
+                            )
+                            yield ChatPanel(id="conversation-panel")
+                    with TabPane("Consensus File", id="consensus"):
+                        yield ConsensusView(id="consensus-panel")
+                    with TabPane("Agent Logs", id="agent-logs"):
+                        yield AgentOutput(id="agent-output-panel")
                 yield InputBar(id="input-panel")
 
     def on_mount(self) -> None:
         self.set_active_tab(self._initial_tab)
         self.set_roadmap_loading(True)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        tab_id = self._BUTTON_TO_TAB.get(event.button.id or "")
-        if tab_id is not None:
-            self.set_active_tab(tab_id)
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        if event.control.id != "workspace-tabs":
+            return
+        tab_id = event.tab.id or ""
+        if tab_id in self._VALID_TABS:
+            self._active_tab = tab_id
+
+    @property
+    def active_tab(self) -> str:
+        """Return the currently active main-screen tab."""
+
+        return self._active_tab
 
     def set_active_tab(self, tab_id: str) -> None:
-        if tab_id not in self._TAB_TO_PANEL:
+        if tab_id not in self._VALID_TABS:
             return
 
         self._active_tab = tab_id
-        for button_id, candidate_tab in self._BUTTON_TO_TAB.items():
-            button = self.query_one(f"#{button_id}", Button)
-            button.set_class(candidate_tab == tab_id, "-active")
-
-        for candidate_tab, selector in self._TAB_TO_PANEL.items():
-            panel = self.query_one(selector)
-            panel.display = candidate_tab == tab_id
+        self.query_one("#workspace-tabs", TabbedContent).active = tab_id
 
     def set_roadmap_loading(self, is_loading: bool) -> None:
         self.query_one(TaskStatusView).set_generating_roadmap(is_loading)
@@ -204,3 +188,13 @@ class VibingScreen(Static):
         """Switch to the chat history tab."""
 
         self.set_active_tab("chat-history")
+
+    def show_consensus(self) -> None:
+        """Switch to the consensus tab."""
+
+        self.set_active_tab("consensus")
+
+    def show_task_status(self) -> None:
+        """Switch to the task status tab."""
+
+        self.set_active_tab("task-status")

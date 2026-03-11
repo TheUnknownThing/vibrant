@@ -77,6 +77,7 @@ Stable action methods on `OrchestratorFacade`:
 - `answer_pending_question(answer, *, question=None)`
 - `pause_workflow()`
 - `resume_workflow()`
+- `write_consensus_document(document)`
 
 These methods are the preferred stable write or workflow-intent entrypoints for
 external integrations.

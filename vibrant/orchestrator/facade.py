@@ -411,6 +411,29 @@ class OrchestratorFacade:
     def notification_bell_enabled(self) -> bool:
         return self.snapshot().notification_bell_enabled
 
+    def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
+        consensus_service = getattr(self.lifecycle, "consensus_service", None)
+        write = getattr(consensus_service, "write", None)
+        if callable(write):
+            written = write(document)
+            refresh = getattr(getattr(consensus_service, "state_store", None), "refresh", None)
+            if callable(refresh):
+                refresh()
+            return written
+
+        engine = self._engine()
+        consensus_path = self._consensus_path(engine)
+        if consensus_path is None:
+            raise RuntimeError("Consensus path is unavailable")
+
+        written = ConsensusWriter().write(consensus_path, document)
+        if engine is not None:
+            engine.consensus = written
+            refresh = getattr(engine, "refresh_from_disk", None)
+            if callable(refresh):
+                refresh()
+        return written
+
     async def submit_gatekeeper_message(self, text: str) -> Any:
         submit = getattr(self.lifecycle, "submit_gatekeeper_message", None)
         if callable(submit):

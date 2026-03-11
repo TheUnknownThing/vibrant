@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from textual.css.query import NoMatches
-from textual.widgets import Input, OptionList, Static
+from textual.widgets import Input, OptionList, Static, TextArea
 
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
 from vibrant.history import HistoryStore
@@ -161,8 +161,9 @@ async def test_app_mounts_four_panels_and_help_binding(tmp_path: Path):
         keymap = {binding.key: binding.action for binding in app.BINDINGS}
         assert keymap["f1"] == "open_help"
         assert keymap["f2"] == "toggle_pause"
-        assert keymap["f3"] == "open_consensus_overlay"
-        assert keymap["f5"] == "cycle_agent_output"
+        assert keymap["f3"] == "show_task_status"
+        assert keymap["f4"] == "toggle_consensus"
+        assert keymap["f5"] == "show_chat_history"
         assert keymap["f10"] == "quit_app"
 
         await pilot.press("f1")
@@ -347,8 +348,7 @@ async def test_planning_mode_shows_consensus_building_screen(tmp_path: Path):
             app.query_one("#plan-panel")
         with pytest.raises(NoMatches):
             app.query_one("#agent-output-panel")
-        with pytest.raises(NoMatches):
-            app.query_one("#consensus-panel")
+        assert app.query_one("#planning-consensus-panel").display is False
         assert app.query_one("#message-input", Input).placeholder == "Tell me what you want to build"
 
 
@@ -459,3 +459,79 @@ async def test_app_resolves_project_relative_history_dir(tmp_path: Path):
     assert stored_gatekeeper.id == "gatekeeper-project_start-test"
     assert (repo / ".vibrant" / "conversations" / "gatekeeper-project_start-test.json").is_file()
     assert [turn.items[0].content for turn in stored_gatekeeper.turns] == ["Build an auth MVP.", "Plan drafted"]
+
+
+@pytest.mark.asyncio
+async def test_f4_toggles_planning_consensus_panel(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=PlanningLifecycle)
+
+    async with _run_test(app) as pilot:
+        await pilot.pause()
+
+        consensus_panel = app.query_one("#planning-consensus-panel")
+        assert consensus_panel.display is False
+
+        await pilot.press("f4")
+        await pilot.pause()
+        assert consensus_panel.display is True
+
+        await pilot.press("f4")
+        await pilot.pause()
+        assert consensus_panel.display is False
+
+
+@pytest.mark.asyncio
+async def test_f4_shows_consensus_tab_in_vibing_mode(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
+
+    async with _run_test(app) as pilot:
+        await pilot.pause()
+
+        app.action_toggle_consensus()
+        await pilot.pause()
+
+        assert app._workspace_screen is not None  # noqa: SLF001
+        assert app._workspace_screen.active_tab == "consensus"  # type: ignore[attr-defined]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_consensus_editor_save_updates_body_without_editing_metadata(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    initialize_project(repo)
+
+    settings = AppSettings(default_cwd=str(repo), history_dir=str(tmp_path / "history"))
+    app = VibrantApp(settings=settings, cwd=str(repo), lifecycle_factory=ExecutingLifecycle)
+
+    async with _run_test(app) as pilot:
+        await pilot.pause()
+
+        await pilot.press("f4")
+        await pilot.pause()
+
+        editor = app.query_one("#consensus-editor", TextArea)
+        original = ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md")
+        editor.load_text(
+            "## Objectives\n\nShip the redesigned consensus panel.\n\n## Design Choices\n\n## Getting Started\nRead `docs/tui.md`.\n"
+        )
+        await pilot.pause()
+
+        app.query_one("#consensus-panel").action_save_edits()
+        await pilot.pause()
+
+        updated = ConsensusParser().parse_file(repo / ".vibrant" / "consensus.md")
+        assert updated.project == original.project
+        assert updated.status is original.status
+        assert updated.version == original.version + 1
+        assert "Ship the redesigned consensus panel." in updated.objectives
+        assert updated.getting_started == "Read `docs/tui.md`."
