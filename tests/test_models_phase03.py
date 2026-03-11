@@ -26,14 +26,22 @@ from vibrant.models.task import TaskInfo, TaskStatus
 class TestAgentRecord:
     def test_round_trip_serialize_deserialize(self):
         record = AgentRecord(
-            agent_id="agent-task-001",
-            task_id="task-001",
-            type=AgentType.CODE,
-            status=AgentStatus.RUNNING,
-            pid=12345,
-            branch="vibrant/task-001",
-            worktree_path="/tmp/vibrant-worktrees/task-001",
-            started_at=datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc),
+            identity={
+                "agent_id": "agent-task-001",
+                "task_id": "task-001",
+                "type": AgentType.CODE,
+            },
+            lifecycle={
+                "status": AgentStatus.RUNNING,
+                "pid": 12345,
+                "started_at": datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc),
+            },
+            context={
+                "branch": "vibrant/task-001",
+                "worktree_path": "/tmp/vibrant-worktrees/task-001",
+                "prompt_used": "prompt",
+                "skills_loaded": ["gui-design"],
+            },
             provider=AgentProviderMetadata(
                 runtime_mode="full-access",
                 provider_thread_id="thread_abc123",
@@ -41,9 +49,7 @@ class TestAgentRecord:
                 native_event_log=".vibrant/logs/providers/native/agent-task-001.ndjson",
                 canonical_event_log=".vibrant/logs/providers/canonical/agent-task-001.ndjson",
             ),
-            summary="summary",
-            prompt_used="prompt",
-            skills_loaded=["gui-design"],
+            outcome={"summary": "summary"},
         )
 
         restored = AgentRecord.model_validate_json(record.model_dump_json())
@@ -59,7 +65,9 @@ class TestAgentRecord:
         assert restored.provider.resume_cursor == {"threadId": "thread_abc123"}
 
     def test_status_transitions_are_validated(self):
-        record = AgentRecord(agent_id="agent-1", task_id="task-1", type=AgentType.CODE)
+        record = AgentRecord(
+            identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE}
+        )
 
         record.transition_to(AgentStatus.CONNECTING)
         record.transition_to(AgentStatus.RUNNING)
@@ -67,25 +75,26 @@ class TestAgentRecord:
         record.transition_to(AgentStatus.RUNNING)
         record.transition_to(AgentStatus.COMPLETED, exit_code=0)
 
-        assert record.status is AgentStatus.COMPLETED
-        assert record.exit_code == 0
-        assert record.finished_at is not None
+        assert record.lifecycle.status is AgentStatus.COMPLETED
+        assert record.outcome.exit_code == 0
+        assert record.lifecycle.finished_at is not None
 
         with pytest.raises(ValueError, match="Invalid agent status transition"):
             record.transition_to(AgentStatus.RUNNING)
 
-    def test_legacy_agent_record_is_migrated(self):
+    def test_nested_agent_record_deserializes(self):
         record = AgentRecord.model_validate(
             {
-                "agent_id": "agent-gatekeeper-user_discussion-001",
-                "agent_kind": "gatekeeper",
-                "status": "running",
-                "task_id": None,
-                "branch_name": None,
-                "provider_binding": {
-                    "provider_name": "codex",
-                    "transport_name": "app-server-json-rpc",
-                    "runtime_state": "running",
+                "identity": {
+                    "agent_id": "agent-gatekeeper-user_discussion-001",
+                    "task_id": "gatekeeper-user_discussion",
+                    "type": "gatekeeper",
+                },
+                "lifecycle": {"status": "running"},
+                "context": {"worktree_path": "/tmp/project"},
+                "provider": {
+                    "kind": "codex",
+                    "transport": "app-server-json-rpc",
                     "runtime_mode": "workspace_write",
                     "provider_thread_id": "thread-123",
                     "resume_token": {
@@ -95,13 +104,11 @@ class TestAgentRecord:
                     "native_event_log_path": ".vibrant/logs/providers/native/agent.ndjson",
                     "canonical_event_log_path": ".vibrant/logs/providers/canonical/agent.ndjson",
                 },
-                "pending_requests": [],
-                "validation_result": None,
             }
         )
 
-        assert record.type is AgentType.GATEKEEPER
-        assert record.task_id == "gatekeeper-user_discussion"
+        assert record.identity.type is AgentType.GATEKEEPER
+        assert record.identity.task_id == "gatekeeper-user_discussion"
         assert record.provider.kind == "codex"
         assert record.provider.transport == "app-server-json-rpc"
         assert record.provider.runtime_mode == "workspace-write"
@@ -116,14 +123,11 @@ class TestAgentRecord:
         with pytest.raises(ValidationError, match="Unsupported provider runtime mode"):
             AgentProviderMetadata.model_validate({"runtime_mode": "mystery-mode"})
 
-    def test_legacy_agent_record_without_valid_agent_id_raises(self):
-        with pytest.raises(ValidationError, match="Cannot infer task_id from legacy agent record"):
+    def test_nested_agent_record_requires_identity(self):
+        with pytest.raises(ValidationError, match="identity"):
             AgentRecord.model_validate(
                 {
-                    "agent_id": "",
-                    "agent_kind": "code",
-                    "status": "running",
-                    "task_id": None,
+                    "lifecycle": {"status": "running"},
                 }
             )
 

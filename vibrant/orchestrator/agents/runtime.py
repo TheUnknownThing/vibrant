@@ -20,7 +20,13 @@ from vibrant.models.agent import AgentRecord
 from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 from vibrant.providers.base import CanonicalEvent
 
-from ..types import RuntimeExecutionResult
+from ..types import (
+    AgentSnapshotIdentity,
+    AgentSnapshotOutcome,
+    AgentSnapshotProvider,
+    AgentSnapshotRuntime,
+    RuntimeExecutionResult,
+)
 from .registry import AgentRegistry
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
@@ -31,19 +37,10 @@ RuntimeFactory = Callable[[AgentRecord], AgentRuntime]
 class RuntimeHandleSnapshot:
     """Serializable view of an in-flight or completed agent handle."""
 
-    agent_id: str
-    task_id: str
-    agent_type: str
-    state: str
-    status: str
-    done: bool
-    awaiting_input: bool
-    summary: str | None = None
-    error: str | None = None
-    provider_thread_id: str | None = None
-    provider_thread_path: str | None = None
-    provider_resume_cursor: dict[str, Any] | None = None
-    input_requests: list[InputRequest] = field(default_factory=list)
+    identity: AgentSnapshotIdentity
+    runtime: AgentSnapshotRuntime
+    outcome: AgentSnapshotOutcome = field(default_factory=AgentSnapshotOutcome)
+    provider: AgentSnapshotProvider = field(default_factory=AgentSnapshotProvider)
 
 
 class AgentRuntimeService:
@@ -124,7 +121,7 @@ class AgentRuntimeService:
     ) -> ProviderThreadHandle:
         if provider_thread is not None:
             return provider_thread
-        persisted = self.agent_registry.provider_thread_handle(agent_record.agent_id)
+        persisted = self.agent_registry.provider_thread_handle(agent_record.identity.agent_id)
         if persisted is not None:
             return persisted
         return ProviderResumeHandle.from_provider_metadata(agent_record.provider) or ProviderResumeHandle(
@@ -157,19 +154,32 @@ class AgentRuntimeService:
         if provider_thread.empty:
             provider_thread = self._resolve_provider_thread(agent_record=agent_record, provider_thread=None)
         return RuntimeHandleSnapshot(
-            agent_id=agent_record.agent_id,
-            task_id=agent_record.task_id,
-            agent_type=agent_record.type.value,
-            state=handle.state.value,
-            status=agent_record.status.value,
-            done=handle.done,
-            awaiting_input=handle.awaiting_input,
-            summary=agent_record.summary,
-            error=agent_record.error,
-            provider_thread_id=provider_thread.thread_id,
-            provider_thread_path=provider_thread.thread_path,
-            provider_resume_cursor=provider_thread.resume_cursor,
-            input_requests=handle.input_requests,
+            identity=AgentSnapshotIdentity(
+                agent_id=agent_record.identity.agent_id,
+                task_id=agent_record.identity.task_id,
+                agent_type=agent_record.identity.type.value,
+            ),
+            runtime=AgentSnapshotRuntime(
+                status=agent_record.lifecycle.status.value,
+                state=handle.state.value,
+                has_handle=True,
+                active=True,
+                done=handle.done,
+                awaiting_input=handle.awaiting_input,
+                pid=agent_record.lifecycle.pid,
+                started_at=agent_record.lifecycle.started_at,
+                finished_at=agent_record.lifecycle.finished_at,
+                input_requests=handle.input_requests,
+            ),
+            outcome=AgentSnapshotOutcome(
+                summary=agent_record.outcome.summary,
+                error=agent_record.outcome.error,
+            ),
+            provider=AgentSnapshotProvider(
+                thread_id=provider_thread.thread_id,
+                thread_path=provider_thread.thread_path,
+                resume_cursor=provider_thread.resume_cursor,
+            ),
         )
 
     def list_handle_snapshots(self, *, include_completed: bool = True) -> list[RuntimeHandleSnapshot]:
@@ -181,7 +191,7 @@ class AgentRuntimeService:
             if record is None:
                 continue
             snapshot = self.snapshot_handle(handle=handle, agent_record=record)
-            if not include_completed and snapshot.done and not snapshot.awaiting_input:
+            if not include_completed and snapshot.runtime.done and not snapshot.runtime.awaiting_input:
                 continue
             snapshots.append(snapshot)
         return snapshots
@@ -219,7 +229,7 @@ class AgentRuntimeService:
     ) -> AgentHandle:
         """Start an agent run and return the durable handle immediately."""
         runtime = self._resolve_runtime(agent_record)
-        agent_record.started_at = datetime.now(timezone.utc)
+        agent_record.lifecycle.started_at = datetime.now(timezone.utc)
         self.agent_registry.upsert(agent_record, increment_spawn=increment_spawn)
         handle = await runtime.start(
             agent_record=agent_record,
@@ -228,7 +238,7 @@ class AgentRuntimeService:
             resume_thread_id=resume_thread_id,
             on_record_updated=self._make_record_callback(),
         )
-        self._handles[agent_record.agent_id] = handle
+        self._handles[agent_record.identity.agent_id] = handle
         return handle
 
     async def resume_run(
@@ -246,7 +256,7 @@ class AgentRuntimeService:
             provider_thread=provider_thread,
         )
         if not provider_thread.resumable:
-            raise ValueError(f"Agent {agent_record.agent_id} has no resumable provider thread")
+            raise ValueError(f"Agent {agent_record.identity.agent_id} has no resumable provider thread")
         self.agent_registry.upsert(agent_record, increment_spawn=False)
         handle = await runtime.resume_run(
             agent_record=agent_record,
@@ -255,7 +265,7 @@ class AgentRuntimeService:
             cwd=cwd,
             on_record_updated=self._make_record_callback(),
         )
-        self._handles[agent_record.agent_id] = handle
+        self._handles[agent_record.identity.agent_id] = handle
         return handle
 
     async def start_task(
@@ -363,7 +373,7 @@ class AgentRuntimeService:
         snapshot = self.snapshot_handle(handle=handle, agent_record=normalized.agent_record)
         result = _normalized_to_execution_result(normalized, snapshot=snapshot)
         if release_terminal and not result.awaiting_input:
-            self.release_handle(normalized.agent_record.agent_id)
+            self.release_handle(normalized.agent_record.identity.agent_id)
         return result
 
     # ------------------------------------------------------------------
@@ -451,7 +461,7 @@ class AgentRuntimeService:
 
             await maybe_forward_event(self.on_canonical_event, event_copy)
 
-        agent_record.started_at = datetime.now(timezone.utc)
+        agent_record.lifecycle.started_at = datetime.now(timezone.utc)
         self.agent_registry.upsert(agent_record, increment_spawn=True)
 
         thread_runtime_mode = parse_runtime_mode(config.sandbox_mode)
@@ -470,7 +480,7 @@ class AgentRuntimeService:
                 on_canonical_event=handle_event,
             )
             await adapter.start_session(cwd=str(worktree.path))
-            agent_record.pid = extract_pid(adapter)
+            agent_record.lifecycle.pid = extract_pid(adapter)
             self.agent_registry.upsert(agent_record)
 
             await adapter.start_thread(
@@ -507,7 +517,7 @@ class AgentRuntimeService:
         )
 
         if runtime_error:
-            agent_record.summary = transcript or agent_record.summary
+            agent_record.outcome.summary = transcript or agent_record.outcome.summary
             transition_terminal_agent(
                 agent_record,
                 AgentStatus.FAILED,
@@ -527,7 +537,7 @@ class AgentRuntimeService:
                 provider_resume_cursor=provider_thread.resume_cursor,
             )
 
-        agent_record.summary = transcript or extract_summary_from_turn_result(turn_result)
+        agent_record.outcome.summary = transcript or extract_summary_from_turn_result(turn_result)
         transition_terminal_agent(
             agent_record,
             AgentStatus.COMPLETED,
@@ -537,7 +547,7 @@ class AgentRuntimeService:
         return RuntimeExecutionResult(
             agent_record=agent_record,
             events=events,
-            summary=agent_record.summary,
+            summary=agent_record.outcome.summary,
             turn_result=turn_result,
             state=RunState.COMPLETED,
             provider_thread_id=provider_thread.thread_id,
@@ -555,9 +565,9 @@ def _normalized_to_execution_result(
     provider_thread = result.provider_thread
     if snapshot is not None:
         provider_thread = ProviderResumeHandle(
-            thread_id=snapshot.provider_thread_id,
-            thread_path=snapshot.provider_thread_path,
-            resume_cursor=snapshot.provider_resume_cursor,
+            thread_id=snapshot.provider.thread_id,
+            thread_path=snapshot.provider.thread_path,
+            resume_cursor=snapshot.provider.resume_cursor,
         )
     return RuntimeExecutionResult(
         agent_record=result.agent_record,

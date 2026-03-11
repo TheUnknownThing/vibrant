@@ -58,12 +58,16 @@ class MergeAgent(AgentBase):
         """Create an AgentRecord for a merge agent run."""
         agent_id = f"merge-{task_id}-{uuid4().hex[:8]}"
         return AgentRecord(
-            agent_id=agent_id,
-            task_id=task_id,
-            type=AgentType.MERGE,
-            status=AgentStatus.SPAWNING,
-            branch=branch,
-            worktree_path=str(self.project_root),
+            identity={
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "type": AgentType.MERGE,
+            },
+            lifecycle={"status": AgentStatus.SPAWNING},
+            context={
+                "branch": branch,
+                "worktree_path": str(self.project_root),
+            },
             provider=AgentProviderMetadata(
                 runtime_mode="danger-full-access",
             ),

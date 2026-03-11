@@ -17,6 +17,7 @@ from vibrant.mcp.auth import (
     TokenExchangeRequest,
     build_s256_code_challenge,
 )
+from vibrant.mcp.auth.service import AUTHLIB_AVAILABLE
 from vibrant.mcp.auth.tokens import decode_unverified
 from vibrant.mcp.config import OAuthServerSettings
 
@@ -55,6 +56,7 @@ def auth_service() -> AuthorizationServerService:
 
 
 class TestAuthorizationServerService:
+    @pytest.mark.skipif(not AUTHLIB_AVAILABLE, reason="Authlib optional dependency is not installed")
     def test_authorize_and_exchange_code(self, auth_service: AuthorizationServerService):
         code_verifier = _valid_code_verifier("correct-horse-battery-staple")
         decision = auth_service.authorize(
@@ -86,6 +88,7 @@ class TestAuthorizationServerService:
         assert claims["roles"] == ["editor"]
         assert claims["email"] == "alice@example.com"
 
+    @pytest.mark.skipif(not AUTHLIB_AVAILABLE, reason="Authlib optional dependency is not installed")
     def test_rejects_unknown_redirect_uri(self, auth_service: AuthorizationServerService):
         with pytest.raises(OAuthError):
             auth_service.authorize(
@@ -98,6 +101,7 @@ class TestAuthorizationServerService:
                 user_id="user-123",
             )
 
+    @pytest.mark.skipif(not AUTHLIB_AVAILABLE, reason="Authlib optional dependency is not installed")
     def test_rejects_invalid_pkce_verifier(self, auth_service: AuthorizationServerService):
         decision = auth_service.authorize(
             AuthorizationRequest(

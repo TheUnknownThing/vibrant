@@ -48,11 +48,8 @@ async def test_agent_output_displays_streaming_reasoning_with_spinner(tmp_path: 
     )
 
     record = AgentRecord(
-        agent_id="agent-task-001",
-        task_id="task-001",
-        type=AgentType.CODE,
-        status=AgentStatus.RUNNING,
-        started_at=datetime.now(timezone.utc),
+        identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE},
+        lifecycle={"status": AgentStatus.RUNNING, "started_at": datetime.now(timezone.utc)},
         provider={"native_event_log": str(native_log)},
     )
 

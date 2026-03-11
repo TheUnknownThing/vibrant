@@ -179,7 +179,7 @@ class TaskExecutionService:
                 agent_record=agent_record,
                 gatekeeper_result=gatekeeper_result,
                 events=runtime_result.events,
-                summary=agent_record.summary,
+                summary=agent_record.outcome.summary,
                 worktree_path=str(attempt.worktree.path),
             )
 
@@ -198,7 +198,7 @@ class TaskExecutionService:
                     gatekeeper_result=gatekeeper_result,
                     merge_result=merge_result,
                     events=runtime_result.events,
-                    summary=agent_record.summary,
+                    summary=agent_record.outcome.summary,
                 )
 
             self.git_service.abort_merge_if_needed()
@@ -209,7 +209,7 @@ class TaskExecutionService:
                 worktree=attempt.worktree,
                 events=runtime_result.events,
                 reason=merge_error,
-                summary=agent_record.summary,
+                summary=agent_record.outcome.summary,
                 prior_gatekeeper_result=gatekeeper_result,
                 notify_gatekeeper_on_retry=True,
             )
@@ -221,7 +221,7 @@ class TaskExecutionService:
             worktree=attempt.worktree,
             events=runtime_result.events,
             reason=rejection_reason,
-            summary=agent_record.summary,
+            summary=agent_record.outcome.summary,
             prior_gatekeeper_result=gatekeeper_result,
             notify_gatekeeper_on_retry=False,
         )

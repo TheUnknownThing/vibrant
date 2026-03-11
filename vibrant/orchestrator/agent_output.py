@@ -24,7 +24,7 @@ class AgentOutputProjectionService:
 
     def output_for_record(self, record: AgentRecord) -> AgentOutput | None:
         """Return the latest projected output for one persisted agent record."""
-        return self.output_for_agent(record.agent_id)
+        return self.output_for_agent(record.identity.agent_id)
 
     def ingest(self, event: CanonicalEvent | dict[str, Any]) -> AgentOutput | None:
         """Apply one canonical event to the agent-output projection."""

@@ -101,7 +101,7 @@ class StateStore:
 
     def apply_gatekeeper_result(self, result: GatekeeperRunResult) -> list[CanonicalEvent]:
         if result.agent_record is not None:
-            increment_spawn = self._agent_store is None or result.agent_record.agent_id not in self._agent_store
+            increment_spawn = self._agent_store is None or result.agent_record.identity.agent_id not in self._agent_store
             if self._agent_store is not None:
                 self._agent_store.upsert(
                     result.agent_record,
@@ -126,7 +126,7 @@ class StateStore:
                 reconcile_question_records(
                     self.engine.state.questions,
                     pending_messages,
-                    source_agent_id=result.agent_record.agent_id if result.agent_record is not None else None,
+                    source_agent_id=result.agent_record.identity.agent_id if result.agent_record is not None else None,
                     source_role="gatekeeper",
                 )
             )

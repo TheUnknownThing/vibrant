@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from vibrant.agents import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.agents.runtime import RunState
 from vibrant.consensus.writer import ConsensusWriter
-from vibrant.agents import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
@@ -93,10 +93,12 @@ def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
     )
 
     gatekeeper_record = AgentRecord(
-        agent_id="gatekeeper-task_completion-test",
-        task_id="gatekeeper-task_completion",
-        type=AgentType.GATEKEEPER,
-        status=AgentStatus.COMPLETED,
+        identity={
+            "agent_id": "gatekeeper-task_completion-test",
+            "task_id": "gatekeeper-task_completion",
+            "type": AgentType.GATEKEEPER,
+        },
+        lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
             provider_thread_id="thread-gatekeeper-completed",
             resume_cursor={"threadId": "thread-gatekeeper-completed"},
@@ -107,8 +109,8 @@ def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
         state=RunState.COMPLETED,
         transcript="Task review complete.",
         summary="Task review complete.",
-        started_at=gatekeeper_record.started_at,
-        finished_at=gatekeeper_record.finished_at,
+        started_at=gatekeeper_record.lifecycle.started_at,
+        finished_at=gatekeeper_record.lifecycle.finished_at,
     )
 
     state_store.apply_gatekeeper_result(result)
@@ -150,27 +152,21 @@ class TestOrchestratorEnginePersistence:
         state_path.write_text(state.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
         running_agent = AgentRecord(
-            agent_id="agent-task-001",
-            task_id="task-001",
-            type=AgentType.CODE,
-            status=AgentStatus.RUNNING,
+            identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE},
+            lifecycle={"status": AgentStatus.RUNNING},
             provider=AgentProviderMetadata(
                 provider_thread_id="thread-001",
                 resume_cursor={"threadId": "thread-001"},
             ),
         )
         completed_agent = AgentRecord(
-            agent_id="agent-task-002",
-            task_id="task-002",
-            type=AgentType.TEST,
-            status=AgentStatus.COMPLETED,
+            identity={"agent_id": "agent-task-002", "task_id": "task-002", "type": AgentType.TEST},
+            lifecycle={"status": AgentStatus.COMPLETED},
         )
         failed_agent = AgentRecord(
-            agent_id="agent-task-003",
-            task_id="task-003",
-            type=AgentType.CODE,
-            status=AgentStatus.FAILED,
-            error="boom",
+            identity={"agent_id": "agent-task-003", "task_id": "task-003", "type": AgentType.CODE},
+            lifecycle={"status": AgentStatus.FAILED},
+            outcome={"error": "boom"},
         )
         _write_agent_record(agents_dir / "agent-task-001.json", running_agent)
         _write_agent_record(agents_dir / "agent-task-002.json", completed_agent)
@@ -199,7 +195,7 @@ class TestOrchestratorEnginePersistence:
         assert recovered.state.last_consensus_version == 14
         assert recovered.state.provider_runtime["agent-task-001"].provider_thread_id == "thread-001"
 
-    def test_restart_migrates_legacy_runtime_state_and_agents(self, tmp_path):
+    def test_restart_migrates_legacy_runtime_state_and_reads_nested_agents(self, tmp_path):
         vibrant_dir = initialize_project(tmp_path)
         state_path = vibrant_dir / "state.json"
         agent_path = vibrant_dir / "agents" / "agent-gatekeeper-user_discussion-001.json"
@@ -241,21 +237,24 @@ class TestOrchestratorEnginePersistence:
         agent_path.write_text(
             json.dumps(
                 {
-                    "agent_id": "agent-gatekeeper-user_discussion-001",
-                    "agent_kind": "gatekeeper",
-                    "status": "running",
-                    "task_id": None,
-                    "pid": None,
-                    "branch_name": None,
-                    "worktree_path": str(vibrant_dir),
-                    "started_at": "2026-03-09T10:37:04Z",
-                    "finished_at": None,
-                    "exit_code": None,
-                    "provider_binding": {
-                        "owner_agent_id": "agent-gatekeeper-user_discussion-001",
-                        "provider_name": "codex",
-                        "transport_name": "app-server-json-rpc",
-                        "runtime_state": "running",
+                    "identity": {
+                        "agent_id": "agent-gatekeeper-user_discussion-001",
+                        "task_id": "gatekeeper-user_discussion",
+                        "type": "gatekeeper",
+                    },
+                    "lifecycle": {
+                        "status": "running",
+                        "started_at": "2026-03-09T10:37:04Z",
+                    },
+                    "context": {
+                        "worktree_path": str(vibrant_dir),
+                        "prompt_used": "hello",
+                        "skills_loaded": [],
+                    },
+                    "retry": {"retry_count": 0, "max_retries": 1},
+                    "provider": {
+                        "kind": "codex",
+                        "transport": "app-server-json-rpc",
                         "runtime_mode": "workspace_write",
                         "provider_thread_id": "thread-legacy",
                         "resume_token": {
@@ -265,14 +264,6 @@ class TestOrchestratorEnginePersistence:
                         "native_event_log_path": ".vibrant/logs/providers/native/agent-gatekeeper.ndjson",
                         "canonical_event_log_path": ".vibrant/logs/providers/canonical/agent-gatekeeper.ndjson",
                     },
-                    "summary": None,
-                    "prompt_used": "hello",
-                    "skills_loaded": [],
-                    "retry_count": 0,
-                    "max_retries": 1,
-                    "pending_requests": [],
-                    "validation_result": None,
-                    "error": None,
                 },
                 indent=2,
             )
@@ -287,8 +278,11 @@ class TestOrchestratorEnginePersistence:
         assert recovered.state.provider_runtime["agent-gatekeeper-user_discussion-001"].provider_thread_id == (
             "thread-legacy"
         )
-        recovered_records = {record.agent_id: record for record in recovered.list_agent_records()}
-        assert recovered_records["agent-gatekeeper-user_discussion-001"].task_id == "gatekeeper-user_discussion"
+        recovered_records = {record.identity.agent_id: record for record in recovered.list_agent_records()}
+        assert (
+            recovered_records["agent-gatekeeper-user_discussion-001"].identity.task_id
+            == "gatekeeper-user_discussion"
+        )
         assert recovered_records["agent-gatekeeper-user_discussion-001"].provider.thread_path == "/tmp/thread-legacy.jsonl"
 
         persisted_state = json.loads(state_path.read_text(encoding="utf-8"))

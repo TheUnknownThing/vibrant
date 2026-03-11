@@ -113,7 +113,7 @@ class ReviewService:
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.TASK_COMPLETION,
             trigger_description=trigger_description,
-            agent_summary=agent_record.summary,
+            agent_summary=agent_record.outcome.summary,
         )
 
     def build_failure_request(
@@ -135,7 +135,7 @@ class ReviewService:
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.TASK_FAILURE,
             trigger_description=trigger_description,
-            agent_summary=agent_record.summary or reason,
+            agent_summary=agent_record.outcome.summary or reason,
         )
 
     def build_escalation_request(
@@ -157,7 +157,7 @@ class ReviewService:
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.MAX_RETRIES_EXCEEDED,
             trigger_description=trigger_description,
-            agent_summary=agent_record.summary or reason,
+            agent_summary=agent_record.outcome.summary or reason,
         )
 
 

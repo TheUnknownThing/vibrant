@@ -189,15 +189,15 @@ class AgentOutput(Static):
         ordered_records = sorted(
             list(agent_records),
             key=lambda record: (
-                record.started_at.timestamp() if record.started_at is not None else 0.0,
-                record.agent_id,
+                record.lifecycle.started_at.timestamp() if record.lifecycle.started_at is not None else 0.0,
+                record.identity.agent_id,
             ),
         )
 
         for record in ordered_records:
-            stream = self._ensure_stream(record.agent_id)
-            stream.task_id = record.task_id
-            stream.status = record.status.value
+            stream = self._ensure_stream(record.identity.agent_id)
+            stream.task_id = record.identity.task_id
+            stream.status = record.lifecycle.status.value
             stream.provider_thread_id = record.provider.provider_thread_id
 
             canonical_path = _path_or_none(record.provider.canonical_event_log)
@@ -225,7 +225,7 @@ class AgentOutput(Static):
             ):
                 self._backfill_canonical_log(stream)
 
-        self._agent_order = [record.agent_id for record in ordered_records]
+        self._agent_order = [record.identity.agent_id for record in ordered_records]
         self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
         self._poll_native_logs()
         self._refresh_view()

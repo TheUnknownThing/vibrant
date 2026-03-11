@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
+from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.agents.runtime import RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
-from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
@@ -126,7 +126,7 @@ class FakeCodeAgentAdapter:
 
     async def start_thread(self, **kwargs: Any) -> Any:
         self.start_thread_calls.append(kwargs)
-        self.provider_thread_id = f"thread-{self.agent_record.task_id}-{len(self.start_thread_calls)}"
+        self.provider_thread_id = f"thread-{self.agent_record.identity.task_id}-{len(self.start_thread_calls)}"
         if self.agent_record is not None:
             self.agent_record.provider.provider_thread_id = self.provider_thread_id
             self.agent_record.provider.resume_cursor = {"threadId": self.provider_thread_id}
@@ -156,9 +156,9 @@ class FakeCodeAgentAdapter:
             content = FakeCodeAgentAdapter.success_contents.pop(0) if FakeCodeAgentAdapter.success_contents else "feature\n"
             _write(self.cwd / "app.txt", content)
             _git(self.cwd, "add", "app.txt")
-            _git(self.cwd, "commit", "-m", f"[vibrant:{self.agent_record.task_id}] implement")
-            await self._emit({"type": "content.delta", "delta": f"Implemented {self.agent_record.task_id}."})
-            await self._emit({"type": "turn.completed", "turn": {"id": f"turn-{self.agent_record.task_id}"}})
+            _git(self.cwd, "commit", "-m", f"[vibrant:{self.agent_record.identity.task_id}] implement")
+            await self._emit({"type": "content.delta", "delta": f"Implemented {self.agent_record.identity.task_id}."})
+            await self._emit({"type": "turn.completed", "turn": {"id": f"turn-{self.agent_record.identity.task_id}"}})
             self.client._process.returncode = 0
         elif scenario == "failure":
             self.client._process.returncode = 1
@@ -166,7 +166,7 @@ class FakeCodeAgentAdapter:
         else:
             raise AssertionError(f"Unknown fake scenario: {scenario}")
 
-        return {"turn": {"id": f"turn-{self.agent_record.task_id}"}}
+        return {"turn": {"id": f"turn-{self.agent_record.identity.task_id}"}}
 
     async def interrupt_turn(self, **kwargs: Any) -> Any:
         return kwargs
@@ -178,8 +178,8 @@ class FakeCodeAgentAdapter:
         if self.on_canonical_event is not None:
             payload = {
                 "provider": "codex",
-                "agent_id": self.agent_record.agent_id,
-                "task_id": self.agent_record.task_id,
+                "agent_id": self.agent_record.identity.agent_id,
+                "task_id": self.agent_record.identity.task_id,
                 **event,
             }
             await self.on_canonical_event(payload)
@@ -321,11 +321,15 @@ class FakeGatekeeper:
 
         transcript = f"Verdict: {verdict}"
         gatekeeper_record = AgentRecord(
-            agent_id=f"gatekeeper-{request.trigger.value}-test",
-            task_id=f"gatekeeper-{request.trigger.value}",
-            type=AgentType.GATEKEEPER,
-            status=AgentStatus.AWAITING_INPUT if (questions or consensus.questions) else AgentStatus.COMPLETED,
-            summary=transcript,
+            identity={
+                "agent_id": f"gatekeeper-{request.trigger.value}-test",
+                "task_id": f"gatekeeper-{request.trigger.value}",
+                "type": AgentType.GATEKEEPER,
+            },
+            lifecycle={
+                "status": AgentStatus.AWAITING_INPUT if (questions or consensus.questions) else AgentStatus.COMPLETED,
+            },
+            outcome={"summary": transcript},
             provider=AgentProviderMetadata(
                 provider_thread_id="thread-gatekeeper-1",
                 resume_cursor={"threadId": "thread-gatekeeper-1"},
@@ -360,10 +364,8 @@ def _agent_record(
     status: AgentStatus = AgentStatus.RUNNING,
 ) -> AgentRecord:
     return AgentRecord(
-        agent_id=agent_id,
-        task_id=task_id,
-        type=agent_type,
-        status=status,
+        identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type},
+        lifecycle={"status": status},
     )
 
 
@@ -410,12 +412,12 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     agent_files = sorted((repo / ".vibrant" / "agents").glob("agent-task-001-*.json"))
     assert len(agent_files) == 1
     record = AgentRecord.model_validate_json(agent_files[0].read_text(encoding="utf-8"))
-    assert record.status is record.status.COMPLETED
-    assert record.branch == "vibrant/task-001"
-    assert record.summary == "Implemented task-001."
-    assert record.prompt_used is not None and "Change `app.txt`" in record.prompt_used
-    assert record.skills_loaded == ["testing-strategy"]
-    assert record.pid is not None
+    assert record.lifecycle.status is record.lifecycle.status.COMPLETED
+    assert record.context.branch == "vibrant/task-001"
+    assert record.outcome.summary == "Implemented task-001."
+    assert record.context.prompt_used is not None and "Change `app.txt`" in record.context.prompt_used
+    assert record.context.skills_loaded == ["testing-strategy"]
+    assert record.lifecycle.pid is not None
     assert record.provider.provider_thread_id == "thread-task-001-1"
     assert record.provider.runtime_mode == "workspace-write"
     assert record.provider.native_event_log is not None
@@ -473,36 +475,36 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
 
     for _ in range(50):
         active = lifecycle.agent_manager.list_agents(agent_type=AgentType.GATEKEEPER, include_completed=False)
-        if active and active[0].awaiting_input:
+        if active and active[0].runtime.awaiting_input:
             break
         await asyncio.sleep(0)
     else:
         raise AssertionError("Managed Gatekeeper run never surfaced through agent_manager")
 
-    snapshot = lifecycle.agent_manager.get_agent(handle.agent_record.agent_id)
+    snapshot = lifecycle.agent_manager.get_agent(handle.agent_record.identity.agent_id)
     assert snapshot is not None
-    assert snapshot.agent_type == AgentType.GATEKEEPER.value
-    assert snapshot.has_handle is True
-    assert snapshot.awaiting_input is True
-    assert snapshot.input_requests[0].request_id == "req-1"
+    assert snapshot.identity.agent_type == AgentType.GATEKEEPER.value
+    assert snapshot.runtime.has_handle is True
+    assert snapshot.runtime.awaiting_input is True
+    assert snapshot.runtime.input_requests[0].request_id == "req-1"
 
     updated = await lifecycle.agent_manager.respond_to_request(
-        handle.agent_record.agent_id,
+        handle.agent_record.identity.agent_id,
         "req-1",
         result={"answer": "Use OAuth first."},
     )
-    assert updated.agent_id == handle.agent_record.agent_id
+    assert updated.identity.agent_id == handle.agent_record.identity.agent_id
 
     result = await handle.wait()
     await asyncio.sleep(0)
 
     assert result.state is RunState.COMPLETED
-    assert lifecycle.agent_manager.get_handle(handle.agent_record.agent_id) is None
-    completed = lifecycle.agent_manager.get_agent(handle.agent_record.agent_id)
+    assert lifecycle.agent_manager.get_handle(handle.agent_record.identity.agent_id) is None
+    completed = lifecycle.agent_manager.get_agent(handle.agent_record.identity.agent_id)
     assert completed is not None
-    assert completed.has_handle is False
-    assert completed.done is True
-    assert completed.summary == "Recorded the user decision."
+    assert completed.runtime.has_handle is False
+    assert completed.runtime.done is True
+    assert completed.outcome.summary == "Recorded the user decision."
 
 
 def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
@@ -518,11 +520,11 @@ def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
     lifecycle.agent_store.upsert(record)
 
     assert not hasattr(lifecycle.state_backend, "agents")
-    assert [item.agent_id for item in lifecycle.state_store.agent_records()] == ["agent-task-standalone"]
+    assert [item.identity.agent_id for item in lifecycle.state_store.agent_records()] == ["agent-task-standalone"]
     assert lifecycle.state_store.state.active_agents == ["agent-task-standalone"]
 
     facade = OrchestratorFacade(lifecycle)
-    assert [item.agent_id for item in facade.agent_records()] == ["agent-task-standalone"]
+    assert [item.identity.agent_id for item in facade.agent_records()] == ["agent-task-standalone"]
 
 
 def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(tmp_path):
@@ -636,9 +638,9 @@ async def test_task_execution_service_starts_with_handle_snapshot(tmp_path):
     snapshots = lifecycle.agent_manager.list_handle_snapshots()
 
     assert len(snapshots) == 1
-    assert snapshots[0].agent_id == attempt.agent_record.agent_id
-    assert snapshots[0].task_id == task.id
-    assert snapshots[0].agent_type == "code"
+    assert snapshots[0].identity.agent_id == attempt.agent_record.identity.agent_id
+    assert snapshots[0].identity.task_id == task.id
+    assert snapshots[0].identity.agent_type == "code"
 
     result = await lifecycle.agent_manager.wait_for_task(attempt)
 
@@ -666,31 +668,31 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
 
     active = lifecycle.agent_manager.list_active_agents()
     assert len(active) == 1
-    assert active[0].agent_id == attempt.agent_record.agent_id
-    assert active[0].task_id == task.id
-    assert active[0].agent_type == "code"
-    assert active[0].has_handle is True
-    assert active[0].active is True
-    assert active[0].provider_thread_id == "thread-task-001-1"
+    assert active[0].identity.agent_id == attempt.agent_record.identity.agent_id
+    assert active[0].identity.task_id == task.id
+    assert active[0].identity.agent_type == "code"
+    assert active[0].runtime.has_handle is True
+    assert active[0].runtime.active is True
+    assert active[0].provider.thread_id == "thread-task-001-1"
 
     result = await lifecycle.agent_manager.wait_for_task(attempt)
 
     assert result.outcome == "accepted"
 
-    snapshot = lifecycle.agent_manager.get_agent(attempt.agent_record.agent_id)
+    snapshot = lifecycle.agent_manager.get_agent(attempt.agent_record.identity.agent_id)
     assert snapshot is not None
-    assert snapshot.agent_id == attempt.agent_record.agent_id
-    assert snapshot.has_handle is False
-    assert snapshot.active is False
-    assert snapshot.done is True
-    assert snapshot.status == "completed"
-    assert snapshot.state == "completed"
-    assert snapshot.summary == "Implemented task-001."
-    assert snapshot.provider_thread_id == "thread-task-001-1"
+    assert snapshot.identity.agent_id == attempt.agent_record.identity.agent_id
+    assert snapshot.runtime.has_handle is False
+    assert snapshot.runtime.active is False
+    assert snapshot.runtime.done is True
+    assert snapshot.runtime.status == "completed"
+    assert snapshot.runtime.state == "completed"
+    assert snapshot.outcome.summary == "Implemented task-001."
+    assert snapshot.provider.thread_id == "thread-task-001-1"
 
     latest = lifecycle.agent_manager.latest_for_task(task.id)
     assert latest is not None
-    assert latest.agent_id == attempt.agent_record.agent_id
+    assert latest.identity.agent_id == attempt.agent_record.identity.agent_id
 
 
 def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(tmp_path):
@@ -712,10 +714,10 @@ def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(t
 
     active = lifecycle.agent_manager.list_active_agents()
 
-    assert [snapshot.agent_id for snapshot in active] == [record.agent_id]
-    assert active[0].has_handle is False
-    assert active[0].active is True
-    assert active[0].awaiting_input is True
+    assert [snapshot.identity.agent_id for snapshot in active] == [record.identity.agent_id]
+    assert active[0].runtime.has_handle is False
+    assert active[0].runtime.active is True
+    assert active[0].runtime.awaiting_input is True
 
 
 def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path):
@@ -734,7 +736,7 @@ def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path)
 
     snapshots = lifecycle.agent_manager.list_agents(agent_type=" CODE ")
 
-    assert [snapshot.agent_id for snapshot in snapshots] == [code_record.agent_id]
+    assert [snapshot.identity.agent_id for snapshot in snapshots] == [code_record.identity.agent_id]
 
 
 def test_agent_management_service_rejects_invalid_string_agent_type_filters(tmp_path):
