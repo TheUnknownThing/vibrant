@@ -15,8 +15,8 @@ from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, Static
 
+from ..agents import PLANNING_COMPLETE_MCP_TOOL
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, resolve_project_path
-from ..gatekeeper import PLANNING_COMPLETE_MCP_SENTINEL, PLANNING_COMPLETE_MCP_TOOL
 from ..history import HistoryStore
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus, ThreadInfo
 from ..orchestrator import CodeAgentLifecycleResult, Orchestrator, OrchestratorFacade, create_orchestrator
@@ -1130,12 +1130,6 @@ def _render_gatekeeper_result_text(result: object) -> str:
 
 
 def _extract_planning_completion_request(result: object) -> str | None:
-    transcript = getattr(result, "transcript", None)
-    if isinstance(transcript, str):
-        for line in transcript.splitlines():
-            if line.strip() == PLANNING_COMPLETE_MCP_SENTINEL:
-                return PLANNING_COMPLETE_MCP_TOOL
-
     events = getattr(result, "events", None)
     if isinstance(events, list):
         for event in events:
