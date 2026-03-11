@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.state import OrchestratorState
 from vibrant.orchestrator import OrchestratorAgentSnapshot, OrchestratorFacade
@@ -125,3 +127,51 @@ def test_facade_falls_back_to_agent_records_when_agent_manager_is_absent() -> No
     assert completed_snapshot.active is False
     assert completed_snapshot.summary == "Done"
 
+
+def test_facade_raises_for_invalid_workflow_status() -> None:
+    lifecycle = SimpleNamespace(
+        engine=SimpleNamespace(state=SimpleNamespace(status="mystery")),
+        execution_mode="manual",
+    )
+
+    facade = OrchestratorFacade(lifecycle)
+
+    with pytest.raises(ValueError, match="Unsupported orchestrator status"):
+        facade.workflow_status()
+
+
+def test_facade_raises_for_invalid_execution_mode() -> None:
+    lifecycle = SimpleNamespace(
+        engine=SimpleNamespace(state=OrchestratorState(session_id="session-3")),
+        execution_mode="surprise",
+    )
+
+    facade = OrchestratorFacade(lifecycle)
+
+    with pytest.raises(ValueError, match="Unsupported roadmap execution mode"):
+        _ = facade.execution_mode
+
+
+def test_facade_raises_for_invalid_managed_agent_snapshot() -> None:
+    managed = SimpleNamespace(
+        agent_id="agent-1",
+        task_id="task-1",
+        agent_type="code",
+        status="mystery",
+        state="running",
+        has_handle=True,
+        active=True,
+        done=False,
+        awaiting_input=False,
+        input_requests=[],
+    )
+    lifecycle = SimpleNamespace(
+        agent_manager=_FakeAgentManager([managed]),
+        engine=SimpleNamespace(state=OrchestratorState(session_id="session-4")),
+        execution_mode="manual",
+    )
+
+    facade = OrchestratorFacade(lifecycle)
+
+    with pytest.raises(ValueError, match="Unsupported agent status"):
+        facade.get_agent("agent-1")

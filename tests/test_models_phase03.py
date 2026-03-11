@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from pydantic import ValidationError
 
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import (
@@ -103,6 +104,21 @@ class TestAgentRecord:
             "threadPath": "/tmp/thread-123.jsonl",
         }
         assert record.provider.thread_path == "/tmp/thread-123.jsonl"
+
+    def test_invalid_provider_runtime_mode_raises(self):
+        with pytest.raises(ValidationError, match="Unsupported provider runtime mode"):
+            AgentProviderMetadata.model_validate({"runtime_mode": "mystery-mode"})
+
+    def test_legacy_agent_record_without_valid_agent_id_raises(self):
+        with pytest.raises(ValidationError, match="Cannot infer task_id from legacy agent record"):
+            AgentRecord.model_validate(
+                {
+                    "agent_id": "",
+                    "agent_kind": "code",
+                    "status": "running",
+                    "task_id": None,
+                }
+            )
 
 
 class TestOrchestratorState:

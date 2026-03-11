@@ -439,16 +439,10 @@ class BaseAgentRuntime:
             _sync_handle_state(handle, record)
             # Forward to the original callback if set.
             if original_callback is not None:
-                try:
-                    original_callback(record)
-                except Exception:
-                    logger.debug("original on_agent_record_updated failed", exc_info=True)
+                original_callback(record)
             # Forward to the orchestrator-supplied callback.
             if on_record_updated is not None:
-                try:
-                    on_record_updated(record)
-                except Exception:
-                    logger.debug("on_record_updated callback failed", exc_info=True)
+                on_record_updated(record)
 
         self._agent.on_agent_record_updated = _bridge_callback
 
@@ -543,4 +537,8 @@ def _sync_handle_state(handle: AgentHandle, record: AgentRecord) -> None:
         AgentStatus.FAILED: RunState.FAILED,
         AgentStatus.KILLED: RunState.FAILED,
     }
-    handle._set_state(mapping.get(record.status, RunState.RUNNING))
+    try:
+        next_state = mapping[record.status]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported agent status for runtime handle sync: {record.status!r}") from exc
+    handle._set_state(next_state)

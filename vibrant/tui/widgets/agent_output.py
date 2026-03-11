@@ -257,7 +257,7 @@ class AgentOutput(Static):
         if event_type == "task.progress":
             for line in _render_task_progress_lines(event):
                 self._append_canonical_line(stream, line)
-        else:
+        elif event_type != "content.delta":
             for line in _render_canonical_event_lines(event):
                 self._append_canonical_line(stream, line)
 
@@ -643,6 +643,7 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
 
 
 def _render_task_progress_lines(event: dict[str, Any]) -> list[str]:
+    event_type = str(event.get("type") or "event")
     item = event.get("item") if isinstance(event.get("item"), dict) else {}
     item_type = str(item.get("type") or event.get("item_type") or "").strip().lower()
 
