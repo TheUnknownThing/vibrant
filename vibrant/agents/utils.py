@@ -62,6 +62,9 @@ def _normalize_progress_item_token(value: Any) -> str:
 
 def extract_error_message(event: CanonicalEvent) -> str:
     """Extract a human-readable error string from a runtime.error event."""
+    error_message = event.get("error_message")
+    if isinstance(error_message, str) and error_message:
+        return error_message
     error = event.get("error")
     if isinstance(error, dict):
         return str(error.get("message") or error)

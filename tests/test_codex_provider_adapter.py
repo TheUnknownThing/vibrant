@@ -86,6 +86,10 @@ class TestCodexProviderAdapter:
         assert agent.provider.thread_path == ".codex/threads/thread_abc123"
         assert agent.provider.rollout_path == ".codex/threads/thread_abc123/rollout.jsonl"
         assert [event["type"] for event in events[:2]] == ["session.started", "thread.started"]
+        assert events[0]["origin"] == "provider"
+        assert events[0]["provider"] == "codex"
+        assert events[0]["provider_payload"] == {"initialize_result": {"serverInfo": {"name": "codex"}}}
+        assert events[1]["thread_path"] == ".codex/threads/thread_abc123"
 
     @pytest.mark.asyncio
     async def test_start_thread_omits_model_provider_when_unset(self):
@@ -120,6 +124,7 @@ class TestCodexProviderAdapter:
         assert events[0]["item_id"] == "item-1"
         assert events[0]["turn_id"] == "turn-1"
         assert events[0]["delta"] == "hello"
+        assert events[0]["provider_payload"] == {"itemId": "item-1", "turnId": "turn-1", "delta": "hello"}
 
     @pytest.mark.asyncio
     async def test_reasoning_summary_delta_maps_to_canonical_event(self):
@@ -136,10 +141,17 @@ class TestCodexProviderAdapter:
         assert [event["type"] for event in events] == ["task.progress", "reasoning.summary.delta"]
         assert events[0]["item"]["type"] == "reasoning"
         assert events[0]["item"]["text"] == "summary"
+        assert events[0]["text"] == "summary"
         assert events[1]["item_id"] == "item-r1"
         assert events[1]["turn_id"] == "turn-1"
         assert events[1]["delta"] == "summary"
         assert events[1]["summary_index"] == 0
+        assert events[1]["provider_payload"] == {
+            "itemId": "item-r1",
+            "turnId": "turn-1",
+            "delta": "summary",
+            "summaryIndex": 0,
+        }
 
     @pytest.mark.asyncio
     async def test_turn_completed_maps_to_canonical_turn_completed(self):
@@ -154,7 +166,10 @@ class TestCodexProviderAdapter:
         )
 
         assert [event["type"] for event in events] == ["turn.completed", "task.completed"]
+        assert events[0]["turn_id"] == "turn-123"
+        assert events[0]["turn_status"] == "completed"
         assert events[0]["turn"]["id"] == "turn-123"
+        assert events[0]["provider_payload"] == {"turn": {"id": "turn-123", "status": "completed"}}
 
     @pytest.mark.asyncio
     async def test_server_request_maps_to_request_opened_and_responds(self):
@@ -228,6 +243,7 @@ class TestCodexProviderAdapter:
         item = events[0]["item"]
         assert item.get("text") == "line 1\nline 2"
         assert "content" not in item
+        assert events[0]["text"] == "line 1\nline 2"
 
     @pytest.mark.asyncio
     async def test_reasoning_completed_does_not_duplicate_visible_summary_delta(self):
@@ -350,6 +366,25 @@ class TestCodexProviderAdapter:
         assert client.calls[0][1]["threadId"] == "thread_abc123"
         assert client.calls[0][1]["sandbox"] == "read-only"
         assert client.calls[0][1]["approvalPolicy"] == "on-request"
+
+    @pytest.mark.asyncio
+    async def test_runtime_error_maps_stable_error_fields(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="turn/error",
+                params={"error": {"code": -32000, "message": "approval denied"}},
+            )
+        )
+
+        assert len(events) == 1
+        assert events[0]["type"] == "runtime.error"
+        assert events[0]["error"] == {"code": -32000, "message": "approval denied"}
+        assert events[0]["error_message"] == "approval denied"
+        assert events[0]["error_code"] == -32000
+        assert events[0]["provider_payload"] == {"error": {"code": -32000, "message": "approval denied"}}
 
 
 @pytest.mark.asyncio

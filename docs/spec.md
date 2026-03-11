@@ -489,6 +489,24 @@ Codex may also emit supplementary native notifications under `codex/event/*`. Vi
 - `turn.completed`
 - `runtime.error`
 
+Each canonical event should use the same dict-backed envelope regardless of backend:
+- required: `type`, `timestamp`
+- optional common routing fields: `origin`, `provider`, `agent_id`, `task_id`, `provider_thread_id`
+- optional provider escape hatch: `provider_payload`
+
+Known event-specific top-level fields should stay provider-neutral. In particular:
+- `thread.started`: `resumed`, optional `thread_path`, optional `thread`
+- `turn.started` / `turn.completed` / `task.completed`: `turn_id`, optional `turn_status`, optional `turn`
+- `content.delta`: `item_id`, `turn_id`, `delta`
+- `reasoning.summary.delta`: `item_id`, `turn_id`, `delta`, optional `summary_index`
+- `task.progress`: `item`, optional `turn_id`, optional `item_type`, optional `text`
+- `request.opened`: `request_id`, `request_kind`, `method`, optional `params`
+- `request.resolved`: `request_id`, `request_kind`, `method`, optional `result`, optional `error`, optional `error_message`
+- `user-input.requested` / `user-input.resolved`: the request fields above, plus orchestrator-generated question fields when applicable
+- `runtime.error`: optional `error`, optional `error_code`, optional `error_message`
+
+Backend-specific wire payloads should not introduce new top-level canonical keys unless they are intended to become part of the shared contract. Extra provider detail belongs in `provider_payload`.
+
 These canonical events drive:
 - Panel B live output rendering
 - task progress updates in the TUI

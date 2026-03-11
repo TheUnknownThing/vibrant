@@ -219,7 +219,7 @@ class AgentOutput(Static):
         if event_type == "content.delta":
             self._consume_assistant_delta(stream, str(event.get("delta") or ""), _timestamp_text(event.get("timestamp")))
         elif event_type == "task.progress":
-            progress_text = _extract_progress_text(event.get("item"))
+            progress_text = _event_text(event) or _extract_progress_text(event.get("item"))
             if progress_text:
                 for line in _split_visible_lines(progress_text):
                     self._append_canonical_line(stream, _compose_line(event, f"⋯ {line}"))
@@ -545,7 +545,7 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
         return [_compose_line(event, f"session.state.changed {state}".strip())]
     if event_type == "thread.started":
         thread = event.get("thread") if isinstance(event.get("thread"), dict) else {}
-        thread_id = thread.get("id")
+        thread_id = event.get("provider_thread_id") or thread.get("id")
         resumed = " resumed" if event.get("resumed") else ""
         detail = f"thread.started{resumed}"
         if thread_id:
@@ -553,11 +553,11 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
         return [_compose_line(event, detail)]
     if event_type == "turn.started":
         turn = event.get("turn") if isinstance(event.get("turn"), dict) else {}
-        turn_id = turn.get("id")
+        turn_id = event.get("turn_id") or turn.get("id")
         return [_compose_line(event, f"turn.started id={turn_id}" if turn_id else "turn.started")]
     if event_type == "turn.completed":
         turn = event.get("turn") if isinstance(event.get("turn"), dict) else {}
-        turn_id = turn.get("id")
+        turn_id = event.get("turn_id") or turn.get("id")
         return [_compose_line(event, f"turn.completed id={turn_id}" if turn_id else "turn.completed")]
     if event_type == "task.completed":
         return [_compose_line(event, "task.completed")]
@@ -575,6 +575,8 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
     if event_type == "runtime.error":
         return [_compose_line(event, f"✗ runtime.error {_error_text(event)}".rstrip())]
     if event_type == "content.delta":
+        return []
+    if event_type == "reasoning.summary.delta":
         return []
 
     payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "provider", "agent_id", "task_id"}}
@@ -609,10 +611,18 @@ def _split_visible_lines(text: str) -> list[str]:
 
 
 def _error_text(event: dict[str, Any]) -> str:
+    if isinstance(event.get("error_message"), str) and event["error_message"]:
+        return event["error_message"]
     error = event.get("error")
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "")
+
+
+
+def _event_text(event: dict[str, Any]) -> str:
+    text = event.get("text")
+    return text if isinstance(text, str) else ""
 
 
 
