@@ -5,9 +5,9 @@ The preferred surface is intentionally small:
 - stable reads via ``snapshot()`` and related helpers
 - stable user/operator intents such as Gatekeeper messaging and pause/resume
 
-Legacy runtime-driving methods remain available for compatibility during the
-orchestrator migration, but they are intentionally routed through internal
-bridges instead of being treated as the long-term public contract.
+Some runtime-driving methods remain temporarily available during the
+orchestrator migration, but callers should prefer the facade's stable read and
+workflow APIs over engine-shaped access.
 """
 
 from __future__ import annotations
@@ -53,199 +53,6 @@ class OrchestratorSnapshot:
     notification_bell_enabled: bool
 
 
-class LegacyOrchestratorStateView:
-    """Compatibility view that exposes the legacy state shape."""
-
-    def __init__(self, snapshot: OrchestratorSnapshot, fallback_state: object | None = None) -> None:
-        self._snapshot = snapshot
-        self._fallback_state = fallback_state
-
-    @property
-    def status(self) -> OrchestratorStatus:
-        return self._snapshot.status
-
-    @property
-    def pending_questions(self) -> list[str]:
-        return list(self._snapshot.pending_questions)
-
-    @property
-    def questions(self) -> list[QuestionRecord]:
-        return list(self._snapshot.question_records)
-
-    def __getattr__(self, name: str) -> Any:
-        if self._fallback_state is None:
-            raise AttributeError(name)
-        return getattr(self._fallback_state, name)
-
-
-class LegacyOrchestratorEngineView:
-    """Compatibility view that preserves the old ``facade.engine`` access pattern."""
-
-    def __init__(
-        self,
-        facade: OrchestratorFacade,
-        snapshot: OrchestratorSnapshot,
-        fallback_engine: object | None = None,
-    ) -> None:
-        self._facade = facade
-        self._fallback_engine = fallback_engine
-        fallback_state = getattr(fallback_engine, "state", None)
-        self.state = LegacyOrchestratorStateView(snapshot, fallback_state=fallback_state)
-        self.agents = self._build_agents(snapshot, fallback_engine)
-        self.consensus = snapshot.consensus
-        self.consensus_path = snapshot.consensus_path
-        self.notification_bell_enabled = snapshot.notification_bell_enabled
-        self.USER_INPUT_BANNER = snapshot.user_input_banner
-
-    @staticmethod
-    def _build_agents(
-        snapshot: OrchestratorSnapshot,
-        fallback_engine: object | None,
-    ) -> dict[str, AgentRecord]:
-        agents = getattr(fallback_engine, "agents", None)
-        if isinstance(agents, dict):
-            return agents
-        return {record.agent_id: record for record in snapshot.agent_records}
-
-    def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
-        method = getattr(self._fallback_engine, "can_transition_to", None)
-        if callable(method):
-            return bool(method(next_status))
-        return self._facade.can_transition_to(next_status)
-
-    def refresh_from_disk(self) -> None:
-        self._facade.reload_from_disk()
-        refreshed = self._facade.snapshot()
-        fallback_state = getattr(self._fallback_engine, "state", None)
-        self.state = LegacyOrchestratorStateView(refreshed, fallback_state=fallback_state)
-        self.agents = self._build_agents(refreshed, self._fallback_engine)
-        self.consensus = refreshed.consensus
-        self.consensus_path = refreshed.consensus_path
-        self.notification_bell_enabled = refreshed.notification_bell_enabled
-        self.USER_INPUT_BANNER = refreshed.user_input_banner
-
-    def __getattr__(self, name: str) -> Any:
-        if self._fallback_engine is None:
-            raise AttributeError(name)
-        return getattr(self._fallback_engine, name)
-
-
-class _LifecycleExecutionCompat:
-    """Internal compatibility adapter for runtime-driving lifecycle calls."""
-
-    def __init__(self, lifecycle: CodeAgentLifecycle | Any) -> None:
-        self.lifecycle = lifecycle
-
-    def reload_from_disk(self) -> RoadmapDocument:
-        reload_from_disk = getattr(self.lifecycle, "reload_from_disk", None)
-        if not callable(reload_from_disk):
-            raise AttributeError("Lifecycle does not support reload_from_disk")
-        return reload_from_disk()
-
-    async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
-        execute = getattr(self.lifecycle, "execute_until_blocked", None)
-        if not callable(execute):
-            raise AttributeError("Lifecycle does not support execute_until_blocked")
-        return await execute()
-
-    async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
-        execute = getattr(self.lifecycle, "execute_next_task", None)
-        if not callable(execute):
-            raise AttributeError("Lifecycle does not support execute_next_task")
-        return await execute()
-
-
-class _WorkflowTransitionCompat:
-    """Internal transition bridge that prefers services and falls back to the raw engine."""
-
-    def __init__(self, facade: OrchestratorFacade) -> None:
-        self.facade = facade
-        self.lifecycle = facade.lifecycle
-
-    def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
-        state_store = getattr(self.lifecycle, "state_store", None)
-        method = getattr(state_store, "can_transition_to", None)
-        if callable(method):
-            return bool(method(next_status))
-
-        engine = self.facade._engine()
-        method = getattr(engine, "can_transition_to", None)
-        if not callable(method):
-            return False
-        return bool(method(next_status))
-
-    def transition_to(self, next_status: OrchestratorStatus) -> None:
-        engine = self.facade._engine()
-        if engine is None:
-            raise RuntimeError("Project lifecycle is not initialized")
-
-        current = getattr(getattr(engine, "state", None), "status", None)
-        if current is next_status:
-            return
-        if not self.can_transition_to(next_status):
-            current_value = getattr(current, "value", str(current))
-            raise ValueError(f"Invalid orchestrator state transition: {current_value} -> {next_status.value}")
-
-        self._sync_consensus_status(next_status)
-
-        current = getattr(getattr(engine, "state", None), "status", None)
-        if current is next_status:
-            return
-        if not self.can_transition_to(next_status):
-            current_value = getattr(current, "value", str(current))
-            raise ValueError(f"Invalid orchestrator state transition: {current_value} -> {next_status.value}")
-
-        state_store = getattr(self.lifecycle, "state_store", None)
-        transition = getattr(state_store, "transition_to", None)
-        if callable(transition):
-            transition(next_status)
-        else:
-            engine.transition_to(next_status)
-
-        refresh = getattr(state_store, "refresh", None)
-        if callable(refresh):
-            refresh()
-        else:
-            engine.refresh_from_disk()
-
-    def pause(self) -> None:
-        if self.facade.workflow_status() is OrchestratorStatus.PAUSED:
-            return
-        self.transition_to(OrchestratorStatus.PAUSED)
-
-    def resume(self) -> None:
-        current = self.facade.workflow_status()
-        if current is OrchestratorStatus.EXECUTING:
-            return
-        if current is not OrchestratorStatus.PAUSED:
-            raise ValueError(f"Cannot resume workflow from {current.value}")
-        self.transition_to(OrchestratorStatus.EXECUTING)
-
-    def _sync_consensus_status(self, next_status: OrchestratorStatus) -> None:
-        target_consensus_status = _WORKFLOW_TO_CONSENSUS.get(next_status)
-        if target_consensus_status is None:
-            return
-
-        consensus_service = getattr(self.lifecycle, "consensus_service", None)
-        set_status = getattr(consensus_service, "set_status", None)
-        if callable(set_status):
-            set_status(target_consensus_status)
-            return
-
-        engine = self.facade._engine()
-        consensus_document = getattr(engine, "consensus", None)
-        consensus_path = self.facade._consensus_path(engine)
-        if consensus_path is None or not consensus_path.exists():
-            return
-
-        document = consensus_document
-        if document is None:
-            document = ConsensusParser().parse_file(consensus_path)
-        updated_document = document.model_copy(deep=True)
-        updated_document.status = target_consensus_status
-        engine.consensus = ConsensusWriter().write(consensus_path, updated_document)
-
-
 class OrchestratorFacade:
     """Single entry point for orchestrator-backed app operations.
 
@@ -255,9 +62,8 @@ class OrchestratorFacade:
     - Gatekeeper/user intent entrypoints
     - semantic workflow actions such as pause/resume
 
-    Compatibility surface retained during migration:
+    Temporary runtime-oriented surface retained during migration:
 
-    - raw ``engine`` passthrough
     - ``reload_from_disk()``
     - ``execute_*`` runtime-driving helpers
     - generic state-transition helpers
@@ -266,8 +72,6 @@ class OrchestratorFacade:
     def __init__(self, lifecycle: CodeAgentLifecycle | Any) -> None:
         self.lifecycle = lifecycle
         self.questions = getattr(lifecycle, "question_service", None)
-        self._execution_compat = _LifecycleExecutionCompat(lifecycle)
-        self._workflow_compat = _WorkflowTransitionCompat(self)
 
     def _engine(self) -> Any | None:
         return getattr(self.lifecycle, "engine", None)
@@ -434,12 +238,6 @@ class OrchestratorFacade:
                 return float(timestamp())
 
         return 0.0
-
-    @property
-    def engine(self):
-        engine = self._engine()
-        snapshot = self.snapshot()
-        return LegacyOrchestratorEngineView(self, snapshot, fallback_engine=engine)
 
     @property
     def roadmap_document(self) -> RoadmapDocument | None:
@@ -708,10 +506,17 @@ class OrchestratorFacade:
         raise AttributeError("Lifecycle does not support answering pending Gatekeeper questions")
 
     def pause_workflow(self) -> None:
-        self._workflow_compat.pause()
+        if self.workflow_status() is OrchestratorStatus.PAUSED:
+            return
+        self.transition_workflow_state(OrchestratorStatus.PAUSED)
 
     def resume_workflow(self) -> None:
-        self._workflow_compat.resume()
+        current = self.workflow_status()
+        if current is OrchestratorStatus.EXECUTING:
+            return
+        if current is not OrchestratorStatus.PAUSED:
+            raise ValueError(f"Cannot resume workflow from {current.value}")
+        self.transition_workflow_state(OrchestratorStatus.EXECUTING)
 
     def pending_questions(self) -> list[str]:
         if self.questions is not None:
@@ -727,24 +532,95 @@ class OrchestratorFacade:
         return questions[0] if questions else None
 
     def reload_from_disk(self) -> RoadmapDocument:
-        return self._execution_compat.reload_from_disk()
+        reload_from_disk = getattr(self.lifecycle, "reload_from_disk", None)
+        if not callable(reload_from_disk):
+            raise AttributeError("Lifecycle does not support reload_from_disk")
+        return reload_from_disk()
 
     async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
-        return await self._execution_compat.execute_until_blocked()
+        execute = getattr(self.lifecycle, "execute_until_blocked", None)
+        if not callable(execute):
+            raise AttributeError("Lifecycle does not support execute_until_blocked")
+        return await execute()
 
     async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
-        return await self._execution_compat.execute_next_task()
+        execute = getattr(self.lifecycle, "execute_next_task", None)
+        if not callable(execute):
+            raise AttributeError("Lifecycle does not support execute_next_task")
+        return await execute()
 
     def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
-        return self._workflow_compat.can_transition_to(next_status)
+        state_store = self._state_store()
+        method = getattr(state_store, "can_transition_to", None)
+        if callable(method):
+            return bool(method(next_status))
+
+        engine = self._engine()
+        method = getattr(engine, "can_transition_to", None)
+        if not callable(method):
+            return False
+        return bool(method(next_status))
 
     def transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
-        self._workflow_compat.transition_to(next_status)
+        engine = self._engine()
+        if engine is None:
+            raise RuntimeError("Project lifecycle is not initialized")
+
+        current = getattr(getattr(engine, "state", None), "status", None)
+        if current is next_status:
+            return
+        if not self.can_transition_to(next_status):
+            current_value = getattr(current, "value", str(current))
+            raise ValueError(f"Invalid orchestrator state transition: {current_value} -> {next_status.value}")
+
+        self._sync_consensus_status(next_status)
+
+        current = getattr(getattr(engine, "state", None), "status", None)
+        if current is next_status:
+            return
+        if not self.can_transition_to(next_status):
+            current_value = getattr(current, "value", str(current))
+            raise ValueError(f"Invalid orchestrator state transition: {current_value} -> {next_status.value}")
+
+        state_store = self._state_store()
+        transition = getattr(state_store, "transition_to", None)
+        if callable(transition):
+            transition(next_status)
+        else:
+            engine.transition_to(next_status)
+
+        refresh = getattr(state_store, "refresh", None)
+        if callable(refresh):
+            refresh()
+        else:
+            engine.refresh_from_disk()
+
+    def _sync_consensus_status(self, next_status: OrchestratorStatus) -> None:
+        target_consensus_status = _WORKFLOW_TO_CONSENSUS.get(next_status)
+        if target_consensus_status is None:
+            return
+
+        consensus_service = getattr(self.lifecycle, "consensus_service", None)
+        set_status = getattr(consensus_service, "set_status", None)
+        if callable(set_status):
+            set_status(target_consensus_status)
+            return
+
+        engine = self._engine()
+        consensus_document = getattr(engine, "consensus", None)
+        consensus_path = self._consensus_path(engine)
+        if consensus_path is None or not consensus_path.exists():
+            return
+
+        document = consensus_document
+        if document is None:
+            document = ConsensusParser().parse_file(consensus_path)
+        updated_document = document.model_copy(deep=True)
+        updated_document.status = target_consensus_status
+        engine.consensus = ConsensusWriter().write(consensus_path, updated_document)
 
 
 __all__ = [
-    "LegacyOrchestratorEngineView",
-    "LegacyOrchestratorStateView",
     "OrchestratorFacade",
     "OrchestratorSnapshot",
 ]
