@@ -153,7 +153,10 @@ class GatekeeperToolHandlers:
         )
 
     def update_roadmap(self, *, tasks: Sequence[dict[str, Any]], project: str | None = None) -> dict[str, Any]:
-        roadmap = self.facade.replace_roadmap(tasks=list(tasks), project=project)
+        roadmap = self.facade.replace_roadmap(
+            tasks=[TaskInfo.model_validate(task) for task in tasks],
+            project=project,
+        )
         return {
             "project": roadmap.project,
             "tasks": [task.model_dump(mode="json") for task in roadmap.tasks],
