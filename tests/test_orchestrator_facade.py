@@ -156,7 +156,7 @@ def test_facade_raises_for_invalid_workflow_status() -> None:
     facade = OrchestratorFacade(lifecycle)
 
     with pytest.raises(ValueError, match="Unsupported orchestrator status"):
-        facade.workflow_status()
+        facade.get_workflow_status()
 
 
 def test_facade_raises_for_invalid_execution_mode() -> None:

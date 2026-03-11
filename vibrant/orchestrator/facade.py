@@ -85,19 +85,19 @@ class OrchestratorFacade:
             notification_bell_enabled=state_store.notification_bell_enabled(),
         )
 
-    def workflow_status(self) -> OrchestratorStatus:
+    def get_workflow_status(self) -> OrchestratorStatus:
         return self.orchestrator.state_store.status
 
-    def consensus_document(self) -> ConsensusDocument | None:
+    def get_consensus_document(self) -> ConsensusDocument | None:
         return self.orchestrator.consensus_service.current()
 
-    def roadmap(self) -> RoadmapDocument | None:
+    def get_roadmap(self) -> RoadmapDocument | None:
         return self.orchestrator.roadmap_document
 
-    def consensus_source_path(self) -> Path | None:
+    def get_consensus_source_path(self) -> Path | None:
         return self.orchestrator.consensus_path
 
-    def agent_records(self) -> list[AgentRecord]:
+    def list_agent_records(self) -> list[AgentRecord]:
         return self.orchestrator.agent_manager.list_records()
 
     def get_agent(self, agent_id: str) -> OrchestratorAgentSnapshot | None:
@@ -127,13 +127,13 @@ class OrchestratorFacade:
             return snapshot.outcome.output
         return self.orchestrator.agent_output_service.output_for_agent(agent_id)
 
-    def question_records(self) -> list[QuestionRecord]:
+    def list_question_records(self) -> list[QuestionRecord]:
         return self.questions.records()
 
-    def pending_question_records(self) -> list[QuestionRecord]:
+    def list_pending_question_records(self) -> list[QuestionRecord]:
         return self.questions.pending_records()
 
-    def task(self, task_id: str) -> TaskInfo | None:
+    def get_task(self, task_id: str) -> TaskInfo | None:
         return self.orchestrator.roadmap_service.get_task(task_id)
 
     def add_task(self, task: TaskInfo, *, index: int | None = None) -> TaskInfo:
@@ -247,7 +247,7 @@ class OrchestratorFacade:
     def resolve_question(self, question_id: str, *, answer: str | None = None) -> QuestionRecord:
         return self.questions.resolve(question_id, answer=answer)
 
-    def task_summaries(self) -> dict[str, str]:
+    def get_task_summaries(self) -> dict[str, str]:
         by_task: dict[str, tuple[float, str]] = {}
         for record in self.orchestrator.agent_manager.list_records():
             summary = record.outcome.summary
@@ -262,10 +262,10 @@ class OrchestratorFacade:
 
         return {task_id: summary for task_id, (_, summary) in by_task.items()}
 
-    def user_input_banner(self) -> str:
+    def get_user_input_banner(self) -> str:
         return self.orchestrator.state_store.user_input_banner()
 
-    def notification_bell_enabled(self) -> bool:
+    def is_notification_bell_enabled(self) -> bool:
         return self.orchestrator.state_store.notification_bell_enabled()
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
@@ -285,12 +285,12 @@ class OrchestratorFacade:
         return await self.questions.answer(answer, question=question)
 
     def pause_workflow(self) -> None:
-        if self.workflow_status() is OrchestratorStatus.PAUSED:
+        if self.get_workflow_status() is OrchestratorStatus.PAUSED:
             return
         self.transition_workflow_state(OrchestratorStatus.PAUSED)
 
     def resume_workflow(self) -> None:
-        current = self.workflow_status()
+        current = self.get_workflow_status()
         if current is OrchestratorStatus.EXECUTING:
             return
         if current is not OrchestratorStatus.PAUSED:
@@ -300,11 +300,11 @@ class OrchestratorFacade:
     def end_planning_phase(self) -> OrchestratorStatus:
         self.orchestrator.workflow_service.begin_execution_if_needed()
         self.orchestrator.state_store.refresh()
-        return self.workflow_status()
+        return self.get_workflow_status()
 
     def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None) -> TaskInfo:
         normalized_decision = decision.strip().lower()
-        task = self.task(task_id)
+        task = self.get_task(task_id)
         if task is None:
             raise KeyError(f"Task not found in roadmap: {task_id}")
 
@@ -350,7 +350,7 @@ class OrchestratorFacade:
         prompt: str | None = None,
         acceptance_criteria: Sequence[str] | None = None,
     ) -> TaskInfo:
-        task = self.task(task_id)
+        task = self.get_task(task_id)
         if task is None:
             raise KeyError(f"Task not found in roadmap: {task_id}")
 
@@ -370,10 +370,10 @@ class OrchestratorFacade:
             raise ValueError(f"Cannot mark task for retry from status {task.status.value}")
         return task
 
-    def pending_questions(self) -> list[str]:
+    def list_pending_questions(self) -> list[str]:
         return self.questions.pending_questions()
 
-    def current_pending_question(self) -> str | None:
+    def get_current_pending_question(self) -> str | None:
         return self.questions.current_question()
 
     def can_transition_to(self, next_status: OrchestratorStatus) -> bool:

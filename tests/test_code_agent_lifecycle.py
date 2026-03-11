@@ -524,7 +524,7 @@ def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
     assert lifecycle.state_store.state.active_agents == ["agent-task-standalone"]
 
     facade = OrchestratorFacade(lifecycle)
-    assert [item.identity.agent_id for item in facade.agent_records()] == ["agent-task-standalone"]
+    assert [item.identity.agent_id for item in facade.list_agent_records()] == ["agent-task-standalone"]
 
 
 def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(tmp_path):
