@@ -18,6 +18,7 @@ from vibrant.models.state import (
     ProviderRuntimeState,
     reconcile_question_records,
 )
+from vibrant.providers.base import CanonicalEvent
 from vibrant.project_init import ensure_project_files
 
 
@@ -61,7 +62,7 @@ class OrchestratorStateBackend:
         self.state = state
         self.consensus = consensus
         self.notification_bell_enabled = notification_bell_enabled
-        self.emitted_events: list[dict[str, object]] = []
+        self.emitted_events: list[CanonicalEvent] = []
 
     @classmethod
     def load(
@@ -270,8 +271,7 @@ class OrchestratorStateBackend:
                 )
             if self.state.status is OrchestratorStatus.INIT:
                 inferred_status = _consensus_to_orchestrator_status(self.consensus.status)
-                if inferred_status is not None:
-                    self.state.status = inferred_status
+                self.state.status = inferred_status
         elif awaiting_user_gatekeeper:
             self.state.sync_pending_question_projection()
         else:
@@ -305,7 +305,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorStatus | None:
+def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorStatus:
     mapping = {
         ConsensusStatus.INIT: OrchestratorStatus.INIT,
         ConsensusStatus.PLANNING: OrchestratorStatus.PLANNING,
@@ -313,7 +313,10 @@ def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorSt
         ConsensusStatus.PAUSED: OrchestratorStatus.PAUSED,
         ConsensusStatus.COMPLETED: OrchestratorStatus.COMPLETED,
     }
-    return mapping.get(status)
+    try:
+        return mapping[status]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported consensus status: {status!r}") from exc
 
 
 def _dedupe_preserving_order(values: list[str]) -> list[str]:

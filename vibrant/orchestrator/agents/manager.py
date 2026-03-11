@@ -91,9 +91,11 @@ class AgentManagementService:
         if isinstance(agent_type, str):
             try:
                 return AgentType(agent_type.strip().lower())
-            except ValueError:
-                return None
-        return None
+            except ValueError as exc:
+                raise ValueError(f"Unsupported agent type filter: {agent_type!r}") from exc
+        raise TypeError(
+            f"agent_type filter must be AgentType, str, or None; got {type(agent_type).__name__}"
+        )
 
     # ------------------------------------------------------------------
     # Durable record / snapshot access

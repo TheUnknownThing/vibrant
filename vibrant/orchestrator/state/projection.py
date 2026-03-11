@@ -14,6 +14,7 @@ from vibrant.models.state import (
     ProviderRuntimeState,
     reconcile_question_records,
 )
+from vibrant.providers.base import CanonicalEvent
 
 
 def rebuild_derived_state(
@@ -77,8 +78,7 @@ def rebuild_derived_state(
             )
         if state.status is OrchestratorStatus.INIT:
             inferred_status = _consensus_to_orchestrator_status(consensus.status)
-            if inferred_status is not None:
-                state.status = inferred_status
+            state.status = inferred_status
     elif awaiting_user_gatekeeper:
         state.sync_pending_question_projection()
     else:
@@ -108,7 +108,7 @@ def sync_status_from_consensus(
         return
 
     inferred_status = _consensus_to_orchestrator_status(consensus.status)
-    if inferred_status is None or inferred_status is state.status:
+    if inferred_status is state.status:
         return
     if can_transition_to(inferred_status):
         state.status = inferred_status
@@ -119,10 +119,11 @@ def build_user_input_requested_event(
     *,
     banner_text: str,
     terminal_bell: bool,
-) -> dict[str, object]:
+) -> CanonicalEvent:
     return {
         "type": "user-input.requested",
         "timestamp": _timestamp_now(),
+        "origin": "orchestrator",
         "questions": list(questions),
         "banner_text": banner_text,
         "terminal_bell": terminal_bell,
@@ -130,7 +131,7 @@ def build_user_input_requested_event(
 
 
 
-def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorStatus | None:
+def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorStatus:
     mapping = {
         ConsensusStatus.INIT: OrchestratorStatus.INIT,
         ConsensusStatus.PLANNING: OrchestratorStatus.PLANNING,
@@ -138,7 +139,10 @@ def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorSt
         ConsensusStatus.PAUSED: OrchestratorStatus.PAUSED,
         ConsensusStatus.COMPLETED: OrchestratorStatus.COMPLETED,
     }
-    return mapping.get(status)
+    try:
+        return mapping[status]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported consensus status: {status!r}") from exc
 
 
 

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.models.state import GatekeeperStatus, QuestionPriority, QuestionRecord, QuestionStatus, reconcile_question_records
+from vibrant.providers.base import CanonicalEvent
 
 from ..state import build_user_input_requested_event
 from ..state.store import StateStore
@@ -123,14 +124,14 @@ class QuestionService:
         else:
             result = await self.gatekeeper.answer_question(selected_question, answer)
         self.state_store.apply_gatekeeper_result(result)
-        self.state_store.append_event(
-            {
-                "type": "user-input.resolved",
-                "timestamp": _timestamp_now(),
-                "question": selected_question,
-                "answer": answer,
-            }
-        )
+        event: CanonicalEvent = {
+            "type": "user-input.resolved",
+            "timestamp": _timestamp_now(),
+            "origin": "orchestrator",
+            "question": selected_question,
+            "answer": answer,
+        }
+        self.state_store.append_event(event)
         return result
 
     def _persist_question_state(self, *, emit_request_event: bool) -> None:

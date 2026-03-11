@@ -643,6 +643,7 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
 
 
 def _render_task_progress_lines(event: dict[str, Any]) -> list[str]:
+    event_type = str(event.get("type") or "event")
     item = event.get("item") if isinstance(event.get("item"), dict) else {}
     item_type = str(item.get("type") or event.get("item_type") or "").strip().lower()
 
@@ -652,6 +653,8 @@ def _render_task_progress_lines(event: dict[str, Any]) -> list[str]:
             return []
         if progress_text:
             return [_compose_line(event, f"⋯ {line}") for line in _split_visible_lines(progress_text)]
+        return []
+    if event_type == "reasoning.summary.delta":
         return []
 
     if item_type in {"commandexecution", "command_execution"}:
@@ -722,11 +725,12 @@ def _split_visible_lines(text: str) -> list[str]:
 
 
 def _error_text(event: dict[str, Any]) -> str:
+    if isinstance(event.get("error_message"), str) and event["error_message"]:
+        return event["error_message"]
     error = event.get("error")
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "")
-
 
 def _render_native_entry(payload: dict[str, Any]) -> str:
     prefix = _timestamp_prefix(_timestamp_text(payload.get("timestamp")))
