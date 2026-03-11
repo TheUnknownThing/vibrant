@@ -129,25 +129,29 @@ class OrchestratorFacade:
 
     @staticmethod
     def _normalize_agent_type(value: object) -> AgentType | None:
+        if value is None:
+            return None
         if isinstance(value, AgentType):
             return value
         if isinstance(value, str):
             try:
                 return AgentType(value.strip().lower())
-            except ValueError:
-                return None
-        return None
+            except ValueError as exc:
+                raise ValueError(f"Unsupported agent type: {value!r}") from exc
+        raise TypeError(f"agent type must be AgentType, str, or None; got {type(value).__name__}")
 
     @staticmethod
     def _normalize_agent_status(value: object) -> AgentStatus | None:
+        if value is None:
+            return None
         if isinstance(value, AgentStatus):
             return value
         if isinstance(value, str):
             try:
                 return AgentStatus(value.strip().lower())
-            except ValueError:
-                return None
-        return None
+            except ValueError as exc:
+                raise ValueError(f"Unsupported agent status: {value!r}") from exc
+        raise TypeError(f"agent status must be AgentStatus, str, or None; got {type(value).__name__}")
 
     def _snapshot_from_record(self, record: AgentRecord) -> OrchestratorAgentSnapshot:
         status = record.status.value
@@ -196,6 +200,12 @@ class OrchestratorFacade:
         status = self._normalize_agent_status(status_value)
         state = self._normalize_agent_status(state_value)
         agent_type = self._normalize_agent_type(agent_type_value)
+        if status is None:
+            raise ValueError(f"Agent snapshot {agent_id!r} is missing a valid status")
+        if state is None:
+            raise ValueError(f"Agent snapshot {agent_id!r} is missing a valid state")
+        if agent_type is None:
+            raise ValueError(f"Agent snapshot {agent_id!r} is missing a valid agent type")
         done = bool(getattr(value, "done", status in AgentRecord.TERMINAL_STATUSES if status is not None else False))
         awaiting_input = bool(
             getattr(value, "awaiting_input", status is AgentStatus.AWAITING_INPUT or state is AgentStatus.AWAITING_INPUT)
@@ -205,9 +215,9 @@ class OrchestratorFacade:
         return OrchestratorAgentSnapshot(
             agent_id=agent_id,
             task_id=task_id,
-            agent_type=agent_type.value if agent_type is not None else str(agent_type_value or "unknown"),
-            status=status.value if status is not None else str(status_value or "unknown"),
-            state=state.value if state is not None else str(state_value or status_value or "unknown"),
+            agent_type=agent_type.value,
+            status=status.value,
+            state=state.value,
             has_handle=bool(getattr(value, "has_handle", False)),
             active=active,
             done=done,
@@ -261,20 +271,26 @@ class OrchestratorFacade:
         if isinstance(value, str):
             try:
                 return OrchestratorStatus(value.strip().lower())
-            except ValueError:
-                pass
-        return OrchestratorStatus.INIT
+            except ValueError as exc:
+                raise ValueError(f"Unsupported orchestrator status: {value!r}") from exc
+        raise TypeError(
+            f"orchestrator status must be OrchestratorStatus or str; got {type(value).__name__}"
+        )
 
     @staticmethod
     def _normalize_execution_mode(value: object) -> RoadmapExecutionMode | None:
+        if value is None:
+            return None
         if isinstance(value, RoadmapExecutionMode):
             return value
         if isinstance(value, str):
             try:
                 return RoadmapExecutionMode(value.strip().lower())
-            except ValueError:
-                return None
-        return None
+            except ValueError as exc:
+                raise ValueError(f"Unsupported roadmap execution mode: {value!r}") from exc
+        raise TypeError(
+            f"execution mode must be RoadmapExecutionMode, str, or None; got {type(value).__name__}"
+        )
 
     def snapshot(self) -> OrchestratorSnapshot:
         engine = self._engine()

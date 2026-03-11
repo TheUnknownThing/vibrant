@@ -543,4 +543,8 @@ def _sync_handle_state(handle: AgentHandle, record: AgentRecord) -> None:
         AgentStatus.FAILED: RunState.FAILED,
         AgentStatus.KILLED: RunState.FAILED,
     }
-    handle._set_state(mapping.get(record.status, RunState.RUNNING))
+    try:
+        next_state = mapping[record.status]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported agent status for runtime handle sync: {record.status!r}") from exc
+    handle._set_state(next_state)
