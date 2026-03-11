@@ -16,7 +16,7 @@ from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
-from vibrant.orchestrator import CodeAgentLifecycle, OrchestratorEngine, OrchestratorFacade
+from vibrant.orchestrator import OrchestratorFacade, OrchestratorStateBackend, create_orchestrator
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -66,7 +66,7 @@ def _init_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _prepare_project(tmp_path: Path) -> tuple[Path, OrchestratorEngine]:
+def _prepare_project(tmp_path: Path) -> tuple[Path, OrchestratorStateBackend]:
     repo = _init_repo(tmp_path)
     initialize_project(repo)
 
@@ -89,7 +89,7 @@ def _prepare_project(tmp_path: Path) -> tuple[Path, OrchestratorEngine]:
     )
     RoadmapParser().write(repo / ".vibrant" / "roadmap.md", RoadmapParser().parse(ROADMAP_TEXT))
 
-    engine = OrchestratorEngine.load(repo)
+    engine = OrchestratorStateBackend.load(repo)
     engine.transition_to(OrchestratorStatus.PLANNING)
     return repo, engine
 
@@ -393,7 +393,7 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     FakeCodeAgentAdapter.success_contents = ["feature\n"]
     gatekeeper = FakeGatekeeper(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     result = await lifecycle.execute_next_task()
 
     assert result is not None
@@ -420,9 +420,9 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     assert record.provider.runtime_mode == "workspace-write"
     assert record.provider.native_event_log is not None
     assert record.provider.canonical_event_log is not None
-    assert lifecycle.engine.state.total_agent_spawns == 2
-    assert lifecycle.engine.state.active_agents == []
-    assert lifecycle.engine.state.status is OrchestratorStatus.COMPLETED
+    assert lifecycle.state_backend.state.total_agent_spawns == 2
+    assert lifecycle.state_backend.state.active_agents == []
+    assert lifecycle.state_backend.state.status is OrchestratorStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -431,12 +431,12 @@ async def test_submit_gatekeeper_message_routes_initial_prompt_to_project_start(
     initialize_project(repo)
     gatekeeper = FakeGatekeeper(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     result = await lifecycle.submit_gatekeeper_message("Build an auth MVP for the app.")
 
     assert result.state is RunState.COMPLETED
     assert gatekeeper.requests[0].trigger is GatekeeperTrigger.PROJECT_START
-    assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
+    assert lifecycle.state_backend.state.status is OrchestratorStatus.PLANNING
 
     roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")
     assert roadmap.tasks
@@ -449,7 +449,7 @@ async def test_start_gatekeeper_message_returns_handle_before_result_is_applied(
     initialize_project(repo)
     gatekeeper = AsyncFakeGatekeeper(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     handle = await lifecycle.start_gatekeeper_message("Build an auth MVP for the app.")
 
     assert handle.done() is False
@@ -459,7 +459,7 @@ async def test_start_gatekeeper_message_returns_handle_before_result_is_applied(
     await asyncio.sleep(0)
 
     assert result.state is RunState.COMPLETED
-    assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
+    assert lifecycle.state_backend.state.status is OrchestratorStatus.PLANNING
 
 
 @pytest.mark.asyncio
@@ -468,7 +468,7 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
     initialize_project(repo)
     gatekeeper = Gatekeeper(repo, adapter_factory=ManagedGatekeeperAdapter, timeout_seconds=1)
 
-    lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     handle = await lifecycle.start_gatekeeper_message("Build an auth MVP for the app.")
 
     for _ in range(50):
@@ -507,12 +507,17 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
 
 def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
     repo, engine = _prepare_project(tmp_path)
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
 
     record = _agent_record("agent-task-standalone", status=AgentStatus.RUNNING)
     lifecycle.agent_store.upsert(record)
 
-    assert not hasattr(lifecycle.engine, "agents")
+    assert not hasattr(lifecycle.state_backend, "agents")
     assert [item.agent_id for item in lifecycle.state_store.agent_records()] == ["agent-task-standalone"]
     assert lifecycle.state_store.state.active_agents == ["agent-task-standalone"]
 
@@ -524,14 +529,14 @@ def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(
     repo = _init_repo(tmp_path)
     initialize_project(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
     facade = OrchestratorFacade(lifecycle)
 
-    assert lifecycle.engine.state.status is OrchestratorStatus.INIT
+    assert lifecycle.state_backend.state.status is OrchestratorStatus.INIT
 
     facade.transition_workflow_state(OrchestratorStatus.PLANNING)
 
-    assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
+    assert lifecycle.state_backend.state.status is OrchestratorStatus.PLANNING
 
 
 def test_lifecycle_passes_canonical_callback_to_default_gatekeeper(tmp_path, monkeypatch):
@@ -545,11 +550,11 @@ def test_lifecycle_passes_canonical_callback_to_default_gatekeeper(tmp_path, mon
             captured["callback"] = on_canonical_event
             captured["kwargs"] = kwargs
 
-    monkeypatch.setattr("vibrant.orchestrator.lifecycle.Gatekeeper", CapturingGatekeeper)
+    monkeypatch.setattr("vibrant.orchestrator.bootstrap.Gatekeeper", CapturingGatekeeper)
 
-    lifecycle = CodeAgentLifecycle(
+    lifecycle = create_orchestrator(
         repo,
-        engine=engine,
+        state_backend=engine,
         adapter_factory=FakeCodeAgentAdapter,
         on_canonical_event=callback,
     )
@@ -568,7 +573,7 @@ async def test_code_agent_lifecycle_retries_after_gatekeeper_reprompt(tmp_path):
     FakeCodeAgentAdapter.success_contents = ["retried feature\n"]
     gatekeeper = FakeGatekeeper(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
 
     first = await lifecycle.execute_next_task()
     second = await lifecycle.execute_next_task()
@@ -593,7 +598,7 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
     FakeCodeAgentAdapter.scenarios = ["failure"]
     gatekeeper = FakeGatekeeper(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     assert lifecycle.dispatcher is not None
     lifecycle.dispatcher.get_task("task-001").max_retries = 0
 
@@ -607,7 +612,7 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
 
     roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")
     assert roadmap.tasks[0].status is TaskStatus.ESCALATED
-    assert lifecycle.engine.state.pending_questions == [gatekeeper.escalation_question]
+    assert lifecycle.state_backend.state.pending_questions == [gatekeeper.escalation_question]
     assert await lifecycle.execute_next_task() is None
 
 
@@ -620,7 +625,7 @@ async def test_task_execution_service_starts_with_handle_snapshot(tmp_path):
     FakeCodeAgentAdapter.success_contents = ["feature via handle\n"]
     gatekeeper = FakeGatekeeper(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     assert lifecycle.dispatcher is not None
 
     lifecycle.workflow_service.begin_execution_if_needed()
@@ -650,7 +655,7 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
     FakeCodeAgentAdapter.success_contents = ["managed feature\n"]
     gatekeeper = FakeGatekeeper(repo)
 
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     assert lifecycle.dispatcher is not None
 
     lifecycle.workflow_service.begin_execution_if_needed()
@@ -690,7 +695,12 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
 
 def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(tmp_path):
     repo, engine = _prepare_project(tmp_path)
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
 
     record = _agent_record(
         "agent-task-001-awaiting",
@@ -710,7 +720,12 @@ def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(t
 
 def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path):
     repo, engine = _prepare_project(tmp_path)
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
 
     code_record = _agent_record("agent-task-001-code", agent_type=AgentType.CODE)
     merge_record = _agent_record("merge-task-001-merge", agent_type=AgentType.MERGE)
@@ -724,7 +739,12 @@ def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path)
 
 def test_agent_management_service_rejects_invalid_string_agent_type_filters(tmp_path):
     repo, engine = _prepare_project(tmp_path)
-    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
 
     with pytest.raises(ValueError, match="Unsupported agent type filter"):
         lifecycle.agent_manager.list_agents(agent_type="bogus")
