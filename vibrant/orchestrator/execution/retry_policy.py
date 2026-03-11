@@ -7,7 +7,7 @@ from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 from .git_manager import GitWorktreeInfo
 
-from ..types import CodeAgentLifecycleResult
+from ..types import TaskResult
 from .git_workspace import GitWorkspaceService
 from .review import ReviewService
 from ..artifacts.roadmap import RoadmapService
@@ -38,7 +38,7 @@ class RetryPolicyService:
         summary: str | None,
         prior_gatekeeper_result: GatekeeperRunResult | None = None,
         notify_gatekeeper_on_retry: bool,
-    ) -> CodeAgentLifecycleResult:
+    ) -> TaskResult:
         dispatcher = self.roadmap_service.dispatcher
         assert dispatcher is not None
 
@@ -55,7 +55,7 @@ class RetryPolicyService:
 
         self.roadmap_service.persist()
         self.git_service.cleanup_worktree(updated_task.id)
-        return CodeAgentLifecycleResult(
+        return TaskResult(
             task_id=updated_task.id,
             outcome=outcome,
             task_status=updated_task.status,

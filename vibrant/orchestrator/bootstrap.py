@@ -39,7 +39,7 @@ from .gatekeeper_runtime import GatekeeperRuntimeService
 from .git_manager import GitManager
 from .state.store import StateStore
 from .task_dispatch import TaskDispatcher
-from .types import CodeAgentLifecycleResult
+from .types import TaskResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
 
@@ -281,11 +281,11 @@ class Orchestrator:
     async def answer_pending_question(self, answer: str, *, question: str | None = None) -> Any:
         return await self.question_service.answer(answer, question=question)
 
-    async def execute_until_blocked(self) -> list[CodeAgentLifecycleResult]:
+    async def execute_until_blocked(self) -> list[TaskResult]:
         self.reload_from_disk()
         return await self.execution_service.execute_until_blocked()
 
-    async def execute_next_task(self) -> CodeAgentLifecycleResult | None:
+    async def execute_next_task(self) -> TaskResult | None:
         self.reload_from_disk()
         return await self.execution_service.execute_next_task()
 
