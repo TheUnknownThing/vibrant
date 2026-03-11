@@ -87,6 +87,7 @@ class TestVibrantInit:
 
         config = load_config(start_path=tmp_path)
         assert config.codex_binary == "codex"
+        assert config.model_provider is None
         assert config.conversation_directory == str(DEFAULT_CONVERSATION_DIRECTORY)
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
         assert 'execution-mode = "automatic"' in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
@@ -94,6 +95,7 @@ class TestVibrantInit:
             'conversation-directory = ".vibrant/conversations"'
             in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
         )
+        assert 'model-provider = "' not in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
 
         state = OrchestratorState.model_validate_json((tmp_path / ".vibrant/state.json").read_text(encoding="utf-8"))
         assert state.status is OrchestratorStatus.INIT
