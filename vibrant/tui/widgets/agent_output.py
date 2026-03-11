@@ -54,7 +54,6 @@ class AgentOutput(Static):
     can_focus = True
 
     BINDINGS = [
-        Binding("f5", "cycle_agent", "Next Agent", show=False),
         Binding("tab", "cycle_agent", "Next Agent", show=False),
         Binding("s", "toggle_scroll_lock", "Scroll Lock", show=False),
         Binding("d", "toggle_debug_view", "Debug View", show=False),
@@ -142,7 +141,7 @@ class AgentOutput(Static):
         self._active_agent_id: str | None = None
         self._auto_follow = True
         self._debug_view_enabled = False
-        self._empty_message = "No agent activity yet. Press F6 to run the next roadmap task."
+        self._empty_message = "No agent activity yet. Use /run to execute the next roadmap task."
 
     def compose(self) -> ComposeResult:
         yield Static("[b]Agent Logs[/b]", id="agent-output-header", markup=True)
@@ -379,7 +378,7 @@ class AgentOutput(Static):
         status = stream.status or "unknown"
         task = stream.task_id or "n/a"
         meta.update(
-            f"Active: {stream.agent_id} · Task: {task} · Status: {status} · View: {mode} · {follow} · F5 next · S lock · D raw"
+            f"Active: {stream.agent_id} · Task: {task} · Status: {status} · View: {mode} · {follow} · Tab next · S lock · D raw"
         )
 
     def _update_tabs(self) -> None:

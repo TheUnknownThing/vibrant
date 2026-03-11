@@ -62,14 +62,33 @@ class VibrantApp(App):
     BINDINGS = [
         Binding("f1", "open_help", "Help", show=True),
         Binding("f2", "toggle_pause", "Pause", show=True),
-        Binding("f3", "show_task_status", "Task", show=True),
-        Binding("f4", "toggle_consensus", "Consensus", show=True),
-        Binding("f5", "show_chat_history", "Chat", show=True),
+        Binding("f5", "show_task_status", "Task", show=True),
+        Binding("f6", "show_chat_history", "Chat", show=True),
+        Binding("f7", "toggle_consensus", "Consensus", show=True),
+        Binding("f8", "show_agent_logs", "Logs", show=True),
         Binding("f10", "quit_app", "Quit", show=True),
         Binding("ctrl+s", "open_settings", "Settings", show=False),
-        Binding("f6", "run_next_task", "Run Task", show=False),
-        Binding("ctrl+q", "quit_app", "Quit", show=True),
+        Binding("ctrl+c", "quit_app", "Quit", show=True),
     ]
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        current_screen = self.screen
+        if isinstance(current_screen, (HelpScreen, InitializationScreen)):
+            return False
+
+        planning_screen = self._planning_screen()
+        vibing_screen = self._vibing_screen()
+
+        if action in {"open_help", "quit_app", "open_settings"}:
+            return planning_screen is not None or vibing_screen is not None
+        if action == "toggle_pause":
+            return vibing_screen is not None
+        if action in {"show_task_status", "show_chat_history", "show_agent_logs"}:
+            return vibing_screen is not None
+        if action == "toggle_consensus":
+            return planning_screen is not None or vibing_screen is not None
+
+        return super().check_action(action, parameters)
 
     def __init__(
         self,
@@ -254,6 +273,14 @@ class VibrantApp(App):
             return
         vibing_screen.show_chat_history()
         self._set_status("Opened Gatekeeper chat history")
+
+    def action_show_agent_logs(self) -> None:
+        vibing_screen = self._vibing_screen()
+        if vibing_screen is None:
+            self.notify("Agent logs are only available in the vibing screen.", severity="warning")
+            return
+        vibing_screen.show_agent_logs()
+        self._set_status("Opened Agent Logs tab")
 
     async def action_run_next_task(self) -> None:
         if self._lifecycle is None:
@@ -665,6 +692,7 @@ class VibrantApp(App):
 
         placeholder = "Tell me what you want to build" if planning_mode else InputBar.DEFAULT_PLACEHOLDER
         self.call_after_refresh(self._apply_workspace_placeholder, placeholder)
+        self.refresh_bindings()
 
     def _transition_to_vibing(self, *, prefer_chat_history: bool) -> bool:
         orchestrator = self._orchestrator
