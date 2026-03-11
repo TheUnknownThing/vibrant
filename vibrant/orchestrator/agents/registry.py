@@ -100,11 +100,10 @@ class AgentRegistry:
         runtime_mode: str | None = None,
     ) -> AgentRecord:
         """Build a persisted-friendly record for a task-scoped agent run."""
-        prefix = "agent"
-        if agent_type is AgentType.MERGE:
-            prefix = "merge"
-        elif agent_type is AgentType.TEST:
-            prefix = "test"
+        if agent_type not in {AgentType.CODE, AgentType.MERGE}:
+            raise ValueError(f"Unsupported task agent type: {agent_type.value}")
+
+        prefix = "merge" if agent_type is AgentType.MERGE else "agent"
         agent_id = f"{prefix}-{task_id}-{uuid4().hex[:8]}"
         native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{agent_id}.ndjson"
         canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
@@ -132,32 +131,4 @@ class AgentRegistry:
                 "max_retries": max_retries,
             },
             provider=provider,
-        )
-
-    def create_merge_agent_record(self, *, task_id: str, branch: str, worktree_path: str) -> AgentRecord:
-        """Build a merge-agent record for conflict-resolution flows."""
-        return self.create_task_agent_record(
-            agent_type=AgentType.MERGE,
-            task_id=task_id,
-            branch=branch,
-            worktree_path=worktree_path,
-            runtime_mode="danger-full-access",
-        )
-
-    def create_test_agent_record(
-        self,
-        *,
-        task_id: str,
-        branch: str | None,
-        worktree_path: str,
-        prompt: str | None = None,
-    ) -> AgentRecord:
-        """Build a read-only validation/test agent record."""
-        return self.create_task_agent_record(
-            agent_type=AgentType.TEST,
-            task_id=task_id,
-            branch=branch,
-            worktree_path=worktree_path,
-            prompt=prompt,
-            runtime_mode="read-only",
         )
