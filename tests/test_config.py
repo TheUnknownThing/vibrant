@@ -83,7 +83,7 @@ class TestLoadConfig:
 
         assert config.codex_binary == "codex"
         assert config.model == "gpt-5.3-codex"
-        assert config.model_provider == "openai"
+        assert config.model_provider is None
         assert config.approval_policy == "never"
         assert config.reasoning_effort == "medium"
         assert config.reasoning_summary == "auto"

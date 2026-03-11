@@ -50,9 +50,9 @@ class VibrantConfig(BaseModel):
         serialization_alias="codex-home",
     )
     model: str = "gpt-5.3-codex"
-    # model_provider is currently unused, codex will use global config.
-    model_provider: str = Field(
-        default="openai",
+    # Leave unset to preserve Codex's default provider selection from ~/.codex/config.toml.
+    model_provider: str | None = Field(
+        default=None,
         validation_alias=AliasChoices("model_provider", "model-provider"),
         serialization_alias="model-provider",
     )

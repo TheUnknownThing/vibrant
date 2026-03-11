@@ -88,6 +88,22 @@ class TestCodexProviderAdapter:
         assert [event["type"] for event in events[:2]] == ["session.started", "thread.started"]
 
     @pytest.mark.asyncio
+    async def test_start_thread_omits_model_provider_when_unset(self):
+        client = FakeCodexClient()
+        client.responses["thread/start"] = {"thread": {"id": "thread_abc123"}}
+        adapter = CodexProviderAdapter(client=client)
+
+        await adapter.start_thread(
+            model="gpt-5.3-codex",
+            cwd="/tmp/project",
+            runtime_mode=RuntimeMode.WORKSPACE_WRITE,
+            approval_policy="never",
+        )
+
+        assert client.calls[0][0] == "thread/start"
+        assert "modelProvider" not in client.calls[0][1]
+
+    @pytest.mark.asyncio
     async def test_notification_delta_maps_to_canonical_content_delta(self):
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
