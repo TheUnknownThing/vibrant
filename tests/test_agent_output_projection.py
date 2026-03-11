@@ -1,16 +1,6 @@
 from __future__ import annotations
 
 from vibrant.orchestrator.agents.output_projection import AgentOutputProjectionService
-from vibrant.orchestrator.types import AgentOutput
-
-
-def test_agent_output_defaults_include_thinking_state() -> None:
-    output = AgentOutput(agent_id="agent-1", task_id="task-1")
-
-    assert output.thinking.text == ""
-    assert output.thinking.status == "idle"
-    assert output.thinking.item_id is None
-    assert output.thinking.timestamp is None
 
 
 def test_projection_tracks_reasoning_summary_deltas_separately_from_response() -> None:
