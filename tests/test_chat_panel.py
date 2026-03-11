@@ -71,12 +71,6 @@ class FakeAnswerEngine:
             pending_questions=["Should auth use OAuth or API keys?"],
         )
 
-    async def answer_pending_question(self, gatekeeper, *, answer: str, question: str | None = None):
-        self.answer_calls.append({"answer": answer, "question": question or ""})
-        self.state.pending_questions = []
-        self.state.gatekeeper_status = GatekeeperStatus.IDLE
-        return SimpleNamespace(verdict="accepted")
-
 
 class FakeLifecycle:
     def __init__(self, project_root: str | Path, *, on_canonical_event=None) -> None:
@@ -87,6 +81,12 @@ class FakeLifecycle:
 
     def reload_from_disk(self) -> RoadmapDocument:
         return RoadmapDocument(project=self.project_root.name, tasks=[])
+
+    async def answer_pending_question(self, answer: str, *, question: str | None = None):
+        self.engine.answer_calls.append({"answer": answer, "question": question or ""})
+        self.engine.state.pending_questions = []
+        self.engine.state.gatekeeper_status = GatekeeperStatus.IDLE
+        return SimpleNamespace(verdict="accepted")
 
 
 class FakePlanningEngine:

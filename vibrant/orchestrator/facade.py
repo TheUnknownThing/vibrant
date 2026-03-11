@@ -114,11 +114,17 @@ class OrchestratorFacade:
         list_records = getattr(agent_manager, "list_records", None)
         if callable(list_records):
             return tuple(list_records())
+
+        state_store = self._state_store()
+        agent_records = getattr(state_store, "agent_records", None)
+        if callable(agent_records):
+            return tuple(record for record in agent_records() if isinstance(record, AgentRecord))
+
         engine = self._engine()
-        agents = getattr(engine, "agents", None)
-        if not isinstance(agents, dict):
-            return ()
-        return tuple(record for record in agents.values() if isinstance(record, AgentRecord))
+        list_agent_records = getattr(engine, "list_agent_records", None)
+        if callable(list_agent_records):
+            return tuple(record for record in list_agent_records() if isinstance(record, AgentRecord))
+        return ()
 
     @staticmethod
     def _normalize_agent_type(value: object) -> AgentType | None:
@@ -497,11 +503,6 @@ class OrchestratorFacade:
         answer_pending = getattr(self.lifecycle, "answer_pending_question", None)
         if callable(answer_pending):
             return await answer_pending(answer, question=question)
-
-        engine = self._engine()
-        gatekeeper = getattr(self.lifecycle, "gatekeeper", None)
-        if engine is not None and gatekeeper is not None:
-            return await engine.answer_pending_question(gatekeeper, answer=answer, question=question)
 
         raise AttributeError("Lifecycle does not support answering pending Gatekeeper questions")
 

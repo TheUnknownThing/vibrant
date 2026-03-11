@@ -1,6 +1,6 @@
 """Orchestration engine components."""
 
-from .engine import OrchestratorEngine
+from .engine import OrchestratorEngine, OrchestratorStateBackend
 from .facade import OrchestratorFacade, OrchestratorSnapshot
 from .git_manager import GitManager
 from .lifecycle import CodeAgentLifecycle, CodeAgentLifecycleResult
@@ -17,5 +17,6 @@ __all__ = [
     "OrchestratorMCPServer",
     "OrchestratorSnapshot",
     "OrchestratorEngine",
+    "OrchestratorStateBackend",
     "TaskDispatcher",
 ]

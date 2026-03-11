@@ -8,18 +8,15 @@ from pathlib import Path
 
 from vibrant.agents.runtime import ProviderThreadHandle
 from vibrant.models.agent import AgentRecord, AgentType
-from vibrant.orchestrator.engine import OrchestratorEngine
-
 from ..state.store import StateStore
 
 
 class AgentRecordStore:
-    """Persist and query agent records independently from the engine cache.
+    """Persist and query agent records directly from ``.vibrant/agents``.
 
-    The orchestrator historically routed all agent persistence through
-    ``OrchestratorEngine``. This store makes the durable ``.vibrant/agents``
-    directory the real source of truth while still mirroring records into the
-    engine for compatibility with older UI/facade surfaces.
+    Agent records now have a single durable source of truth on disk. The
+    orchestrator state backend rebuilds projections from persisted records
+    instead of relying on an in-memory compatibility mirror.
     """
 
     def __init__(
@@ -27,12 +24,10 @@ class AgentRecordStore:
         *,
         vibrant_dir: str | Path,
         state_store: StateStore,
-        engine: OrchestratorEngine | None = None,
     ) -> None:
         self.vibrant_dir = Path(vibrant_dir)
         self.agents_dir = self.vibrant_dir / "agents"
         self.state_store = state_store
-        self.engine = engine
         self._records: dict[str, AgentRecord] = {}
         self.refresh()
 
@@ -91,7 +86,6 @@ class AgentRecordStore:
                 record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
                 records[record.agent_id] = record
         self._records = records
-        self._sync_engine_cache()
         return dict(self._records)
 
     def upsert(
@@ -108,15 +102,10 @@ class AgentRecordStore:
         _atomic_write_text(path, record.model_dump_json(indent=2) + "\n")
 
         self._records[record.agent_id] = record
-        if self.engine is not None:
-            self.engine.agents[record.agent_id] = record
         if rebuild_state:
             self.state_store.rebuild_derived_state()
         return path
 
-    def _sync_engine_cache(self) -> None:
-        if self.engine is not None:
-            self.engine.agents = dict(self._records)
 
 
 

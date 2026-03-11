@@ -15,6 +15,7 @@ from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
 from vibrant.orchestrator.engine import OrchestratorEngine
+from vibrant.orchestrator.state import StateStore
 from vibrant.project_init import initialize_project
 
 
@@ -71,9 +72,10 @@ class TestOrchestratorEngineTransitions:
 
 
 
-def test_apply_gatekeeper_result_syncs_completed_status(tmp_path):
+def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
     initialize_project(tmp_path)
     engine = OrchestratorEngine.load(tmp_path)
+    state_store = StateStore(engine)
     engine.transition_to(OrchestratorStatus.PLANNING)
     engine.transition_to(OrchestratorStatus.EXECUTING)
 
@@ -109,7 +111,7 @@ def test_apply_gatekeeper_result_syncs_completed_status(tmp_path):
         finished_at=gatekeeper_record.finished_at,
     )
 
-    engine.apply_gatekeeper_result(result)
+    state_store.apply_gatekeeper_result(result)
 
     assert engine.state.status is OrchestratorStatus.COMPLETED
     assert engine.state.last_consensus_version == 2
@@ -285,8 +287,9 @@ class TestOrchestratorEnginePersistence:
         assert recovered.state.provider_runtime["agent-gatekeeper-user_discussion-001"].provider_thread_id == (
             "thread-legacy"
         )
-        assert recovered.agents["agent-gatekeeper-user_discussion-001"].task_id == "gatekeeper-user_discussion"
-        assert recovered.agents["agent-gatekeeper-user_discussion-001"].provider.thread_path == "/tmp/thread-legacy.jsonl"
+        recovered_records = {record.agent_id: record for record in recovered.list_agent_records()}
+        assert recovered_records["agent-gatekeeper-user_discussion-001"].task_id == "gatekeeper-user_discussion"
+        assert recovered_records["agent-gatekeeper-user_discussion-001"].provider.thread_path == "/tmp/thread-legacy.jsonl"
 
         persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
         assert "provider_threads" not in persisted_state

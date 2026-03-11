@@ -145,18 +145,6 @@ These methods primarily expose persistence or runtime-driving behavior that may
 continue to change as the orchestrator refactor converges on a service-backed
 control plane.
 
-## Compatibility Surface
-
-`OrchestratorFacade.engine` currently exists for **backward compatibility**.
-
-Rules:
-
-- If a real lifecycle engine exists, `facade.engine` returns that underlying engine.
-- If no engine exists, the facade may return a compatibility wrapper.
-- New code should **not** treat `facade.engine` as the stable API.
-
-`LegacyOrchestratorEngineView` and `LegacyOrchestratorStateView` are compatibility helpers only. They are not the long-term contract.
-
 Likewise, `CodeAgentLifecycleResult` remains export-stable for compatibility,
 but new code should avoid depending on detailed execution internals such as raw
 Gatekeeper results, merge results, runtime events, or worktree paths unless
@@ -181,7 +169,6 @@ The following are **not** stable external APIs and may change during future refa
 
 - `OrchestratorEngine`
 - direct access to `engine.state`
-- direct access to `engine.agents`
 - direct access to `engine.consensus`
 - direct access to `engine.consensus_path`
 - internal orchestrator domain classes under `vibrant/orchestrator/agents/`, `vibrant/orchestrator/execution/`, `vibrant/orchestrator/artifacts/`, and `vibrant/orchestrator/state/`
@@ -191,14 +178,14 @@ If an external component needs one of these, prefer adding a facade method inste
 
 ## Current Caveat
 
-The TUI still contains direct `engine` access in `vibrant/tui/app.py` for legacy behavior preservation.
-That means the **stable API exists now**, but the whole app has not yet been fully migrated to depend on it exclusively.
+The TUI no longer reaches through `OrchestratorFacade` to access engine-shaped state.
+Some runtime-driving helpers still exist on the facade while execution control finishes moving onto stable workflow-oriented APIs.
 
 So the current state is:
 
 - stable API is present
-- compatibility layer lives in `vibrant/orchestrator/`
-- full decoupling is not complete yet
+- engine-shaped facade compatibility has been removed
+- full execution-surface decoupling is not complete yet
 
 ## Guidance For Future Refactors
 
@@ -209,7 +196,7 @@ When refactoring the orchestrator system:
 3. Prefer semantic intent methods over generic runtime-driver methods.
 4. Avoid introducing new external dependencies on engine internals.
 5. Add new public needs to the facade first.
-6. Treat `facade.engine` and `execute_*` helpers as legacy compatibility, not as the preferred integration path.
+6. Treat `execute_*` helpers as legacy compatibility, not as the preferred integration path.
 
 ## Minimal Example
 

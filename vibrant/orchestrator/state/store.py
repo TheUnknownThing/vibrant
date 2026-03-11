@@ -1,11 +1,11 @@
-"""State-store service backed by the existing orchestrator engine."""
+"""State-store service backed by the orchestrator state backend."""
 
 from __future__ import annotations
 
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, reconcile_question_records
-from vibrant.orchestrator.engine import OrchestratorEngine
+from .backend import OrchestratorStateBackend
 
 from .projection import build_user_input_requested_event, rebuild_derived_state, sync_status_from_consensus
 
@@ -15,9 +15,9 @@ if False:  # pragma: no cover
 
 
 class StateStore:
-    """Thin service boundary around durable engine-backed orchestrator state."""
+    """Thin service boundary around durable backend-backed orchestrator state."""
 
-    def __init__(self, engine: OrchestratorEngine) -> None:
+    def __init__(self, engine: OrchestratorStateBackend) -> None:
         self.engine = engine
         self._agent_store: AgentRecordStore | None = None
 
@@ -61,6 +61,9 @@ class StateStore:
 
     def notification_bell_enabled(self) -> bool:
         return bool(getattr(self.engine, "notification_bell_enabled", False))
+
+    def agent_records(self) -> list:
+        return list(self._agent_records())
 
     def increment_total_agent_spawns(self) -> None:
         self.engine.state.total_agent_spawns += 1
@@ -107,7 +110,7 @@ class StateStore:
             else:
                 self.engine.upsert_agent_record(result.agent_record, increment_spawn=increment_spawn)
 
-        self.engine.consensus = self.engine._load_consensus(self.engine.consensus_path)
+        self.engine.reload_consensus()
 
         self.rebuild_derived_state()
         self.sync_status_from_consensus()
@@ -149,5 +152,7 @@ class StateStore:
     def _agent_records(self):
         if self._agent_store is not None:
             return self._agent_store.list_records()
-        agents = getattr(self.engine, "agents", {})
-        return list(agents.values()) if isinstance(agents, dict) else []
+        list_agent_records = getattr(self.engine, "list_agent_records", None)
+        if callable(list_agent_records):
+            return list(list_agent_records())
+        return []

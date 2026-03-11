@@ -104,10 +104,8 @@ def test_facade_falls_back_to_agent_records_when_agent_manager_is_absent() -> No
     running = _record("agent-1", task_id="task-1", status=AgentStatus.RUNNING, summary="Still working")
     completed = _record("agent-2", task_id="task-2", status=AgentStatus.COMPLETED, summary="Done")
     lifecycle = SimpleNamespace(
-        engine=SimpleNamespace(
-            state=OrchestratorState(session_id="session-2"),
-            agents={running.agent_id: running, completed.agent_id: completed},
-        ),
+        engine=SimpleNamespace(state=OrchestratorState(session_id="session-2")),
+        state_store=SimpleNamespace(agent_records=lambda: [running, completed]),
         execution_mode="manual",
     )
 
