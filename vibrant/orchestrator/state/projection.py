@@ -14,6 +14,7 @@ from vibrant.models.state import (
     ProviderRuntimeState,
     reconcile_question_records,
 )
+from vibrant.providers.base import CanonicalEvent
 
 
 def rebuild_derived_state(
@@ -119,10 +120,11 @@ def build_user_input_requested_event(
     *,
     banner_text: str,
     terminal_bell: bool,
-) -> dict[str, object]:
+) -> CanonicalEvent:
     return {
         "type": "user-input.requested",
         "timestamp": _timestamp_now(),
+        "origin": "orchestrator",
         "questions": list(questions),
         "banner_text": banner_text,
         "terminal_bell": terminal_bell,

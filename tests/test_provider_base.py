@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from vibrant.providers.base import ProviderAdapter, RuntimeMode
+from vibrant.orchestrator.state.projection import build_user_input_requested_event
 
 
 class DummyProviderAdapter(ProviderAdapter):
@@ -93,3 +94,18 @@ class TestRuntimeMode:
     def test_codex_mapping(self, mode: RuntimeMode, thread_sandbox: str, turn_policy: dict[str, str]):
         assert mode.codex_thread_sandbox == thread_sandbox
         assert mode.codex_turn_sandbox_policy == turn_policy
+
+
+class TestCanonicalEventHelpers:
+    def test_orchestrator_user_input_event_uses_canonical_envelope(self):
+        event = build_user_input_requested_event(
+            ["Need confirmation"],
+            banner_text="Questions pending",
+            terminal_bell=True,
+        )
+
+        assert event["type"] == "user-input.requested"
+        assert event["origin"] == "orchestrator"
+        assert event["questions"] == ["Need confirmation"]
+        assert event["banner_text"] == "Questions pending"
+        assert event["terminal_bell"] is True

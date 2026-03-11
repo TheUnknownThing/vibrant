@@ -18,6 +18,7 @@ from vibrant.models.state import (
     ProviderRuntimeState,
     reconcile_question_records,
 )
+from vibrant.providers.base import CanonicalEvent
 from vibrant.project_init import ensure_project_files
 
 
@@ -61,7 +62,7 @@ class OrchestratorStateBackend:
         self.state = state
         self.consensus = consensus
         self.notification_bell_enabled = notification_bell_enabled
-        self.emitted_events: list[dict[str, object]] = []
+        self.emitted_events: list[CanonicalEvent] = []
 
     @classmethod
     def load(

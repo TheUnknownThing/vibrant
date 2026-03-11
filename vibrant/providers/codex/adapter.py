@@ -134,7 +134,11 @@ class CodexProviderAdapter(ProviderAdapter):
         result = await client.send_request("initialize", initialize_params)
         client.send_notification("initialized")
         self._session_started = True
-        await self._emit_canonical("session.started", cwd=self._cwd, initialize_result=result)
+        await self._emit_canonical(
+            "session.started",
+            cwd=self._cwd,
+            provider_payload=_coerce_provider_payload(result, field_name="initialize_result"),
+        )
 
         if auth_config is not None and auth_config.mode is not CodexAuthMode.SYSTEM:
             await self.login(auth_config)
@@ -158,10 +162,12 @@ class CodexProviderAdapter(ProviderAdapter):
         )
         if self.provider_thread_id:
             self._awaiting_thread_started_for = self.provider_thread_id
+        thread_payload = self.thread_metadata or self._extract_thread_payload(result)
         await self._emit_canonical(
             "thread.started",
             resumed=False,
-            thread=self.thread_metadata or self._extract_thread_payload(result),
+            thread=thread_payload,
+            thread_path=_thread_path_from_payload(thread_payload),
         )
         return result
 
@@ -179,10 +185,12 @@ class CodexProviderAdapter(ProviderAdapter):
         )
         if self.provider_thread_id:
             self._awaiting_thread_started_for = self.provider_thread_id
+        thread_payload = self.thread_metadata or {"id": provider_thread_id}
         await self._emit_canonical(
             "thread.started",
             resumed=True,
-            thread=self.thread_metadata or {"id": provider_thread_id},
+            thread=thread_payload,
+            thread_path=_thread_path_from_payload(thread_payload),
         )
         return result
 
@@ -335,6 +343,7 @@ class CodexProviderAdapter(ProviderAdapter):
                 method=pending["method"],
                 result=result,
                 error=dict(error) if error else None,
+                error_message=_error_message(dict(error) if error else None),
             )
             if pending["request_kind"] == "user-input":
                 await self._emit_canonical(
@@ -343,6 +352,7 @@ class CodexProviderAdapter(ProviderAdapter):
                     method=pending["method"],
                     result=result,
                     error=dict(error) if error else None,
+                    error_message=_error_message(dict(error) if error else None),
                 )
 
     async def on_canonical_event(self, event: CanonicalEvent) -> None:
@@ -367,7 +377,11 @@ class CodexProviderAdapter(ProviderAdapter):
             return
 
         if method == "sessionConfigured":
-            await self._emit_canonical("session.state.changed", state=params.get("state"), payload=params)
+            await self._emit_canonical(
+                "session.state.changed",
+                state=params.get("state"),
+                provider_payload=dict(params),
+            )
         elif method == "thread/started":
             thread_payload = params.get("thread", params)
             self._persist_thread_metadata({"thread": thread_payload}, fallback_thread_id=thread_payload.get("id"))
@@ -375,18 +389,28 @@ class CodexProviderAdapter(ProviderAdapter):
             if thread_id and self._awaiting_thread_started_for == str(thread_id):
                 self._awaiting_thread_started_for = None
             else:
-                await self._emit_canonical("thread.started", resumed=False, thread=thread_payload)
+                await self._emit_canonical(
+                    "thread.started",
+                    resumed=False,
+                    thread=thread_payload,
+                    thread_path=_thread_path_from_payload(thread_payload),
+                )
         elif method == "turn/started":
             turn_payload = params.get("turn", params)
             self.current_turn_id = turn_payload.get("id") or self.current_turn_id
-            await self._emit_canonical("turn.started", turn=turn_payload)
+            await self._emit_canonical(
+                "turn.started",
+                turn_id=_turn_id_from_payload(turn_payload),
+                turn_status=_turn_status_from_payload(turn_payload),
+                turn=turn_payload,
+            )
         elif method == "item/agentMessage/delta":
             await self._emit_canonical(
                 "content.delta",
                 item_id=params.get("itemId") or params.get("item_id"),
                 turn_id=params.get("turnId") or self.current_turn_id,
                 delta=params.get("delta", ""),
-                raw=params,
+                provider_payload=dict(params),
             )
         elif method == "item/reasoning/summaryTextDelta":
             await self._emit_canonical(
@@ -395,23 +419,46 @@ class CodexProviderAdapter(ProviderAdapter):
                 turn_id=params.get("turnId") or self.current_turn_id,
                 delta=params.get("delta", ""),
                 summary_index=params.get("summaryIndex"),
-                raw=params,
+                provider_payload=dict(params),
             )
         elif method == "item/completed":
             item_payload = params.get("item", params)
             item_payload = _sanitize_progress_item(item_payload)
+            item_type = item_payload.get("type") if isinstance(item_payload, Mapping) else None
             await self._emit_canonical(
                 "task.progress",
                 item=item_payload,
-                item_type=item_payload.get("type"),
+                item_type=item_type,
+                text=_progress_text_from_item(item_payload),
             )
         elif method == "turn/completed":
             turn_payload = params.get("turn", params)
             self.current_turn_id = turn_payload.get("id") or self.current_turn_id
-            await self._emit_canonical("turn.completed", turn=turn_payload, raw=params)
-            await self._emit_canonical("task.completed", turn=turn_payload, raw=params)
+            turn_id = _turn_id_from_payload(turn_payload)
+            turn_status = _turn_status_from_payload(turn_payload)
+            await self._emit_canonical(
+                "turn.completed",
+                turn_id=turn_id,
+                turn_status=turn_status,
+                turn=turn_payload,
+                provider_payload=dict(params),
+            )
+            await self._emit_canonical(
+                "task.completed",
+                turn_id=turn_id,
+                turn_status=turn_status,
+                turn=turn_payload,
+                provider_payload=dict(params),
+            )
         elif method in {"error", "turn/error"}:
-            await self._emit_canonical("runtime.error", error=params.get("error", params), raw=params)
+            error_payload = params.get("error", params)
+            await self._emit_canonical(
+                "runtime.error",
+                error=error_payload,
+                error_message=_error_message(error_payload),
+                error_code=_error_code(error_payload),
+                provider_payload=dict(params),
+            )
 
         await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
 
@@ -516,6 +563,7 @@ class CodexProviderAdapter(ProviderAdapter):
         event: CanonicalEvent = {
             "type": event_type,
             "timestamp": _timestamp_now(),
+            "origin": "provider",
             "provider": "codex",
         }
         if self.agent_record is not None:
@@ -610,6 +658,85 @@ def _coerce_auth_mode(value: object) -> CodexAuthMode:
         if lowered in mapping:
             return mapping[lowered]
     raise ValueError(f"Unsupported Codex auth mode: {value!r}")
+
+
+def _coerce_provider_payload(value: Any, *, field_name: str | None = None) -> dict[str, Any]:
+    if field_name is not None:
+        return {field_name: value}
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {"value": value}
+
+
+def _thread_path_from_payload(payload: Any) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    path = payload.get("path") or payload.get("threadPath") or payload.get("thread_path")
+    if isinstance(path, str) and path:
+        return path
+    return None
+
+
+def _turn_id_from_payload(payload: Any) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    turn_id = payload.get("id") or payload.get("turnId") or payload.get("turn_id")
+    if isinstance(turn_id, str) and turn_id:
+        return turn_id
+    return None
+
+
+def _turn_status_from_payload(payload: Any) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    status = payload.get("status")
+    if isinstance(status, str) and status:
+        return status
+    return None
+
+
+def _progress_text_from_item(item_payload: Any) -> str | None:
+    if not isinstance(item_payload, Mapping):
+        return None
+    text = item_payload.get("text")
+    if isinstance(text, str) and text:
+        return text
+    content = item_payload.get("content")
+    if isinstance(content, str) and content:
+        return content
+    if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
+        parts: list[str] = []
+        for entry in content:
+            if isinstance(entry, Mapping):
+                part = entry.get("text")
+                if isinstance(part, str) and part:
+                    parts.append(part)
+        combined = "".join(parts).strip()
+        return combined or None
+    return None
+
+
+def _error_message(error_payload: Any) -> str | None:
+    if isinstance(error_payload, Mapping):
+        message = error_payload.get("message")
+        if isinstance(message, str) and message:
+            return message
+        if error_payload:
+            return str(dict(error_payload))
+        return None
+    if error_payload is None:
+        return None
+    text = str(error_payload)
+    return text or None
+
+
+def _error_code(error_payload: Any) -> int | str | None:
+    if not isinstance(error_payload, Mapping):
+        return None
+    code = error_payload.get("code")
+    if isinstance(code, (int, str)):
+        return code
+    return None
 
 
 def _sanitize_progress_item(item_payload: Any) -> Any:

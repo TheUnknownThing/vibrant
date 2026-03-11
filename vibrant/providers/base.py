@@ -15,9 +15,177 @@ from dataclasses import dataclass
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, TypeAlias
+from typing import Any, Literal, NotRequired, Required, TypeAlias, TypedDict
 
-CanonicalEvent: TypeAlias = dict[str, Any]
+CanonicalEventOrigin: TypeAlias = Literal["provider", "orchestrator"]
+CanonicalRequestKind: TypeAlias = Literal["request", "approval", "user-input"]
+CanonicalKnownEventType: TypeAlias = Literal[
+    "session.started",
+    "session.state.changed",
+    "thread.started",
+    "turn.started",
+    "content.delta",
+    "reasoning.summary.delta",
+    "request.opened",
+    "request.resolved",
+    "user-input.requested",
+    "user-input.resolved",
+    "task.progress",
+    "task.completed",
+    "turn.completed",
+    "runtime.error",
+]
+CanonicalPayload: TypeAlias = Mapping[str, Any]
+
+
+class CanonicalEventEnvelope(TypedDict, total=False):
+    """Stable envelope shared by all canonical events.
+
+    Canonical events remain ordinary ``dict`` objects at runtime, but this
+    envelope defines the reserved keys that every backend must target.
+    Unknown event-specific fields are allowed via the generic fallback event
+    below so new providers can evolve without breaking older consumers.
+    """
+
+    type: Required[str]
+    timestamp: Required[str]
+    origin: NotRequired[CanonicalEventOrigin]
+    provider: NotRequired[str]
+    agent_id: NotRequired[str]
+    task_id: NotRequired[str]
+    provider_thread_id: NotRequired[str]
+    provider_payload: NotRequired[CanonicalPayload]
+
+
+class SessionStartedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["session.started"]]
+    cwd: NotRequired[str]
+
+
+class SessionStateChangedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["session.state.changed"]]
+    state: NotRequired[str]
+
+
+class ThreadStartedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["thread.started"]]
+    resumed: NotRequired[bool]
+    thread: NotRequired[CanonicalPayload]
+    thread_path: NotRequired[str]
+
+
+class TurnStartedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["turn.started"]]
+    turn_id: NotRequired[str]
+    turn_status: NotRequired[str]
+    turn: NotRequired[CanonicalPayload]
+
+
+class ContentDeltaEvent(CanonicalEventEnvelope):
+    type: Required[Literal["content.delta"]]
+    item_id: Required[str]
+    delta: Required[str]
+    turn_id: NotRequired[str]
+
+
+class ReasoningSummaryDeltaEvent(CanonicalEventEnvelope):
+    type: Required[Literal["reasoning.summary.delta"]]
+    item_id: Required[str]
+    delta: Required[str]
+    turn_id: NotRequired[str]
+    summary_index: NotRequired[int]
+
+
+class RequestOpenedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["request.opened"]]
+    request_id: Required[int | str]
+    request_kind: Required[CanonicalRequestKind]
+    method: Required[str]
+    params: NotRequired[CanonicalPayload]
+
+
+class RequestResolvedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["request.resolved"]]
+    request_id: Required[int | str]
+    request_kind: Required[CanonicalRequestKind]
+    method: Required[str]
+    result: NotRequired[Any]
+    error: NotRequired[Any]
+    error_message: NotRequired[str]
+
+
+class UserInputRequestedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["user-input.requested"]]
+    request_id: NotRequired[int | str]
+    method: NotRequired[str]
+    params: NotRequired[CanonicalPayload]
+    questions: NotRequired[list[str]]
+    banner_text: NotRequired[str]
+    terminal_bell: NotRequired[bool]
+
+
+class UserInputResolvedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["user-input.resolved"]]
+    request_id: NotRequired[int | str]
+    method: NotRequired[str]
+    result: NotRequired[Any]
+    error: NotRequired[Any]
+    error_message: NotRequired[str]
+    question: NotRequired[str]
+    answer: NotRequired[str]
+
+
+class TaskProgressEvent(CanonicalEventEnvelope):
+    type: Required[Literal["task.progress"]]
+    item: Required[Any]
+    item_type: NotRequired[str]
+    text: NotRequired[str]
+
+
+class TaskCompletedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["task.completed"]]
+    turn_id: NotRequired[str]
+    turn_status: NotRequired[str]
+    turn: NotRequired[CanonicalPayload]
+
+
+class TurnCompletedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["turn.completed"]]
+    turn_id: NotRequired[str]
+    turn_status: NotRequired[str]
+    turn: NotRequired[CanonicalPayload]
+
+
+class RuntimeErrorEvent(CanonicalEventEnvelope):
+    type: Required[Literal["runtime.error"]]
+    error: NotRequired[Any]
+    error_message: NotRequired[str]
+    error_code: NotRequired[int | str]
+
+
+class GenericCanonicalEvent(CanonicalEventEnvelope):
+    """Forward-compatible fallback for new canonical event types."""
+
+    type: Required[str]
+
+
+CanonicalEvent: TypeAlias = (
+    SessionStartedEvent
+    | SessionStateChangedEvent
+    | ThreadStartedEvent
+    | TurnStartedEvent
+    | ContentDeltaEvent
+    | ReasoningSummaryDeltaEvent
+    | RequestOpenedEvent
+    | RequestResolvedEvent
+    | UserInputRequestedEvent
+    | UserInputResolvedEvent
+    | TaskProgressEvent
+    | TaskCompletedEvent
+    | TurnCompletedEvent
+    | RuntimeErrorEvent
+    | GenericCanonicalEvent
+)
 CanonicalEventHandler: TypeAlias = Callable[[CanonicalEvent], Any]
 
 
