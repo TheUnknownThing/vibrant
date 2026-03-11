@@ -10,7 +10,7 @@ import shlex
 from typing import Any, Callable
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
-from ...models.agent import AgentRecord
+from ...models.agent import AgentRecord, ProviderResumeHandle
 from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
 from .client import CodexClient
@@ -566,18 +566,26 @@ class CodexProviderAdapter(ProviderAdapter):
         if record is None:
             return
 
+        resume_cursor: dict[str, Any] | None = None
         if thread_id is not None:
-            record.provider.provider_thread_id = thread_id
-            record.provider.resume_cursor = {"threadId": thread_id}
+            resume_cursor = {"threadId": thread_id}
         if runtime_mode is not None:
             record.provider.runtime_mode = runtime_mode.codex_thread_sandbox
-        if thread_payload.get("path"):
-            record.provider.thread_path = str(thread_payload["path"])
+        thread_path = str(thread_payload["path"]) if thread_payload.get("path") else None
         rollout_path = thread_payload.get("rolloutPath") or thread_payload.get("rollout_path")
         if rollout_path:
             record.provider.rollout_path = str(rollout_path)
         if approval_policy is not None:
-            record.provider.resume_cursor = {**(record.provider.resume_cursor or {}), "approvalPolicy": approval_policy}
+            resume_cursor = {**(resume_cursor or record.provider.resume_cursor or {}), "approvalPolicy": approval_policy}
+
+        record.provider.set_resume_handle(
+            ProviderResumeHandle(
+                kind=record.provider.kind,
+                thread_id=thread_id,
+                thread_path=thread_path or record.provider.thread_path,
+                resume_cursor=resume_cursor or record.provider.resume_cursor,
+            )
+        )
 
     def _extract_thread_payload(self, result: Any) -> dict[str, Any]:
         if not isinstance(result, dict):

@@ -6,7 +6,9 @@
 
 ## Goal
 
-Split the current `CodeAgentLifecycle` coordinator into explicit domain services under `vibrant/orchestrator/services/`, with `OrchestratorFacade` as the only public entrypoint for the TUI, Gatekeeper integration, and future MCP tools.
+Split the current `CodeAgentLifecycle` coordinator into explicit domain packages under `vibrant/orchestrator/agents/`, `vibrant/orchestrator/execution/`, `vibrant/orchestrator/artifacts/`, and `vibrant/orchestrator/state/`, with `OrchestratorFacade` as the only public entrypoint for the TUI, Gatekeeper integration, and future MCP tools.
+
+The file name is historical; the implementation now uses domain packages rather than a single flat `services/` directory.
 
 This document records:
 
@@ -69,7 +71,7 @@ Gatekeeper and execution agents should report structured intent/results. Service
 
 ## 1. `StateStore`
 
-**Target file:** `vibrant/orchestrator/services/state_store.py`
+**Target file:** `vibrant/orchestrator/state/store.py`
 
 **Purpose**
 
@@ -104,7 +106,7 @@ Own the durable orchestrator state model and persistence for `.vibrant/state.jso
 
 ## 2. `ConsensusService`
 
-**Target file:** `vibrant/orchestrator/services/consensus.py`
+**Target file:** `vibrant/orchestrator/artifacts/consensus.py`
 
 **Purpose**
 
@@ -137,7 +139,7 @@ Provide typed operations for reading and updating `consensus.md`.
 
 ## 3. `RoadmapService`
 
-**Target file:** `vibrant/orchestrator/services/roadmap.py`
+**Target file:** `vibrant/orchestrator/artifacts/roadmap.py`
 
 **Purpose**
 
@@ -172,7 +174,7 @@ Own roadmap loading, persistence, merge behavior, and typed task mutations.
 
 ## 4. `QuestionService`
 
-**Target file:** `vibrant/orchestrator/services/questions.py`
+**Target file:** `vibrant/orchestrator/artifacts/questions.py`
 
 **Purpose**
 
@@ -207,7 +209,7 @@ Own the lifecycle of user-facing questions.
 
 ## 5. `PlanningService`
 
-**Target file:** `vibrant/orchestrator/services/planning.py`
+**Target file:** `vibrant/orchestrator/artifacts/planning.py`
 
 **Purpose**
 
@@ -239,7 +241,7 @@ Handle high-level Gatekeeper planning conversations and planning-triggered updat
 
 ## 6. `AgentRegistry`
 
-**Target file:** `vibrant/orchestrator/services/agents.py`
+**Target file:** `vibrant/orchestrator/agents/registry.py`
 
 **Purpose**
 
@@ -277,7 +279,7 @@ Own durable agent metadata and runtime visibility.
 
 ## 7. `PromptService`
 
-**Target file:** `vibrant/orchestrator/services/prompts.py`
+**Target file:** `vibrant/orchestrator/execution/prompts.py`
 
 **Purpose**
 
@@ -308,7 +310,7 @@ Build execution prompts and load supporting skill content.
 
 ## 8. `TaskExecutionService`
 
-**Target file:** `vibrant/orchestrator/services/execution.py`
+**Target file:** `vibrant/orchestrator/execution/service.py`
 
 **Purpose**
 
@@ -344,7 +346,7 @@ Run task execution end-to-end for one task or one dispatch loop.
 
 ## 9. `AgentRuntimeService`
 
-**Target file:** `vibrant/orchestrator/services/runtime.py`
+**Target file:** `vibrant/orchestrator/agents/runtime.py`
 
 **Purpose**
 
@@ -389,7 +391,7 @@ Own single-run provider adapter session/thread/turn execution details for orches
 
 ## 10. `ReviewService`
 
-**Target file:** `vibrant/orchestrator/services/review.py`
+**Target file:** `vibrant/orchestrator/execution/review.py`
 
 **Purpose**
 
@@ -424,7 +426,7 @@ Route task completion/failure to Gatekeeper and apply the resulting verdict in t
 
 ## 11. `RetryPolicyService`
 
-**Target file:** `vibrant/orchestrator/services/retries.py`
+**Target file:** `vibrant/orchestrator/execution/retry_policy.py`
 
 **Purpose**
 
@@ -454,7 +456,7 @@ Own task retry, requeue, and escalation rules.
 
 ## 12. `GitWorkspaceService`
 
-**Target file:** `vibrant/orchestrator/services/git_workspace.py`
+**Target file:** `vibrant/orchestrator/execution/git_workspace.py`
 
 **Purpose**
 
@@ -486,7 +488,7 @@ Own git worktree, diff, and merge operations through the existing `GitManager`.
 
 ## 13. `WorkflowService`
 
-**Target file:** `vibrant/orchestrator/services/workflow.py`
+**Target file:** `vibrant/orchestrator/artifacts/workflow.py`
 
 **Purpose**
 
@@ -517,7 +519,7 @@ Own workflow status transitions and completion/reconciliation rules.
 - `_maybe_complete_workflow`
 - transition logic currently split across engine, TUI, and facade
 
-## What Should Stay Outside `services/`
+## What Should Stay Outside the Domain Packages
 
 ### `vibrant/orchestrator/facade.py`
 
@@ -536,7 +538,7 @@ This should become a temporary compatibility shell.
 
 It should:
 
-- delegate to services/facade
+- delegate to the domain packages and facade
 - preserve existing constructor and public methods during migration
 - shrink steadily until it can be removed or renamed
 
@@ -551,7 +553,7 @@ Long term, avoid letting it continue as a mixed persistence + policy layer.
 
 ### Phase A: boundary setup
 
-1. create `services/` package
+1. establish `artifacts/`, `agents/`, `execution/`, and `state/`
 2. add `OrchestratorFacade`
 3. route TUI calls through the facade
 4. keep lifecycle public API stable
@@ -593,27 +595,37 @@ vibrant/orchestrator/
 ├── engine.py
 ├── git_manager.py
 ├── task_dispatch.py
-└── services/
+├── agents/
+│   ├── __init__.py
+│   ├── manager.py
+│   ├── registry.py
+│   ├── runtime.py
+│   └── store.py
+├── artifacts/
+│   ├── __init__.py
+│   ├── consensus.py
+│   ├── planning.py
+│   ├── questions.py
+│   ├── roadmap.py
+│   └── workflow.py
+├── execution/
+│   ├── __init__.py
+│   ├── git_workspace.py
+│   ├── prompts.py
+│   ├── retry_policy.py
+│   ├── review.py
+│   └── service.py
+└── state/
     ├── __init__.py
-    ├── state_store.py
-    ├── consensus.py
-    ├── roadmap.py
-    ├── questions.py
-    ├── planning.py
-    ├── agents.py
-    ├── prompts.py
-    ├── execution.py
-    ├── runtime.py
-    ├── review.py
-    ├── retries.py
-    ├── git_workspace.py
-    └── workflow.py
+    ├── backend.py
+    ├── projection.py
+    └── store.py
 ```
 
 ## Immediate Next Steps
 
 1. move question-answer persistence out of `OrchestratorEngine`
-2. add `ConsensusService` and move workflow status writes there
+2. add `WorkflowService` and move workflow status writes there
 3. add `PlanningService` for Gatekeeper message routing
 4. extract `ReviewService` from Gatekeeper completion/failure flow
 5. extract `GitWorkspaceService` and `PromptService`

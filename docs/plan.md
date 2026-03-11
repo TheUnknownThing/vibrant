@@ -14,7 +14,6 @@
 | Module | What It Does | Spec Coverage |
 |---|---|---|
 | `codex_client.py` | JSON-RPC client for `codex app-server` (spawn, request/response, notifications, stderr) | §8.1–8.2 partial |
-| `session_manager.py` | Multi-thread session orchestration, domain events, streaming deltas, approval routing | §8.2–8.5 partial |
 | `models.py` | Pydantic models: JSON-RPC wire types, Thread/Turn/Item, SessionConfig, AppSettings | §4.3–4.4 partial |
 | `history.py` | File-backed thread persistence (`~/.codex-tui/history/`) | §4.1 partial |
 | `app.py` | Textual TUI: sidebar thread list + conversation view + input bar + settings | §7 partial (2-panel, not 4-panel) |

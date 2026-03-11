@@ -66,18 +66,7 @@ class AgentRecordStore:
         record = self.get(agent_id)
         if record is None:
             return None
-        provider = record.provider
-        if (
-            provider.provider_thread_id is None
-            and provider.thread_path is None
-            and provider.resume_cursor is None
-        ):
-            return None
-        return ProviderThreadHandle(
-            thread_id=provider.provider_thread_id,
-            thread_path=provider.thread_path,
-            resume_cursor=provider.resume_cursor,
-        )
+        return ProviderThreadHandle.from_provider_metadata(record.provider)
 
     def refresh(self) -> dict[str, AgentRecord]:
         records: dict[str, AgentRecord] = {}

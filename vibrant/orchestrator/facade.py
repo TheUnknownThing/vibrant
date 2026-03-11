@@ -17,9 +17,11 @@ import os
 from pathlib import Path
 from typing import Any
 
+from vibrant.agents.utils import maybe_forward_event
+
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapDocument
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.consensus import ConsensusStatus
 from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
@@ -27,7 +29,7 @@ from vibrant.models.task import TaskInfo, TaskStatus
 
 from .bootstrap import Orchestrator
 from .task_dispatch import TaskDispatcher
-from .types import CodeAgentLifecycleResult, OrchestratorAgentSnapshot
+from .types import AgentOutput, CodeAgentLifecycleResult, OrchestratorAgentSnapshot
 
 _WORKFLOW_TO_CONSENSUS = {
     OrchestratorStatus.INIT: ConsensusStatus.INIT,
@@ -156,9 +158,40 @@ class OrchestratorFacade:
                 raise ValueError(f"Unsupported agent status: {value!r}") from exc
         raise TypeError(f"agent status must be AgentStatus, str, or None; got {type(value).__name__}")
 
+    def _agent_output_service(self) -> Any | None:
+        service = getattr(self.orchestrator, "agent_output_service", None)
+        if service is not None:
+            return service
+
+        agent_manager = self._agent_manager()
+        if agent_manager is None:
+            return None
+        return getattr(agent_manager, "_output_service", None)
+
+    def _output_for_record(self, record: AgentRecord) -> AgentOutput | None:
+        service = self._agent_output_service()
+        if service is None:
+            return None
+        getter = getattr(service, "output_for_record", None)
+        if not callable(getter):
+            return None
+        return getter(record)
+
+    def _output_for_agent(self, agent_id: str) -> AgentOutput | None:
+        service = self._agent_output_service()
+        if service is None:
+            return None
+        getter = getattr(service, "output_for_agent", None)
+        if not callable(getter):
+            return None
+        return getter(agent_id)
+
     def _snapshot_from_record(self, record: AgentRecord) -> OrchestratorAgentSnapshot:
         status = record.status.value
         done = record.status in AgentRecord.TERMINAL_STATUSES
+        provider_thread = ProviderResumeHandle.from_provider_metadata(record.provider) or ProviderResumeHandle(
+            kind=record.provider.kind
+        )
         return OrchestratorAgentSnapshot(
             agent_id=record.agent_id,
             task_id=record.task_id,
@@ -176,12 +209,13 @@ class OrchestratorFacade:
             finished_at=record.finished_at,
             summary=record.summary,
             error=record.error,
-            provider_thread_id=record.provider.provider_thread_id,
-            provider_thread_path=record.provider.thread_path,
-            provider_resume_cursor=record.provider.resume_cursor,
+            provider_thread_id=provider_thread.thread_id,
+            provider_thread_path=provider_thread.thread_path,
+            provider_resume_cursor=provider_thread.resume_cursor,
             input_requests=[],
             native_event_log=record.provider.native_event_log,
             canonical_event_log=record.provider.canonical_event_log,
+            output=self._output_for_record(record),
         )
 
     def _coerce_agent_snapshot(self, value: object) -> OrchestratorAgentSnapshot | None:
@@ -238,6 +272,7 @@ class OrchestratorFacade:
             input_requests=list(getattr(value, "input_requests", []) or []),
             native_event_log=getattr(value, "native_event_log", None),
             canonical_event_log=getattr(value, "canonical_event_log", None),
+            output=getattr(value, "output", None) or self._output_for_agent(agent_id),
         )
 
     def _fallback_agent_snapshots(self) -> list[OrchestratorAgentSnapshot]:
@@ -391,6 +426,47 @@ class OrchestratorFacade:
 
     def list_active_agents(self) -> list[OrchestratorAgentSnapshot]:
         return self.list_agents(active_only=True)
+
+    def subscribe_agent_updates(
+        self,
+        handler: Any,
+        *,
+        agent_id: str | None = None,
+    ) -> Any:
+        subscribe_raw_events = getattr(self.orchestrator, "subscribe_raw_events", None)
+        if not callable(subscribe_raw_events):
+            return lambda: None
+
+        async def _handle_event(event: Any) -> None:
+            event_agent_id = event.get("agent_id") if isinstance(event, dict) else None
+            if not isinstance(event_agent_id, str) or not event_agent_id:
+                return
+            if agent_id is not None and event_agent_id != agent_id:
+                return
+            snapshot = self.get_agent(event_agent_id)
+            if snapshot is None:
+                return
+            await maybe_forward_event(handler, snapshot)
+
+        return subscribe_raw_events(_handle_event, agent_id=agent_id)
+
+    def subscribe_raw_events(
+        self,
+        handler: Any,
+        *,
+        agent_id: str | None = None,
+        task_id: str | None = None,
+        event_types: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> Any:
+        subscribe_raw_events = getattr(self.orchestrator, "subscribe_raw_events", None)
+        if not callable(subscribe_raw_events):
+            return lambda: None
+        return subscribe_raw_events(
+            handler,
+            agent_id=agent_id,
+            task_id=task_id,
+            event_types=event_types,
+        )
 
     def question_records(self) -> list[QuestionRecord]:
         if self.questions is not None:
@@ -560,7 +636,7 @@ class OrchestratorFacade:
         return self.snapshot().notification_bell_enabled
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
-        consensus_service = getattr(self.lifecycle, "consensus_service", None)
+        consensus_service = getattr(self.orchestrator, "consensus_service", None)
         write = getattr(consensus_service, "write", None)
         if callable(write):
             written = write(document)

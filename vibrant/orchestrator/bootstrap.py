@@ -9,6 +9,7 @@ from typing import Any
 
 from vibrant.agents.code_agent import CodeAgent
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperAgent
+from vibrant.agents.utils import maybe_forward_event
 from vibrant.agents.merge_agent import MergeAgent
 from vibrant.agents.runtime import AgentRuntime, BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
@@ -19,6 +20,7 @@ from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
+from .agent_output import AgentOutputProjectionService
 from .agents.manager import AgentManagementService
 from .agents.registry import AgentRegistry
 from .agents.runtime import AgentRuntimeService
@@ -57,6 +59,7 @@ class Orchestrator:
     git_manager: GitManager
     adapter_factory: Any
     on_canonical_event: Any | None
+    agent_output_service: AgentOutputProjectionService
     state_store: StateStore
     agent_store: AgentRecordStore
     roadmap_service: RoadmapService
@@ -97,10 +100,19 @@ class Orchestrator:
         config = load_config(start_path=root)
         config_holder = {"value": config}
         backend = state_backend or OrchestratorStateBackend.load(root)
+        agent_output_service = AgentOutputProjectionService()
+
+        async def handle_canonical_event(event: CanonicalEvent) -> None:
+            agent_output_service.ingest(event)
+            await maybe_forward_event(on_canonical_event, event)
+
         resolved_gatekeeper = gatekeeper or Gatekeeper(
             root,
             on_canonical_event=on_canonical_event,
         )
+        gatekeeper_agent = getattr(resolved_gatekeeper, "agent", None)
+        if gatekeeper_agent is not None:
+            gatekeeper_agent.on_canonical_event = handle_canonical_event
         resolved_git_manager = git_manager or GitManager(
             repo_root=root,
             worktree_root=scoped_worktree_root(root, config.worktree_directory),
@@ -139,7 +151,7 @@ class Orchestrator:
                 config_getter=lambda: config_holder["value"],
                 gatekeeper=resolved_gatekeeper,
                 adapter_factory=resolved_adapter_factory,
-                on_canonical_event=on_canonical_event,
+                on_canonical_event=handle_canonical_event,
                 agent_registry=agent_registry,
             )
 
@@ -147,7 +159,7 @@ class Orchestrator:
             agent_registry=agent_registry,
             adapter_factory=resolved_adapter_factory,
             config_getter=lambda: config_holder["value"],
-            on_canonical_event=on_canonical_event,
+            on_canonical_event=handle_canonical_event,
             agent_runtime=runtime_factory,
         )
         gatekeeper_runtime = GatekeeperRuntimeService(
@@ -194,6 +206,7 @@ class Orchestrator:
             agent_registry=agent_registry,
             runtime_service=runtime_service,
             execution_service=execution_service,
+            output_service=agent_output_service,
         )
 
         orchestrator = cls(
@@ -208,6 +221,7 @@ class Orchestrator:
             git_manager=resolved_git_manager,
             adapter_factory=resolved_adapter_factory,
             on_canonical_event=on_canonical_event,
+            agent_output_service=agent_output_service,
             state_store=state_store,
             agent_store=agent_store,
             roadmap_service=roadmap_service,

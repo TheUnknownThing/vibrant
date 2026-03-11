@@ -1160,6 +1160,16 @@ def _render_gatekeeper_result_text(result: object) -> str:
     return "Gatekeeper updated the plan."
 
 
+def _extract_planning_completion_request(result: object) -> str | None:
+    events = getattr(result, "events", None)
+    if isinstance(events, list):
+        for event in events:
+            if _event_requests_planning_completion(event):
+                return PLANNING_COMPLETE_MCP_TOOL
+
+    return None
+
+
 def _event_requests_planning_completion(event: object) -> bool:
     if not isinstance(event, dict):
         return False

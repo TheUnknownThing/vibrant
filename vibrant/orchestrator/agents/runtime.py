@@ -12,11 +12,12 @@ from vibrant.agents.runtime import (
     AgentRuntime,
     InputRequest,
     NormalizedRunResult,
+    ProviderResumeHandle,
     ProviderThreadHandle,
     RunState,
 )
 from vibrant.models.agent import AgentRecord
-from vibrant.orchestrator.git_manager import GitWorktreeInfo
+from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 from vibrant.providers.base import CanonicalEvent
 
 from ..types import RuntimeExecutionResult
@@ -115,7 +116,7 @@ class AgentRuntimeService:
                 return candidate_agent_id
         return None
 
-    def _coerce_provider_thread(
+    def _resolve_provider_thread(
         self,
         *,
         agent_record: AgentRecord,
@@ -126,10 +127,8 @@ class AgentRuntimeService:
         persisted = self.agent_registry.provider_thread_handle(agent_record.agent_id)
         if persisted is not None:
             return persisted
-        return ProviderThreadHandle(
-            thread_id=agent_record.provider.provider_thread_id,
-            thread_path=agent_record.provider.thread_path,
-            resume_cursor=agent_record.provider.resume_cursor,
+        return ProviderResumeHandle.from_provider_metadata(agent_record.provider) or ProviderResumeHandle(
+            kind=agent_record.provider.kind
         )
 
     def snapshot_handle(
@@ -155,8 +154,8 @@ class AgentRuntimeService:
             raise KeyError(f"Unknown agent record: {agent_id}")
 
         provider_thread = handle.provider_thread
-        if provider_thread.thread_id is None and provider_thread.thread_path is None and provider_thread.resume_cursor is None:
-            provider_thread = self._coerce_provider_thread(agent_record=agent_record, provider_thread=None)
+        if provider_thread.empty:
+            provider_thread = self._resolve_provider_thread(agent_record=agent_record, provider_thread=None)
         return RuntimeHandleSnapshot(
             agent_id=agent_record.agent_id,
             task_id=agent_record.task_id,
@@ -242,7 +241,7 @@ class AgentRuntimeService:
     ) -> AgentHandle:
         """Resume an existing handle-backed run using durable provider metadata."""
         runtime = self._resolve_runtime(agent_record)
-        provider_thread = self._coerce_provider_thread(
+        provider_thread = self._resolve_provider_thread(
             agent_record=agent_record,
             provider_thread=provider_thread,
         )
@@ -503,10 +502,8 @@ class AgentRuntimeService:
 
         transcript = "".join(transcript_chunks).strip()
         exit_code = extract_exit_code(adapter)
-        provider_thread = ProviderThreadHandle(
-            thread_id=agent_record.provider.provider_thread_id,
-            thread_path=agent_record.provider.thread_path,
-            resume_cursor=agent_record.provider.resume_cursor,
+        provider_thread = ProviderResumeHandle.from_provider_metadata(agent_record.provider) or ProviderResumeHandle(
+            kind=agent_record.provider.kind
         )
 
         if runtime_error:
@@ -557,7 +554,7 @@ def _normalized_to_execution_result(
     """Bridge a ``NormalizedRunResult`` to the orchestrator's runtime result type."""
     provider_thread = result.provider_thread
     if snapshot is not None:
-        provider_thread = ProviderThreadHandle(
+        provider_thread = ProviderResumeHandle(
             thread_id=snapshot.provider_thread_id,
             thread_path=snapshot.provider_thread_path,
             resume_cursor=snapshot.provider_resume_cursor,

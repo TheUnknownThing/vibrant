@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from textwrap import dedent
 from uuid import uuid4
 
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.providers.base import RuntimeMode
+from vibrant.prompts import build_merge_prompt as render_merge_prompt
 
 from .base import AgentBase
 
@@ -39,39 +39,15 @@ class MergeAgent(AgentBase):
         task_summary: str | None = None,
     ) -> str:
         """Build the prompt instructing the merge agent to resolve conflicts."""
-        files_list = "\n".join(f"- {f}" for f in conflicted_files) if conflicted_files else "- (none listed)"
-        summary_section = task_summary.strip() if task_summary else "No summary available."
-
-        return dedent(f"""\
-            You are a Merge Agent. Your sole job is to resolve merge conflicts
-            between the task branch and the main branch, preserving the intent
-            of both sides.
-
-            ## Context
-            - **Task ID**: {task_id}
-            - **Task Title**: {task_title}
-            - **Task Branch**: {branch}
-            - **Main Branch**: {main_branch}
-
-            ## Task Summary
-            {summary_section}
-
-            ## Conflicted Files
-            {files_list}
-
-            ## Conflict Diff
-            ```
-            {conflict_diff}
-            ```
-
-            ## Instructions
-            1. Examine each conflicted file carefully.
-            2. Resolve conflicts by keeping the correct intent from both sides.
-            3. Stage the resolved files with `git add`.
-            4. Commit the merge resolution with a clear commit message.
-            5. Do NOT introduce new features or make unrelated changes.
-            6. Do NOT delete or revert legitimate changes from either branch.
-        """)
+        return render_merge_prompt(
+            task_id=task_id,
+            task_title=task_title,
+            branch=branch,
+            main_branch=main_branch,
+            conflicted_files=conflicted_files,
+            conflict_diff=conflict_diff,
+            task_summary=task_summary,
+        )
 
     def build_agent_record(
         self,

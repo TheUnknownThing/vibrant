@@ -7,7 +7,8 @@ import subprocess
 from pathlib import Path
 
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.git_manager import GitManager, GitManagerError, GitMergeResult, GitWorktreeInfo
+
+from .git_manager import GitManager, GitManagerError, GitMergeResult, GitWorktreeInfo
 
 
 class GitWorkspaceService:

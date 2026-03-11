@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 
 logger = logging.getLogger(__name__)
@@ -72,17 +72,8 @@ class InputRequest:
     message: str | None = None
 
 
-@dataclass(slots=True)
-class ProviderThreadHandle:
-    """Durable reference to the provider thread, usable for resume/recovery."""
-
-    thread_id: str | None = None
-    thread_path: str | None = None
-    resume_cursor: dict[str, Any] | None = None
-
-    @property
-    def resumable(self) -> bool:
-        return self.thread_id is not None
+ProviderThreadHandle = ProviderResumeHandle
+"""Backward-compatible alias for the durable provider resume model."""
 
 
 @dataclass(slots=True)
@@ -151,7 +142,7 @@ class AgentHandle:
     ) -> None:
         self._future = result_future
         self._state: RunState = RunState.STARTING
-        self._provider_thread = ProviderThreadHandle()
+        self._provider_thread = ProviderResumeHandle()
         self._input_requests: list[InputRequest] = []
         self._adapter_accessor = adapter_accessor
 
@@ -478,10 +469,8 @@ class BaseAgentRuntime:
                     resume_thread_id=resume_thread_id,
                 )
 
-                provider_thread = ProviderThreadHandle(
-                    thread_id=getattr(agent_record.provider, "provider_thread_id", None),
-                    thread_path=getattr(agent_record.provider, "thread_path", None),
-                    resume_cursor=getattr(agent_record.provider, "resume_cursor", None),
+                provider_thread = ProviderResumeHandle.from_provider_metadata(agent_record.provider) or ProviderResumeHandle(
+                    kind=agent_record.provider.kind
                 )
                 handle._set_provider_thread(provider_thread)
 
