@@ -458,6 +458,25 @@ class CodexProviderAdapter(ProviderAdapter):
                 delta=params.get("delta", ""),
                 raw=params,
             )
+        elif method == "item/reasoning/summaryPartAdded":
+            item_id = params.get("itemId") or params.get("item_id")
+            if isinstance(item_id, str) and item_id:
+                self._ensure_item_state(item_id)["pending_reasoning_break"] = True
+        elif method == "item/reasoning/textDelta":
+            await self._handle_reasoning_delta(
+                item_id=params.get("itemId") or params.get("item_id"),
+                turn_id=params.get("turnId") or self.current_turn_id,
+                delta=params.get("delta", ""),
+                raw=params,
+                redacted_for_log=True,
+            )
+        elif method == "item/commandExecution/outputDelta":
+            await self._handle_command_output_delta(
+                item_id=params.get("itemId") or params.get("item_id"),
+                turn_id=params.get("turnId") or self.current_turn_id,
+                delta=params.get("delta", ""),
+                raw=params,
+            )
         elif method == "item/completed":
             item_payload = params.get("item", params)
             item_payload = _sanitize_progress_item(item_payload)
