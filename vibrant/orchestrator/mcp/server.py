@@ -49,6 +49,13 @@ _TOOL_SCOPES: dict[str, tuple[str, ...]] = {
     "task_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
     "workflow_pause": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
     "workflow_resume": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
+    "vibrant.end_planning_phase": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
+    "vibrant.request_user_decision": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
+    "vibrant.set_pending_questions": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
+    "vibrant.review_task_outcome": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
+    "vibrant.mark_task_for_retry": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
+    "vibrant.update_consensus": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_WRITE_SCOPE),
+    "vibrant.update_roadmap": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
 }
 
 
@@ -118,6 +125,13 @@ class OrchestratorMCPServer:
             "task_get": MCPToolDefinition("task_get", "Read one roadmap task by id.", self.agent_tools.task_get),
             "workflow_pause": MCPToolDefinition("workflow_pause", "Pause the workflow.", self.gatekeeper_tools.workflow_pause),
             "workflow_resume": MCPToolDefinition("workflow_resume", "Resume the workflow.", self.gatekeeper_tools.workflow_resume),
+            "vibrant.end_planning_phase": MCPToolDefinition("vibrant.end_planning_phase", "Transition the orchestrator from planning into execution.", self.gatekeeper_tools.end_planning_phase),
+            "vibrant.request_user_decision": MCPToolDefinition("vibrant.request_user_decision", "Create one user-facing decision request for the Gatekeeper.", self.gatekeeper_tools.request_user_decision),
+            "vibrant.set_pending_questions": MCPToolDefinition("vibrant.set_pending_questions", "Replace the pending Gatekeeper question set.", self.gatekeeper_tools.set_pending_questions),
+            "vibrant.review_task_outcome": MCPToolDefinition("vibrant.review_task_outcome", "Record the Gatekeeper verdict for a task outcome.", self.gatekeeper_tools.review_task_outcome),
+            "vibrant.mark_task_for_retry": MCPToolDefinition("vibrant.mark_task_for_retry", "Update a task for retry and requeue or escalate it.", self.gatekeeper_tools.mark_task_for_retry),
+            "vibrant.update_consensus": MCPToolDefinition("vibrant.update_consensus", "Update orchestrator-owned consensus fields.", self.gatekeeper_tools.update_consensus),
+            "vibrant.update_roadmap": MCPToolDefinition("vibrant.update_roadmap", "Replace the roadmap document with a validated task list.", self.gatekeeper_tools.update_roadmap),
         }
 
     def list_resources(self, principal: MCPPrincipal) -> list[MCPResourceDefinition]:

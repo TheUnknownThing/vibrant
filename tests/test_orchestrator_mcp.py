@@ -128,3 +128,104 @@ async def test_orchestrator_mcp_server_enforces_shared_scopes_and_mutates_state(
 
     workflow = await server.read_resource("workflow.status", principal=gatekeeper)
     assert workflow == {"status": "paused"}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_path: Path) -> None:
+    facade, state_store, _questions, _repo = _build_facade(tmp_path)
+    state_store.transition_to(OrchestratorStatus.PLANNING)
+
+    server = OrchestratorMCPServer(facade)
+    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
+
+    updated_consensus = await server.call_tool(
+        "vibrant.update_consensus",
+        principal=gatekeeper,
+        status="planning",
+        objectives="Ship MCP-driven orchestration.",
+    )
+    assert updated_consensus["objectives"] == "Ship MCP-driven orchestration."
+
+    updated_roadmap = await server.call_tool(
+        "vibrant.update_roadmap",
+        principal=gatekeeper,
+        tasks=[
+            {
+                "id": "task-1",
+                "title": "Implement MCP-backed reviews",
+                "acceptance_criteria": ["Gatekeeper can record an accepted verdict"],
+            }
+        ],
+    )
+    assert [task["id"] for task in updated_roadmap["tasks"]] == ["task-1"]
+
+    pending = await server.call_tool(
+        "vibrant.set_pending_questions",
+        principal=gatekeeper,
+        questions=["Should retries stay automatic?"],
+    )
+    assert [item["text"] for item in pending if item["status"] == "pending"] == ["Should retries stay automatic?"]
+    assert state_store.state.gatekeeper_status.value == "awaiting_user"
+
+    decision = await server.call_tool(
+        "vibrant.request_user_decision",
+        principal=gatekeeper,
+        question="Should we expose the new MCPs now?",
+    )
+    assert decision["text"] == "Should we expose the new MCPs now?"
+
+    transitioned = await server.call_tool("vibrant.end_planning_phase", principal=gatekeeper)
+    assert transitioned == {"status": "executing"}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: Path) -> None:
+    facade, state_store, _questions, _repo = _build_facade(tmp_path)
+    state_store.transition_to(OrchestratorStatus.PLANNING)
+    server = OrchestratorMCPServer(facade)
+    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
+
+    await server.call_tool(
+        "vibrant.update_roadmap",
+        principal=gatekeeper,
+        tasks=[
+            {
+                "id": "task-1",
+                "title": "Implement MCP-backed reviews",
+                "acceptance_criteria": ["Gatekeeper can record an accepted verdict"],
+                "status": "completed",
+            }
+        ],
+    )
+
+    accepted = await server.call_tool(
+        "vibrant.review_task_outcome",
+        principal=gatekeeper,
+        task_id="task-1",
+        decision="accepted",
+    )
+    assert accepted["status"] == "accepted"
+
+    await server.call_tool(
+        "vibrant.update_roadmap",
+        principal=gatekeeper,
+        tasks=[
+            {
+                "id": "task-2",
+                "title": "Retry flaky implementation",
+                "acceptance_criteria": ["Task is requeued with updated prompt"],
+                "status": "completed",
+                "max_retries": 2,
+                "retry_count": 0,
+            }
+        ],
+    )
+    retried = await server.call_tool(
+        "vibrant.mark_task_for_retry",
+        principal=gatekeeper,
+        task_id="task-2",
+        failure_reason="Needs a safer retry path",
+        prompt="Retry with a safer implementation plan.",
+    )
+    assert retried["status"] == "queued"
+    assert retried["prompt"] == "Retry with a safer implementation plan."

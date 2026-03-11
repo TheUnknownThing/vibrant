@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 import inspect
 
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
@@ -27,11 +28,13 @@ class ReviewService:
         state_store: StateStore,
         roadmap_service: RoadmapService,
         git_service: GitWorkspaceService,
+        gatekeeper_runner: Callable[[GatekeeperRequest, bool | None], Awaitable[GatekeeperRunResult]] | None = None,
     ) -> None:
         self.gatekeeper = gatekeeper
         self.state_store = state_store
         self.roadmap_service = roadmap_service
         self.git_service = git_service
+        self.gatekeeper_runner = gatekeeper_runner
 
     async def run_gatekeeper_request(
         self,
@@ -39,6 +42,9 @@ class ReviewService:
         *,
         resume_latest_thread: bool | None = None,
     ) -> GatekeeperRunResult:
+        if self.gatekeeper_runner is not None:
+            return await self.gatekeeper_runner(request, resume_latest_thread)
+
         run_gatekeeper = self.gatekeeper.run
         try:
             signature = inspect.signature(run_gatekeeper)
@@ -55,7 +61,7 @@ class ReviewService:
         agent_record: AgentRecord,
         worktree: GitWorktreeInfo,
     ) -> tuple[GatekeeperRunResult, str]:
-        result = await self.gatekeeper.run(self.build_completion_request(task, agent_record, worktree))
+        result = await self.run_gatekeeper_request(self.build_completion_request(task, agent_record, worktree))
         self.state_store.apply_gatekeeper_result(result)
         self._reload_roadmap()
         return result, self.resolve_decision(result, task.id)
@@ -67,7 +73,7 @@ class ReviewService:
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRunResult:
-        result = await self.gatekeeper.run(self.build_failure_request(task, agent_record, worktree, reason))
+        result = await self.run_gatekeeper_request(self.build_failure_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
         self._reload_roadmap()
         return result
@@ -79,7 +85,7 @@ class ReviewService:
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRunResult:
-        result = await self.gatekeeper.run(self.build_escalation_request(task, agent_record, worktree, reason))
+        result = await self.run_gatekeeper_request(self.build_escalation_request(task, agent_record, worktree, reason))
         self.state_store.apply_gatekeeper_result(result)
         self._reload_roadmap()
         return result

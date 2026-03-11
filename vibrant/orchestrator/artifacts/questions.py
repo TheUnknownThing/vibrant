@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Iterable
 from uuid import uuid4
 
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.models.state import GatekeeperStatus, QuestionPriority, QuestionRecord, QuestionStatus, reconcile_question_records
 
+from ..state import build_user_input_requested_event
 from ..state.store import StateStore
 
 
 class QuestionService:
     """Manage Gatekeeper questions through a dedicated service boundary."""
 
-    def __init__(self, *, state_store: StateStore, gatekeeper: Gatekeeper) -> None:
+    def __init__(
+        self,
+        *,
+        state_store: StateStore,
+        gatekeeper: Gatekeeper,
+        answer_runner: Callable[[str, str], Awaitable[GatekeeperRunResult]] | None = None,
+    ) -> None:
         self.state_store = state_store
         self.gatekeeper = gatekeeper
+        self.answer_runner = answer_runner
 
     def records(self) -> list[QuestionRecord]:
         return [record.model_copy(deep=True) for record in self.state_store.state.questions]
@@ -61,7 +70,7 @@ class QuestionService:
             source_role=source_role,
         )
         self.state_store.state.replace_questions(reconciled)
-        self.state_store.persist()
+        self._persist_question_state(emit_request_event=bool(self.state_store.state.pending_questions))
         return self.records()
 
     def ask(
@@ -85,7 +94,7 @@ class QuestionService:
         )
         self.state_store.state.questions.append(record)
         self.state_store.state.sync_pending_question_projection()
-        self.state_store.persist()
+        self._persist_question_state(emit_request_event=True)
         return record.model_copy(deep=True)
 
     def resolve(self, question_id: str, *, answer: str | None = None) -> QuestionRecord:
@@ -98,7 +107,7 @@ class QuestionService:
                 if record.status is QuestionStatus.PENDING:
                     record.resolve(answer=answer)
                     self.state_store.state.sync_pending_question_projection()
-                    self.state_store.persist()
+                    self._persist_question_state(emit_request_event=False)
                 return record.model_copy(deep=True)
         raise KeyError(f"Unknown question record: {question_id}")
 
@@ -109,7 +118,10 @@ class QuestionService:
 
         self.state_store.set_gatekeeper_status(GatekeeperStatus.RUNNING)
 
-        result = await self.gatekeeper.answer_question(selected_question, answer)
+        if self.answer_runner is not None:
+            result = await self.answer_runner(selected_question, answer)
+        else:
+            result = await self.gatekeeper.answer_question(selected_question, answer)
         self.state_store.apply_gatekeeper_result(result)
         self.state_store.append_event(
             {
@@ -121,6 +133,21 @@ class QuestionService:
         )
         return result
 
+    def _persist_question_state(self, *, emit_request_event: bool) -> None:
+        pending = list(self.state_store.state.pending_questions)
+        if pending:
+            self.state_store.state.gatekeeper_status = GatekeeperStatus.AWAITING_USER
+            if emit_request_event:
+                self.state_store.engine.emitted_events.append(
+                    build_user_input_requested_event(
+                        pending,
+                        banner_text=self.state_store.user_input_banner(),
+                        terminal_bell=self.state_store.notification_bell_enabled(),
+                    )
+                )
+        elif self.state_store.state.gatekeeper_status is not GatekeeperStatus.RUNNING:
+            self.state_store.state.gatekeeper_status = GatekeeperStatus.IDLE
+        self.state_store.persist()
 
 
 def _timestamp_now() -> str:

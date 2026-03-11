@@ -23,9 +23,10 @@ from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.consensus import ConsensusStatus
 from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
-from vibrant.models.task import TaskInfo
+from vibrant.models.task import TaskInfo, TaskStatus
 
 from .lifecycle import CodeAgentLifecycle
+from .task_dispatch import TaskDispatcher
 from .types import CodeAgentLifecycleResult, OrchestratorAgentSnapshot
 
 _WORKFLOW_TO_CONSENSUS = {
@@ -424,6 +425,26 @@ class OrchestratorFacade:
             raise AttributeError("Lifecycle does not support roadmap reordering")
         return reorder_tasks(ordered_task_ids)
 
+    def replace_roadmap(self, *, tasks: list[TaskInfo | dict[str, Any]], project: str | None = None) -> RoadmapDocument:
+        roadmap_service = getattr(self.lifecycle, "roadmap_service", None)
+        ensure_document = getattr(roadmap_service, "_ensure_document", None)
+        persist = getattr(roadmap_service, "persist", None)
+        parser = getattr(roadmap_service, "parser", None)
+        if not callable(ensure_document) or parser is None or not callable(persist):
+            raise AttributeError("Lifecycle does not support roadmap replacement")
+
+        document = ensure_document()
+        normalized_tasks = [task if isinstance(task, TaskInfo) else TaskInfo.model_validate(task) for task in tasks]
+        parser.validate_dependency_graph(normalized_tasks)
+
+        state_store = self._state_store()
+        concurrency_limit = getattr(getattr(state_store, "state", None), "concurrency_limit", 1)
+        document.project = project or document.project
+        document.tasks = normalized_tasks
+        roadmap_service.dispatcher = TaskDispatcher(normalized_tasks, concurrency_limit=concurrency_limit)
+        persist()
+        return document
+
     def update_consensus(self, **updates: Any) -> ConsensusDocument:
         consensus_service = getattr(self.lifecycle, "consensus_service", None)
         update = getattr(consensus_service, "update", None)
@@ -445,6 +466,35 @@ class OrchestratorFacade:
         if not callable(ask):
             raise AttributeError("Lifecycle does not support question creation")
         return ask(text, source_agent_id=source_agent_id, source_role=source_role, priority=priority)
+
+    def request_user_decision(
+        self,
+        text: str,
+        *,
+        source_agent_id: str | None = None,
+        source_role: str = "gatekeeper",
+        priority: QuestionPriority = QuestionPriority.BLOCKING,
+    ) -> QuestionRecord:
+        return self.ask_question(
+            text,
+            source_agent_id=source_agent_id,
+            source_role=source_role,
+            priority=priority,
+        )
+
+    def set_pending_questions(
+        self,
+        questions: list[str] | tuple[str, ...],
+        *,
+        source_agent_id: str | None = None,
+        source_role: str = "gatekeeper",
+    ) -> list[QuestionRecord]:
+        if self.questions is None:
+            raise AttributeError("Lifecycle does not support question synchronization")
+        sync_pending = getattr(self.questions, "sync_pending", None)
+        if not callable(sync_pending):
+            raise AttributeError("Lifecycle does not support question synchronization")
+        return list(sync_pending(questions, source_agent_id=source_agent_id, source_role=source_role))
 
     def resolve_question(self, question_id: str, *, answer: str | None = None) -> QuestionRecord:
         if self.questions is None:
@@ -518,6 +568,89 @@ class OrchestratorFacade:
         if current is not OrchestratorStatus.PAUSED:
             raise ValueError(f"Cannot resume workflow from {current.value}")
         self.transition_workflow_state(OrchestratorStatus.EXECUTING)
+
+    def end_planning_phase(self) -> OrchestratorStatus:
+        workflow_service = getattr(self.lifecycle, "workflow_service", None)
+        begin_execution_if_needed = getattr(workflow_service, "begin_execution_if_needed", None)
+        if callable(begin_execution_if_needed):
+            begin_execution_if_needed()
+        elif self.workflow_status() is not OrchestratorStatus.EXECUTING:
+            self.transition_workflow_state(OrchestratorStatus.EXECUTING)
+        refresh = getattr(self._state_store(), "refresh", None)
+        if callable(refresh):
+            refresh()
+        return self.workflow_status()
+
+    def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None) -> TaskInfo:
+        normalized_decision = decision.strip().lower()
+        task = self.task(task_id)
+        if task is None:
+            raise KeyError(f"Task not found in roadmap: {task_id}")
+
+        if normalized_decision in {"accept", "accepted", "approve", "approved", "done"}:
+            if task.status is TaskStatus.ACCEPTED:
+                return task
+            if task.status is not TaskStatus.COMPLETED:
+                raise ValueError(f"Cannot accept task from status {task.status.value}")
+            return self.update_task(task_id, status=TaskStatus.ACCEPTED.value)
+
+        if normalized_decision in {"needs_input", "awaiting_input"}:
+            return task
+
+        if normalized_decision in {"reject", "rejected", "retry", "needs_changes"}:
+            if task.status is TaskStatus.COMPLETED:
+                return self.update_task(
+                    task_id,
+                    status=TaskStatus.FAILED.value,
+                    failure_reason=failure_reason or "Gatekeeper requested changes",
+                )
+            return task
+
+        if normalized_decision in {"escalate", "escalated"}:
+            if task.status is TaskStatus.ESCALATED:
+                return task
+            if task.status is TaskStatus.COMPLETED:
+                task = self.update_task(
+                    task_id,
+                    status=TaskStatus.FAILED.value,
+                    failure_reason=failure_reason or "Gatekeeper escalated the task",
+                )
+            if task.status is TaskStatus.FAILED and task.can_transition_to(TaskStatus.ESCALATED):
+                return self.update_task(task_id, status=TaskStatus.ESCALATED.value)
+            return task
+
+        raise ValueError(f"Unsupported Gatekeeper review decision: {decision}")
+
+    def mark_task_for_retry(
+        self,
+        task_id: str,
+        *,
+        failure_reason: str,
+        prompt: str | None = None,
+        acceptance_criteria: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskInfo:
+        task = self.task(task_id)
+        if task is None:
+            raise KeyError(f"Task not found in roadmap: {task_id}")
+
+        updates: dict[str, Any] = {}
+        if prompt is not None:
+            updates["prompt"] = prompt
+        if acceptance_criteria is not None:
+            updates["acceptance_criteria"] = list(acceptance_criteria)
+        if updates:
+            task = self.update_task(task_id, **updates)
+
+        if task.status is TaskStatus.COMPLETED:
+            task = self.update_task(task_id, status=TaskStatus.FAILED.value, failure_reason=failure_reason)
+
+        if task.status is TaskStatus.FAILED:
+            next_status = TaskStatus.QUEUED if task.can_transition_to(TaskStatus.QUEUED) else TaskStatus.ESCALATED
+            task = self.update_task(task_id, status=next_status.value)
+
+        if task.status not in {TaskStatus.QUEUED, TaskStatus.ESCALATED}:
+            raise ValueError(f"Cannot mark task for retry from status {task.status.value}")
+        return task
 
     def pending_questions(self) -> list[str]:
         if self.questions is not None:

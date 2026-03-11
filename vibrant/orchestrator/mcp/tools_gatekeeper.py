@@ -61,7 +61,7 @@ class GatekeeperToolHandlers:
         source_agent_id: str | None = None,
         priority: str = QuestionPriority.BLOCKING.value,
     ) -> dict[str, Any]:
-        record = self.facade.ask_question(
+        record = self.facade.request_user_decision(
             text,
             source_agent_id=source_agent_id,
             source_role="gatekeeper",
@@ -79,3 +79,82 @@ class GatekeeperToolHandlers:
     def workflow_resume(self) -> dict[str, Any]:
         self.facade.resume_workflow()
         return {"status": self.facade.workflow_status().value}
+
+    def end_planning_phase(self) -> dict[str, Any]:
+        return {"status": self.facade.end_planning_phase().value}
+
+    def request_user_decision(
+        self,
+        question: str,
+        *,
+        source_agent_id: str | None = None,
+        priority: str = QuestionPriority.BLOCKING.value,
+    ) -> dict[str, Any]:
+        record = self.facade.request_user_decision(
+            question,
+            source_agent_id=source_agent_id,
+            source_role="gatekeeper",
+            priority=QuestionPriority(priority),
+        )
+        return record.model_dump(mode="json")
+
+    def set_pending_questions(
+        self,
+        questions: Sequence[str],
+        *,
+        source_agent_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        records = self.facade.set_pending_questions(
+            questions,
+            source_agent_id=source_agent_id,
+            source_role="gatekeeper",
+        )
+        return [record.model_dump(mode="json") for record in records]
+
+    def review_task_outcome(
+        self,
+        task_id: str,
+        *,
+        decision: str,
+        failure_reason: str | None = None,
+    ) -> dict[str, Any]:
+        task = self.facade.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
+        return task.model_dump(mode="json")
+
+    def mark_task_for_retry(
+        self,
+        task_id: str,
+        *,
+        failure_reason: str,
+        prompt: str | None = None,
+        acceptance_criteria: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        task = self.facade.mark_task_for_retry(
+            task_id,
+            failure_reason=failure_reason,
+            prompt=prompt,
+            acceptance_criteria=acceptance_criteria,
+        )
+        return task.model_dump(mode="json")
+
+    def update_consensus(
+        self,
+        *,
+        status: str | None = None,
+        objectives: str | None = None,
+        getting_started: str | None = None,
+        questions: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.consensus_update(
+            status=status,
+            objectives=objectives,
+            getting_started=getting_started,
+            questions=questions,
+        )
+
+    def update_roadmap(self, *, tasks: Sequence[dict[str, Any]], project: str | None = None) -> dict[str, Any]:
+        roadmap = self.facade.replace_roadmap(tasks=list(tasks), project=project)
+        return {
+            "project": roadmap.project,
+            "tasks": [task.model_dump(mode="json") for task in roadmap.tasks],
+        }
