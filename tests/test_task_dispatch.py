@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from vibrant.consensus import RoadmapParser
 from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.orchestrator.artifacts.roadmap import RoadmapService
 from vibrant.orchestrator.task_dispatch import TaskDispatcher
 
 
@@ -95,3 +97,42 @@ class TestTaskDispatcher:
 
         dispatcher.accept_task("task-accept")
         assert task.status is TaskStatus.ACCEPTED
+
+
+class TestRoadmapDispatcherSync:
+    def test_add_task_updates_live_dispatcher(self, tmp_path):
+        service = RoadmapService(tmp_path / "roadmap.md", parser=RoadmapParser())
+
+        task = TaskInfo(id="task-added", title="Added later")
+        service.add_task(task)
+
+        assert service.dispatcher is not None
+        assert service.dispatcher.get_task("task-added") is task
+        assert service.dispatcher.queued_task_ids == ["task-added"]
+
+    def test_update_task_updates_live_dispatcher_metadata(self, tmp_path):
+        roadmap_path = tmp_path / "roadmap.md"
+        service = RoadmapService(roadmap_path, parser=RoadmapParser())
+        service.add_task(TaskInfo(id="task-a", title="Task A", priority=10))
+        service.add_task(TaskInfo(id="task-b", title="Task B", priority=20))
+
+        updated = service.update_task("task-a", priority=-1, title="Task A updated")
+
+        assert service.dispatcher is not None
+        queued = service.dispatcher.queued_task_ids
+        assert queued == ["task-a", "task-b"]
+        dispatcher_task = service.dispatcher.get_task("task-a")
+        assert dispatcher_task is updated
+        assert dispatcher_task.title == "Task A updated"
+        assert dispatcher_task.priority == -1
+
+    def test_reorder_tasks_updates_live_dispatcher_order(self, tmp_path):
+        service = RoadmapService(tmp_path / "roadmap.md", parser=RoadmapParser())
+        service.add_task(TaskInfo(id="task-a", title="Task A"))
+        service.add_task(TaskInfo(id="task-b", title="Task B"))
+        service.add_task(TaskInfo(id="task-c", title="Task C"))
+
+        service.reorder_tasks(["task-c", "task-a", "task-b"])
+
+        assert service.dispatcher is not None
+        assert service.dispatcher.queued_task_ids == ["task-c", "task-a", "task-b"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
-from vibrant.orchestrator.git_manager import GitWorktreeInfo
+from .git_manager import GitWorktreeInfo
 
 from ..types import CodeAgentLifecycleResult
 from .git_workspace import GitWorkspaceService
