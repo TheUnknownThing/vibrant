@@ -42,8 +42,9 @@ class HelpScreen(ModalScreen[None]):
 ## Keys
 - `F1` help
 - `F2` pause / resume workflow
-- `F3` open consensus overlay
-- `F5` cycle agent logs
+- `F3` show Task Status tab
+- `F4` toggle Consensus panel / tab
+- `F5` show Chat History tab
 - `F10` quit
 
 ## Commands

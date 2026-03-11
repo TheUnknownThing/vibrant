@@ -9,6 +9,11 @@ from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperR
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.git_manager import GitWorktreeInfo
+from vibrant.prompts import (
+    build_task_completion_trigger_description,
+    build_task_escalation_trigger_description,
+    build_task_failure_trigger_description,
+)
 
 from .git_workspace import GitWorkspaceService
 from ..artifacts.roadmap import RoadmapService
@@ -97,16 +102,12 @@ class ReviewService:
         worktree: GitWorktreeInfo,
     ) -> GatekeeperRequest:
         diff_text = self.git_service.collect_diff(task, worktree)
-        trigger_description = "\n".join(
-            [
-                f"Task {task.id}: {task.title}",
-                "Evaluate the completed implementation against the roadmap acceptance criteria.",
-                f"Branch: {task.branch or self.git_service.branch_name(task.id)}",
-                "Acceptance Criteria:",
-                *[f"- {criterion}" for criterion in task.acceptance_criteria],
-                "Git Diff:",
-                diff_text,
-            ]
+        trigger_description = build_task_completion_trigger_description(
+            task_id=task.id,
+            task_title=task.title,
+            branch=task.branch or self.git_service.branch_name(task.id),
+            acceptance_criteria=task.acceptance_criteria,
+            diff_text=diff_text,
         )
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.TASK_COMPLETION,
@@ -122,15 +123,13 @@ class ReviewService:
         reason: str,
     ) -> GatekeeperRequest:
         diff_text = self.git_service.collect_diff(task, worktree)
-        trigger_description = "\n".join(
-            [
-                f"Task {task.id}: {task.title}",
-                f"Failure Reason: {reason}",
-                f"Retry Count: {task.retry_count} / {task.max_retries}",
-                "Please adjust the task prompt or acceptance criteria for the next retry.",
-                "Current Diff / Status:",
-                diff_text,
-            ]
+        trigger_description = build_task_failure_trigger_description(
+            task_id=task.id,
+            task_title=task.title,
+            retry_count=task.retry_count,
+            max_retries=task.max_retries,
+            reason=reason,
+            diff_text=diff_text,
         )
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.TASK_FAILURE,
@@ -146,15 +145,13 @@ class ReviewService:
         reason: str,
     ) -> GatekeeperRequest:
         diff_text = self.git_service.collect_diff(task, worktree)
-        trigger_description = "\n".join(
-            [
-                f"Task {task.id}: {task.title}",
-                f"Failure Reason: {reason}",
-                f"Max retries exceeded at {task.retry_count} / {task.max_retries}.",
-                "Escalate to the user or pivot the plan.",
-                "Current Diff / Status:",
-                diff_text,
-            ]
+        trigger_description = build_task_escalation_trigger_description(
+            task_id=task.id,
+            task_title=task.title,
+            retry_count=task.retry_count,
+            max_retries=task.max_retries,
+            reason=reason,
+            diff_text=diff_text,
         )
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.MAX_RETRIES_EXCEEDED,

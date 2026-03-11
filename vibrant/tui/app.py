@@ -12,6 +12,7 @@ from typing import Any, Callable
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
+from textual.css.query import NoMatches
 from textual.widgets import Footer, Header, Static
 
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, resolve_project_path
@@ -22,6 +23,7 @@ from ..orchestrator import CodeAgentLifecycleResult, Orchestrator, OrchestratorF
 from ..project_init import ensure_project_files, initialize_project
 from .screens import HelpScreen, InitializationScreen, PlanningScreen, VibingScreen
 from .widgets.chat_panel import ChatPanel
+from .widgets.consensus_view import ConsensusView
 from .widgets.input_bar import InputBar
 from .widgets.settings_panel import SettingsPanel
 
@@ -60,8 +62,9 @@ class VibrantApp(App):
     BINDINGS = [
         Binding("f1", "open_help", "Help", show=True),
         Binding("f2", "toggle_pause", "Pause", show=True),
-        Binding("f3", "open_consensus_overlay", "Consensus", show=True),
-        Binding("f5", "cycle_agent_output", "Switch Agent", show=True),
+        Binding("f3", "show_task_status", "Task", show=True),
+        Binding("f4", "toggle_consensus", "Consensus", show=True),
+        Binding("f5", "show_chat_history", "Chat", show=True),
         Binding("f10", "quit_app", "Quit", show=True),
         Binding("ctrl+s", "open_settings", "Settings", show=False),
         Binding("f6", "run_next_task", "Run Task", show=False),
@@ -224,12 +227,35 @@ class VibrantApp(App):
             return
         vibing_screen.agent_output.action_cycle_agent()
 
-    def action_open_consensus_overlay(self) -> None:
+    def action_show_task_status(self) -> None:
         vibing_screen = self._vibing_screen()
         if vibing_screen is None:
-            self.notify("Consensus view is only available in the vibing screen.", severity="warning")
+            self.notify("Task status is only available in the vibing screen.", severity="warning")
             return
-        vibing_screen.consensus_view.action_open_full_consensus()
+        vibing_screen.show_task_status()
+
+    def action_toggle_consensus(self) -> None:
+        planning_screen = self._planning_screen()
+        if planning_screen is not None:
+            planning_screen.toggle_consensus_panel()
+            state = "shown" if planning_screen.consensus_visible else "hidden"
+            self._set_status(f"Consensus panel {state}")
+            return
+
+        vibing_screen = self._vibing_screen()
+        if vibing_screen is None:
+            self.notify("Consensus view is not available on this screen.", severity="warning")
+            return
+        vibing_screen.show_consensus()
+        self._set_status("Opened Consensus tab")
+
+    def action_show_chat_history(self) -> None:
+        vibing_screen = self._vibing_screen()
+        if vibing_screen is None:
+            self.notify("Chat history is only available in the vibing screen.", severity="warning")
+            return
+        vibing_screen.show_chat_history()
+        self._set_status("Opened Gatekeeper chat history")
 
     async def action_run_next_task(self) -> None:
         if self._lifecycle is None:
@@ -435,6 +461,24 @@ class VibrantApp(App):
                 self.notify("Entered the vibing phase.")
         else:
             self.notify(f"Unknown command: /{cmd}", severity="warning")
+
+    async def on_consensus_view_save_requested(self, event: ConsensusView.SaveRequested) -> None:
+        orchestrator = self._orchestrator
+        if orchestrator is None:
+            self.notify("Consensus edits require an initialized project.", severity="warning")
+            return
+
+        try:
+            orchestrator.write_consensus_document(event.document)
+        except Exception as exc:
+            logger.exception("Failed to save consensus edits")
+            self.notify(f"Failed to save consensus edits: {exc}", severity="error")
+            self._set_status(f"Consensus save failed: {exc}")
+            return
+
+        self._refresh_project_views()
+        self.notify("Consensus updated.")
+        self._set_status("Saved consensus edits")
 
     async def on_initialization_screen_initialize_requested(
         self,
@@ -660,6 +704,7 @@ class VibrantApp(App):
     def _refresh_project_views(self) -> None:
         self._sync_workspace_screen()
         vibing_screen = self._vibing_screen()
+        consensus_view = self._consensus_view()
         orchestrator = self._orchestrator
         agent_output = None
         plan_tree = None
@@ -690,11 +735,13 @@ class VibrantApp(App):
 
         consensus_document = snapshot.consensus
         consensus_path = snapshot.consensus_path
+        roadmap_tasks = ()
         try:
             roadmap = orchestrator.reload_from_disk()
             refreshed = orchestrator.snapshot()
             consensus_document = refreshed.consensus
             consensus_path = refreshed.consensus_path
+            roadmap_tasks = tuple(getattr(roadmap, "tasks", ()) or ())
         except Exception as exc:
             logger.exception("Failed to refresh roadmap view")
             if vibing_screen is not None:
@@ -705,23 +752,29 @@ class VibrantApp(App):
                         consensus_document,
                         source_path=consensus_path,
                     )
+                with suppress(Exception):
+                    vibing_screen.set_roadmap_loading(True)
             self._refresh_gatekeeper_state()
             return
 
         if vibing_screen is not None:
             if plan_tree is not None:
                 plan_tree.update_tasks(
-                    roadmap.tasks,
+                    roadmap_tasks,
                     agent_summaries=self._collect_task_summaries(),
                 )
             if consensus_view is not None:
                 consensus_view.update_consensus(
                     consensus_document,
-                    tasks=roadmap.tasks,
+                    tasks=roadmap_tasks,
                     source_path=consensus_path,
                 )
             with suppress(Exception):
-                vibing_screen.set_roadmap_loading(not bool(roadmap.tasks))
+                vibing_screen.set_roadmap_loading(not bool(roadmap_tasks))
+
+        planning_screen = self._planning_screen()
+        if planning_screen is not None and self._should_auto_reveal_consensus(consensus_document):
+            planning_screen.reveal_consensus_once()
 
         self._refresh_gatekeeper_state()
 
@@ -897,6 +950,31 @@ class VibrantApp(App):
         with suppress(Exception):
             return self.query_one(InputBar)
         return None
+
+    def _planning_screen(self) -> PlanningScreen | None:
+        if isinstance(self._workspace_screen, PlanningScreen):
+            return self._workspace_screen
+        return None
+
+    def _consensus_view(self) -> ConsensusView | None:
+        if self._workspace_screen is not None:
+            with suppress(Exception):
+                return self._workspace_screen.consensus_view
+        with suppress(Exception):
+            return self.query_one(ConsensusView)
+        return None
+
+    @staticmethod
+    def _should_auto_reveal_consensus(document) -> bool:
+        if document is None:
+            return False
+        default_getting_started = "Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."
+        return bool(
+            document.objectives.strip()
+            or document.decisions
+            or document.questions
+            or document.getting_started.strip() != default_getting_started
+        )
 
     def _vibing_screen(self) -> VibingScreen | None:
         if isinstance(self._workspace_screen, VibingScreen):

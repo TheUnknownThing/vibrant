@@ -308,10 +308,7 @@ class AgentBase(ABC):
 
     def _notify_record_updated(self, agent_record: AgentRecord) -> None:
         if self.on_agent_record_updated is not None:
-            try:
-                self.on_agent_record_updated(agent_record)
-            except Exception:
-                logger.debug("on_agent_record_updated callback failed", exc_info=True)
+            self.on_agent_record_updated(agent_record)
 
 
 class ReadOnlyAgentBase(AgentBase):

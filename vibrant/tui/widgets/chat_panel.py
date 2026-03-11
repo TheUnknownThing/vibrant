@@ -46,6 +46,7 @@ class ChatPanel(Static):
     #chat-panel-header {
         height: 3;
         padding: 1 1 0 1;
+        margin: 0 1;
         background: $primary-background;
         color: $text;
     }
@@ -53,6 +54,7 @@ class ChatPanel(Static):
     #chat-panel-subtitle {
         height: auto;
         padding: 0 1 1 1;
+        margin: 0 1;
         color: $text-muted;
         background: $primary-background;
     }

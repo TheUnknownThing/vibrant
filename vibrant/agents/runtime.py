@@ -439,16 +439,10 @@ class BaseAgentRuntime:
             _sync_handle_state(handle, record)
             # Forward to the original callback if set.
             if original_callback is not None:
-                try:
-                    original_callback(record)
-                except Exception:
-                    logger.debug("original on_agent_record_updated failed", exc_info=True)
+                original_callback(record)
             # Forward to the orchestrator-supplied callback.
             if on_record_updated is not None:
-                try:
-                    on_record_updated(record)
-                except Exception:
-                    logger.debug("on_record_updated callback failed", exc_info=True)
+                on_record_updated(record)
 
         self._agent.on_agent_record_updated = _bridge_callback
 
