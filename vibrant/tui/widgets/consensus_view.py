@@ -389,7 +389,7 @@ class ConsensusView(Static):
     
     def _get_consensus(self) -> ConsensusDocument | None:
         """Get the current consensus from the orchestrator."""
-        return self._orchestrator_facade.consensus_document
+        return self._orchestrator_facade.get_consensus_document()
 
 
 def _extract_editable_markdown(markdown_text: str) -> str:

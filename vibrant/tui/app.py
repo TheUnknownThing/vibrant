@@ -206,7 +206,7 @@ class VibrantApp(App):
             )
             return
 
-        current_status = orchestrator.workflow_status()
+        current_status = orchestrator.get_workflow_status()
         normalized_status = _normalize_orchestrator_status(current_status)
         if normalized_status is OrchestratorStatus.PAUSED:
             next_status = self._paused_return_status or self._infer_resume_status()
@@ -691,7 +691,7 @@ class VibrantApp(App):
 
         try:
             for _ in range(2):
-                current_status = _normalize_orchestrator_status(orchestrator.workflow_status())
+                current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
                 if current_status not in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
                     break
                 next_status = (
@@ -799,16 +799,16 @@ class VibrantApp(App):
     def _collect_task_summaries(self) -> dict[str, str]:
         if self.orchestrator_facade is None:
             return {}
-        return self.orchestrator_facade.task_summaries()
+        return self.orchestrator_facade.get_task_summaries()
 
     def _handle_task_result(self, result: TaskResult | None) -> None:
         orchestrator = self.orchestrator_facade
         if result is None:
-            if orchestrator and orchestrator.workflow_status() is OrchestratorStatus.COMPLETED:
+            if orchestrator and orchestrator.get_workflow_status() is OrchestratorStatus.COMPLETED:
                 self.notify("Workflow completed.")
                 self._set_status("Workflow completed")
-            elif orchestrator and orchestrator.pending_questions():
-                banner = orchestrator.user_input_banner()
+            elif orchestrator and orchestrator.list_pending_questions():
+                banner = orchestrator.get_user_input_banner()
                 self.notify(banner, severity="warning")
                 self._set_status(banner)
             else:
@@ -824,7 +824,7 @@ class VibrantApp(App):
                     self._persist_gatekeeper_thread()
 
         if result.outcome == "accepted":
-            completed = bool(orchestrator and orchestrator.workflow_status() is OrchestratorStatus.COMPLETED)
+            completed = bool(orchestrator and orchestrator.get_workflow_status() is OrchestratorStatus.COMPLETED)
             if completed:
                 self.notify(f"Task {result.task_id} accepted and merged. Workflow completed.")
                 self._set_status(f"Task {result.task_id} accepted · workflow completed")
@@ -839,7 +839,7 @@ class VibrantApp(App):
             self._set_status(f"Task {result.task_id} escalated to the user")
         elif result.outcome == "awaiting_user":
             self.notify(
-                orchestrator.user_input_banner() if orchestrator else "User input required.",
+                orchestrator.get_user_input_banner() if orchestrator else "User input required.",
                 severity="warning",
             )
         else:
@@ -881,12 +881,12 @@ class VibrantApp(App):
     def _pending_gatekeeper_questions(self) -> list[str]:
         if self.orchestrator_facade is None:
             return []
-        return self.orchestrator_facade.pending_questions()
+        return self.orchestrator_facade.list_pending_questions()
 
     def _current_pending_gatekeeper_question(self) -> str | None:
         if self.orchestrator_facade is None:
             return None
-        return self.orchestrator_facade.current_pending_question()
+        return self.orchestrator_facade.get_current_pending_question()
 
     def _gatekeeper_is_busy(self) -> bool:
         return bool(
@@ -900,7 +900,7 @@ class VibrantApp(App):
             return
 
         questions = self._pending_gatekeeper_questions()
-        status = self.orchestrator_facade.workflow_status() if self.orchestrator_facade is not None else None
+        status = self.orchestrator_facade.get_workflow_status() if self.orchestrator_facade is not None else None
 
         normalized_status = _normalize_orchestrator_status(status)
         if normalized_status in {OrchestratorStatus.PLANNING, OrchestratorStatus.EXECUTING}:
@@ -919,7 +919,7 @@ class VibrantApp(App):
 
         if questions and not self._gatekeeper_is_busy():
             banner = (
-                self.orchestrator_facade.user_input_banner()
+                self.orchestrator_facade.get_user_input_banner()
                 if self.orchestrator_facade is not None
                 else "⚠ Gatekeeper needs your input — see Chat panel"
             )
@@ -929,7 +929,7 @@ class VibrantApp(App):
             if flash:
                 self.notify(banner, severity="warning")
                 self._set_status(banner)
-                if self.orchestrator_facade is not None and self.orchestrator_facade.notification_bell_enabled():
+                if self.orchestrator_facade is not None and self.orchestrator_facade.is_notification_bell_enabled():
                     with suppress(Exception):
                         self.bell()
         elif self._gatekeeper_is_busy():
@@ -1004,7 +1004,7 @@ class VibrantApp(App):
         if orchestrator is None:
             return OrchestratorStatus.EXECUTING
 
-        consensus = orchestrator.consensus_document()
+        consensus = orchestrator.get_consensus_document()
         if consensus is not None:
             mapped = {
                 ConsensusStatus.PLANNING: OrchestratorStatus.PLANNING,
@@ -1023,7 +1023,7 @@ class VibrantApp(App):
         if orchestrator is None:
             raise RuntimeError("Project lifecycle is not initialized")
 
-        current_status = _normalize_orchestrator_status(orchestrator.workflow_status())
+        current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
         if current_status is next_status:
             return
         if next_status is OrchestratorStatus.PAUSED:
@@ -1079,14 +1079,14 @@ class VibrantApp(App):
     def _is_planning_mode(self) -> bool:
         if self.orchestrator_facade is None:
             return False
-        status = _normalize_orchestrator_status(self.orchestrator_facade.workflow_status())
+        status = _normalize_orchestrator_status(self.orchestrator_facade.get_workflow_status())
         return status in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}
 
     def _maybe_sync_post_planning_transition(self) -> bool:
         if self._planning_screen() is None or self.orchestrator_facade is None:
             return False
 
-        status = _normalize_orchestrator_status(self.orchestrator_facade.workflow_status())
+        status = _normalize_orchestrator_status(self.orchestrator_facade.get_workflow_status())
         if status in {None, OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
             return False
 

@@ -102,11 +102,11 @@ class GatekeeperToolHandlers:
 
     def workflow_pause(self) -> dict[str, Any]:
         self.facade.pause_workflow()
-        return {"status": self.facade.workflow_status().value}
+        return {"status": self.facade.get_workflow_status().value}
 
     def workflow_resume(self) -> dict[str, Any]:
         self.facade.resume_workflow()
-        return {"status": self.facade.workflow_status().value}
+        return {"status": self.facade.get_workflow_status().value}
 
     def end_planning_phase(self) -> dict[str, Any]:
         return {"status": self.facade.end_planning_phase().value}

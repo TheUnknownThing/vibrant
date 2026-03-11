@@ -16,6 +16,7 @@ from vibrant.mcp.authz import (
     ORCHESTRATOR_WORKFLOW_READ_SCOPE,
     ORCHESTRATOR_WORKFLOW_WRITE_SCOPE,
     TASKS_READ_SCOPE,
+    TASKS_RUN_SCOPE,
     TASKS_WRITE_SCOPE,
     ensure_scopes,
     has_scopes,
@@ -30,14 +31,22 @@ ToolHandler = Callable[..., dict[str, Any] | list[dict[str, Any]] | Awaitable[An
 ResourceHandler = Callable[..., dict[str, Any] | list[dict[str, Any]] | Awaitable[Any] | None]
 
 _RESOURCE_SCOPES: dict[str, tuple[str, ...]] = {
+    "agent.status": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
     "consensus.current": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_READ_SCOPE),
+    "events.recent": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
     "questions.pending": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_READ_SCOPE),
     "roadmap.current": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "task.assigned": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
     "task.by_id": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
     "workflow.status": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_READ_SCOPE),
 }
 
 _TOOL_SCOPES: dict[str, tuple[str, ...]] = {
+    "agent_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "agent_list": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "agent_result_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "agent_respond_to_request": (MCP_ACCESS_SCOPE, TASKS_RUN_SCOPE),
+    "agent_wait": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
     "consensus_get": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_READ_SCOPE),
     "consensus_update": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_WRITE_SCOPE),
     "question_ask_user": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
@@ -47,6 +56,7 @@ _TOOL_SCOPES: dict[str, tuple[str, ...]] = {
     "roadmap_reorder_tasks": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
     "roadmap_update_task": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
     "task_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
+    "workflow_execute_next_task": (MCP_ACCESS_SCOPE, TASKS_RUN_SCOPE),
     "workflow_pause": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
     "workflow_resume": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
     "vibrant.end_planning_phase": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
@@ -87,10 +97,20 @@ class OrchestratorMCPServer:
         self.agent_tools = AgentToolHandlers(facade)
 
         self._resources: dict[str, MCPResourceDefinition] = {
+            "agent.status": MCPResourceDefinition(
+                name="agent.status",
+                description="Read one agent snapshot or list agent snapshots.",
+                handler=self.resources.agent_status,
+            ),
             "consensus.current": MCPResourceDefinition(
                 name="consensus.current",
                 description="Read the current consensus document.",
                 handler=self.resources.consensus_current,
+            ),
+            "events.recent": MCPResourceDefinition(
+                name="events.recent",
+                description="Read recent orchestrator canonical events.",
+                handler=self.resources.events_recent,
             ),
             "questions.pending": MCPResourceDefinition(
                 name="questions.pending",
@@ -107,6 +127,11 @@ class OrchestratorMCPServer:
                 description="Read one roadmap task by id.",
                 handler=self.resources.task_by_id,
             ),
+            "task.assigned": MCPResourceDefinition(
+                name="task.assigned",
+                description="Read a task together with its related agents.",
+                handler=self.resources.task_assigned,
+            ),
             "workflow.status": MCPResourceDefinition(
                 name="workflow.status",
                 description="Read the current orchestrator workflow status.",
@@ -114,6 +139,11 @@ class OrchestratorMCPServer:
             ),
         }
         self._tools: dict[str, MCPToolDefinition] = {
+            "agent_get": MCPToolDefinition("agent_get", "Read one agent snapshot by id.", self.agent_tools.agent_get),
+            "agent_list": MCPToolDefinition("agent_list", "List orchestrator agent snapshots.", self.agent_tools.agent_list),
+            "agent_result_get": MCPToolDefinition("agent_result_get", "Read the latest known result for one agent.", self.agent_tools.agent_result_get),
+            "agent_respond_to_request": MCPToolDefinition("agent_respond_to_request", "Answer a pending provider request for an existing agent.", self.agent_tools.agent_respond_to_request),
+            "agent_wait": MCPToolDefinition("agent_wait", "Wait for an existing agent to reach a result state.", self.agent_tools.agent_wait),
             "consensus_get": MCPToolDefinition("consensus_get", "Read the current consensus document.", self.gatekeeper_tools.consensus_get),
             "consensus_update": MCPToolDefinition("consensus_update", "Update orchestrator-owned consensus fields.", self.gatekeeper_tools.consensus_update),
             "question_ask_user": MCPToolDefinition("question_ask_user", "Create a structured user-facing question.", self.gatekeeper_tools.question_ask_user),
@@ -123,6 +153,7 @@ class OrchestratorMCPServer:
             "roadmap_reorder_tasks": MCPToolDefinition("roadmap_reorder_tasks", "Reorder roadmap tasks by id.", self.gatekeeper_tools.roadmap_reorder_tasks),
             "roadmap_update_task": MCPToolDefinition("roadmap_update_task", "Update a roadmap task definition.", self.gatekeeper_tools.roadmap_update_task),
             "task_get": MCPToolDefinition("task_get", "Read one roadmap task by id.", self.agent_tools.task_get),
+            "workflow_execute_next_task": MCPToolDefinition("workflow_execute_next_task", "Dispatch and execute the next roadmap task according to orchestrator workflow rules.", self.agent_tools.workflow_execute_next_task),
             "workflow_pause": MCPToolDefinition("workflow_pause", "Pause the workflow.", self.gatekeeper_tools.workflow_pause),
             "workflow_resume": MCPToolDefinition("workflow_resume", "Resume the workflow.", self.gatekeeper_tools.workflow_resume),
             "vibrant.end_planning_phase": MCPToolDefinition("vibrant.end_planning_phase", "Transition the orchestrator from planning into execution.", self.gatekeeper_tools.end_planning_phase),
