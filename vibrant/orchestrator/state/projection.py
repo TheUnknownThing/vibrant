@@ -27,12 +27,15 @@ def rebuild_derived_state(
     failed_tasks: list[str] = []
     provider_runtime: dict[str, ProviderRuntimeState] = {}
     active_gatekeeper = False
+    awaiting_user_gatekeeper = False
 
     for record in agent_records:
         if record.status not in AgentRecord.TERMINAL_STATUSES:
             active_agents.append(record.agent_id)
             if record.type is AgentType.GATEKEEPER:
                 active_gatekeeper = True
+                if record.status is AgentStatus.AWAITING_INPUT:
+                    awaiting_user_gatekeeper = True
 
         if record.status is AgentStatus.COMPLETED:
             completed_tasks.append(record.task_id)
@@ -53,17 +56,31 @@ def rebuild_derived_state(
 
     if consensus is not None:
         state.last_consensus_version = consensus.version
-        state.replace_questions(
-            reconcile_question_records(
-                state.questions,
-                list(consensus.questions),
-                source_role="gatekeeper",
+        consensus_questions = list(consensus.questions)
+        if consensus_questions:
+            state.replace_questions(
+                reconcile_question_records(
+                    state.questions,
+                    consensus_questions,
+                    source_role="gatekeeper",
+                )
             )
-        )
+        elif awaiting_user_gatekeeper:
+            state.sync_pending_question_projection()
+        else:
+            state.replace_questions(
+                reconcile_question_records(
+                    state.questions,
+                    [],
+                    source_role="gatekeeper",
+                )
+            )
         if state.status is OrchestratorStatus.INIT:
             inferred_status = _consensus_to_orchestrator_status(consensus.status)
             if inferred_status is not None:
                 state.status = inferred_status
+    elif awaiting_user_gatekeeper:
+        state.sync_pending_question_projection()
     else:
         state.replace_questions(
             reconcile_question_records(

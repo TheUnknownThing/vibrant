@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from vibrant.agents.runtime import RunState
 from vibrant.consensus.writer import ConsensusWriter
 from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
@@ -89,22 +90,23 @@ def test_apply_gatekeeper_result_syncs_completed_status(tmp_path):
         ),
     )
 
-    result = GatekeeperRunResult(
-        request=GatekeeperRequest(
-            trigger=GatekeeperTrigger.TASK_COMPLETION,
-            trigger_description="Task accepted.",
+    gatekeeper_record = AgentRecord(
+        agent_id="gatekeeper-task_completion-test",
+        task_id="gatekeeper-task_completion",
+        type=AgentType.GATEKEEPER,
+        status=AgentStatus.COMPLETED,
+        provider=AgentProviderMetadata(
+            provider_thread_id="thread-gatekeeper-completed",
+            resume_cursor={"threadId": "thread-gatekeeper-completed"},
         ),
-        prompt="gatekeeper prompt",
-        transcript="Verdict: accepted",
-        verdict="accepted",
-        questions=[],
-        consensus_updated=True,
-        roadmap_updated=False,
-        plan_modified=False,
-        consensus_document=consensus,
-        roadmap_document=None,
-        error=None,
-        turn_result=None,
+    )
+    result = GatekeeperRunResult(
+        agent_record=gatekeeper_record,
+        state=RunState.COMPLETED,
+        transcript="Task review complete.",
+        summary="Task review complete.",
+        started_at=gatekeeper_record.started_at,
+        finished_at=gatekeeper_record.finished_at,
     )
 
     engine.apply_gatekeeper_result(result)

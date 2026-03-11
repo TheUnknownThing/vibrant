@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Iterable
 from uuid import uuid4
 
-from vibrant.gatekeeper import Gatekeeper, GatekeeperRunResult
+from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRunResult
 from vibrant.models.state import GatekeeperStatus, QuestionPriority, QuestionRecord, QuestionStatus, reconcile_question_records
 
 from ..state.store import StateStore

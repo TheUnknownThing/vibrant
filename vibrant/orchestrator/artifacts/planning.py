@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.state import OrchestratorStatus
 
 from .questions import QuestionService
@@ -55,7 +55,10 @@ class PlanningService:
             )
             self.state_store.apply_gatekeeper_result(result)
 
-        self.roadmap_service.merge_result(result.roadmap_document)
+        self.roadmap_service.reload(
+            project_name=self.roadmap_service.project_name,
+            concurrency_limit=self.state_store.state.concurrency_limit,
+        )
         self.roadmap_service.persist()
         self.workflow_service.maybe_complete_workflow()
         self.state_store.refresh()

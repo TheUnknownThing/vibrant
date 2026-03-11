@@ -1,35 +1,44 @@
-"""Tests for the Phase 4 Gatekeeper prompt and runtime wrapper."""
+"""Tests for the runtime-based Gatekeeper implementation."""
 
 from __future__ import annotations
-from datetime import datetime, timezone
+
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
-from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperTrigger
-from vibrant.models.consensus import ConsensusDecision, ConsensusDocument, ConsensusStatus, DecisionAuthor
-from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.agents.runtime import RunState
+from vibrant.gatekeeper import (
+    Gatekeeper,
+    GatekeeperRequest,
+    GatekeeperTrigger,
+    MCP_TOOL_NAMES,
+    PLANNING_COMPLETE_MCP_TOOL,
+)
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
 
 class FakeGatekeeperAdapter:
     instances: list["FakeGatekeeperAdapter"] = []
-    scenario: str = "project_start"
+    scenario: str = "complete"
 
     def __init__(self, **kwargs: Any) -> None:
-        self.kwargs = kwargs
         self.cwd = Path(kwargs["cwd"])
         self.on_canonical_event = kwargs.get("on_canonical_event")
         self.agent_record = kwargs.get("agent_record")
         self.provider_thread_id: str | None = None
         self.start_session_calls: list[dict[str, Any]] = []
         self.start_thread_calls: list[dict[str, Any]] = []
+        self.resume_thread_calls: list[dict[str, Any]] = []
         self.start_turn_calls: list[dict[str, Any]] = []
+        self.respond_calls: list[dict[str, Any]] = []
         self.stop_calls = 0
-        self.client = type("DummyClient", (), {"is_running": True})()
+        self._request_resolved = asyncio.Event()
+        process = type("DummyProcess", (), {"pid": 4512, "returncode": None})()
+        self.client = type("DummyClient", (), {"is_running": True, "_process": process})()
         FakeGatekeeperAdapter.instances.append(self)
 
     async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
@@ -38,17 +47,20 @@ class FakeGatekeeperAdapter:
 
     async def stop_session(self) -> None:
         self.stop_calls += 1
+        if self.client._process.returncode is None:
+            self.client._process.returncode = 0
+        self.client.is_running = False
 
     async def start_thread(self, **kwargs: Any) -> Any:
-        self.start_thread_calls.append(kwargs)
+        self.start_thread_calls.append(dict(kwargs))
         self.provider_thread_id = "thread-gatekeeper-123"
-        if self.agent_record is not None:
-            self.agent_record.provider.provider_thread_id = self.provider_thread_id
-            self.agent_record.provider.resume_cursor = {"threadId": self.provider_thread_id}
+        self._persist_thread_metadata(self.provider_thread_id)
         return {"thread": {"id": self.provider_thread_id}}
 
     async def resume_thread(self, provider_thread_id: str, **kwargs: Any) -> Any:
+        self.resume_thread_calls.append({"provider_thread_id": provider_thread_id, **kwargs})
         self.provider_thread_id = provider_thread_id
+        self._persist_thread_metadata(provider_thread_id)
         return {"thread": {"id": provider_thread_id}}
 
     async def start_turn(self, *, input_items, runtime_mode: RuntimeMode, approval_policy: str, **kwargs: Any) -> Any:
@@ -60,103 +72,60 @@ class FakeGatekeeperAdapter:
                 **kwargs,
             }
         )
-        if FakeGatekeeperAdapter.scenario == "project_start":
-            await self._simulate_project_start()
-        elif FakeGatekeeperAdapter.scenario == "project_start_progress_items":
-            await self._simulate_project_start_progress_items()
-        elif FakeGatekeeperAdapter.scenario == "task_completion":
-            await self._simulate_task_completion()
+        if self.scenario == "complete":
+            await self._emit({"type": "content.delta", "delta": "Planning review complete."})
+            await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-1"}})
+            self.client._process.returncode = 0
+        elif self.scenario == "request":
+            asyncio.create_task(self._simulate_request_flow(), name="fake-gatekeeper-request")
+        else:
+            raise AssertionError(f"Unknown fake Gatekeeper scenario: {self.scenario}")
         return {"turn": {"id": "turn-gatekeeper-1"}}
 
     async def interrupt_turn(self, **kwargs: Any) -> Any:
         return kwargs
 
-    async def respond_to_request(self, request_id: int | str, *, result: Any | None = None, error=None) -> Any:
+    async def respond_to_request(
+        self,
+        request_id: int | str,
+        *,
+        result: Any | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> Any:
+        self.respond_calls.append({"request_id": request_id, "result": result, "error": error})
+        self._request_resolved.set()
         return {"request_id": request_id, "result": result, "error": error}
+
+    async def _simulate_request_flow(self) -> None:
+        await self._emit(
+            {
+                "type": "request.opened",
+                "request_id": "req-1",
+                "request_kind": "user-input",
+                "message": "Choose the API strategy.",
+            }
+        )
+        await self._request_resolved.wait()
+        await self._emit(
+            {
+                "type": "request.resolved",
+                "request_id": "req-1",
+                "request_kind": "user-input",
+            }
+        )
+        await self._emit({"type": "content.delta", "delta": "Recorded the user decision."})
+        await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-1"}})
+        self.client._process.returncode = 0
 
     async def _emit(self, event: dict[str, Any]) -> None:
         if self.on_canonical_event is not None:
             await self.on_canonical_event(event)
 
-    async def _simulate_project_start(self) -> None:
-        self._write_project_start_files()
-        await self._emit({"type": "content.delta", "delta": "Verdict: planned\n"})
-        await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-1"}})
-
-    async def _simulate_project_start_progress_items(self) -> None:
-        self._write_project_start_files()
-        await self._emit({"type": "task.progress", "item": {"type": "userMessage", "text": "Create the initial plan."}})
-        await self._emit({"type": "task.progress", "item": {"type": "agentMessage", "text": "Verdict: planned\n"}})
-        await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-1"}})
-
-    def _write_project_start_files(self) -> None:
-        consensus_path = self.cwd / ".vibrant" / "consensus.md"
-        roadmap_path = self.cwd / ".vibrant" / "roadmap.md"
-        current = ConsensusParser().parse_file(consensus_path)
-        document = ConsensusDocument(
-            project=current.project,
-            created_at=current.created_at,
-            updated_at=current.updated_at,
-            version=current.version,
-            status=ConsensusStatus.PLANNING,
-            objectives="Turn the proposal into a roadmap and execution plan.",
-            decisions=[
-                ConsensusDecision(
-                    title="Start with orchestrator foundations",
-                    date=datetime(2026, 3, 8, 12, 0, tzinfo=timezone.utc),
-                    made_by=DecisionAuthor.GATEKEEPER,
-                    context="The proposal emphasizes durability.",
-                    resolution="Prioritize state, roadmap, and Gatekeeper flows.",
-                    impact="Phase 1 and Phase 3 tasks stay first.",
-                )
-            ],
-            getting_started="Review docs/spec.md, then follow the roadmap in order.",
-        )
-        ConsensusWriter().write(consensus_path, document)
-        RoadmapParser().write(
-            roadmap_path,
-            RoadmapParser().parse(
-                """# Roadmap — Project Vibrant
-
-### Task task-001 — Build orchestrator engine
-- **Status**: pending
-- **Priority**: high
-- **Dependencies**: none
-- **Skills**: orchestration
-- **Branch**: vibrant/task-001
-- **Prompt**: Implement lifecycle persistence.
-
-**Acceptance Criteria**:
-- [ ] Persist state transitions
-- [ ] Recover from restart
-"""
-            ),
-        )
-
-    async def _simulate_task_completion(self) -> None:
-        consensus_path = self.cwd / ".vibrant" / "consensus.md"
-        roadmap_path = self.cwd / ".vibrant" / "roadmap.md"
-        current = ConsensusParser().parse_file(consensus_path)
-        current.status = ConsensusStatus.EXECUTING
-        current.decisions.append(
-            ConsensusDecision(
-                title="Accept task-001",
-                date=datetime(2026, 3, 8, 12, 30, tzinfo=timezone.utc),
-                made_by=DecisionAuthor.GATEKEEPER,
-                context="The code agent satisfied the acceptance criteria.",
-                resolution="Accept task-001 and continue execution.",
-                impact="Roadmap advances to the next task.",
-            )
-        )
-        current.getting_started += "\n\n## Questions\n- [blocking] Should the UI ship in v1?"
-        ConsensusWriter().write(consensus_path, current)
-
-        roadmap_document = RoadmapParser().parse_file(roadmap_path)
-        roadmap_document.tasks[0].status = TaskStatus.ACCEPTED
-        RoadmapParser().write(roadmap_path, roadmap_document)
-
-        await self._emit({"type": "content.delta", "delta": "Verdict: accepted\n"})
-        await self._emit({"type": "turn.completed", "turn": {"id": "turn-gatekeeper-2"}})
+    def _persist_thread_metadata(self, thread_id: str) -> None:
+        if self.agent_record is None:
+            return
+        self.agent_record.provider.provider_thread_id = thread_id
+        self.agent_record.provider.resume_cursor = {"threadId": thread_id}
 
 
 @pytest.mark.parametrize(
@@ -184,10 +153,12 @@ def test_prompt_template_renders_for_each_trigger(tmp_path, trigger, description
     )
 
     assert f"{trigger.value}: {description}" in prompt
-    assert "## Your Responsibilities" in prompt
+    assert "You are read-only. Do not edit repository files or .vibrant state directly." in prompt
     assert "## Current Consensus" in prompt
-    assert "## Rules" in prompt
-    assert "## Available Skills" in prompt
+    assert "## Current Roadmap" in prompt
+    assert "## MCP Tools" in prompt
+    assert PLANNING_COMPLETE_MCP_TOOL in prompt
+    assert all(tool_name in prompt for tool_name in MCP_TOOL_NAMES)
     assert "testing-strategy: Write focused tests before broader validation." in prompt
     if summary:
         assert summary in prompt
@@ -195,121 +166,97 @@ def test_prompt_template_renders_for_each_trigger(tmp_path, trigger, description
         assert "N/A" in prompt
 
 
-def test_gatekeeper_response_parsing_extracts_verdict_questions_and_plan_updates(tmp_path):
-    initialize_project(tmp_path)
-    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter)
-    before_consensus = (tmp_path / ".vibrant" / "consensus.md").read_text(encoding="utf-8")
-    before_roadmap = (tmp_path / ".vibrant" / "roadmap.md").read_text(encoding="utf-8")
-    after_consensus = before_consensus + "\n## Questions\n- [blocking] Should we ship plugins in v1?\n"
-    after_roadmap = """# Roadmap — Project Vibrant
-
-### Task task-001 — First task
-- **Status**: pending
-- **Priority**: high
-- **Dependencies**: none
-- **Skills**: orchestration
-- **Branch**: vibrant/task-001
-- **Prompt**: Implement the task.
-
-**Acceptance Criteria**:
-- [ ] Finish the work
-"""
-
-    result = gatekeeper.parse_run_artifacts(
-        request=GatekeeperRequest(
-            trigger=GatekeeperTrigger.TASK_FAILURE,
-            trigger_description="Task failed.",
-            agent_summary="Summary",
-        ),
-        prompt="prompt",
-        transcript="Verdict: escalate\nNeed a product decision.",
-        before_consensus_text=before_consensus,
-        after_consensus_text=after_consensus,
-        before_roadmap_text=before_roadmap,
-        after_roadmap_text=after_roadmap,
-        events=[],
-        agent_record=gatekeeper._build_agent_record(
-            GatekeeperRequest(trigger=GatekeeperTrigger.TASK_FAILURE, trigger_description="Task failed.")
-        ),
-        error=None,
-        turn_result={"turn": {"id": "turn-1"}},
-    )
-
-    assert result.verdict == "escalate"
-    assert result.questions == ["Should we ship plugins in v1?"]
-    assert result.consensus_updated is True
-    assert result.roadmap_updated is True
-    assert result.plan_modified is True
-    assert result.roadmap_document is not None
-
-
-def test_gatekeeper_prompt_describes_consensus_contract_and_no_blocked_state(tmp_path):
-    initialize_project(tmp_path)
-    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter)
-
-    prompt = gatekeeper.render_prompt(
-        GatekeeperRequest(
-            trigger=GatekeeperTrigger.PROJECT_START,
-            trigger_description="Create the initial plan.",
-        )
-    )
-
-    assert "## Consensus Contract" in prompt
-    assert "INIT, PLANNING, EXECUTING, PAUSED, COMPLETED, FAILED" in prompt
-    assert "`made_by` must be one of: gatekeeper, user." in prompt
-    assert "Questions will block progress on their own" in prompt
-
-
 @pytest.mark.asyncio
-async def test_gatekeeper_project_start_run_updates_consensus_and_roadmap(tmp_path):
+async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     FakeGatekeeperAdapter.instances.clear()
-    FakeGatekeeperAdapter.scenario = "project_start"
+    FakeGatekeeperAdapter.scenario = "complete"
     initialize_project(tmp_path)
+
+    prior_record = AgentRecord(
+        agent_id="gatekeeper-project_start-old",
+        task_id="gatekeeper-project_start",
+        type=AgentType.GATEKEEPER,
+        status=AgentStatus.COMPLETED,
+        provider=AgentProviderMetadata(
+            provider_thread_id="thread-existing",
+            resume_cursor={"threadId": "thread-existing"},
+        ),
+    )
+    agents_dir = tmp_path / ".vibrant" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / f"{prior_record.agent_id}.json").write_text(
+        prior_record.model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
     result = await gatekeeper.run(
         GatekeeperRequest(
-            trigger=GatekeeperTrigger.PROJECT_START,
-            trigger_description="Build a resilient multi-agent orchestrator.",
-        )
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description="Review the new project direction.",
+            agent_summary="Conversation context.",
+        ),
+        resume_latest_thread=True,
     )
 
     adapter = FakeGatekeeperAdapter.instances[0]
     assert adapter.start_session_calls[0]["cwd"] == str(tmp_path)
-    assert adapter.start_thread_calls[0]["runtime_mode"] is RuntimeMode.FULL_ACCESS
-    assert adapter.start_turn_calls[0]["runtime_mode"] is RuntimeMode.FULL_ACCESS
-    assert result.verdict == "planned"
-    assert result.consensus_updated is True
-    assert result.roadmap_updated is True
-    assert result.consensus_document is not None
-    assert result.consensus_document.status is ConsensusStatus.PLANNING
-    assert result.roadmap_document is not None
-    assert len(result.roadmap_document.tasks) == 1
+    assert adapter.start_thread_calls == []
+    assert adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-existing"
+    assert adapter.resume_thread_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
+    assert adapter.start_turn_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
+    assert result.succeeded is True
+    assert result.state is RunState.COMPLETED
+    assert result.provider_thread.thread_id == "thread-existing"
+    assert result.agent_record.type is AgentType.GATEKEEPER
+    assert result.agent_record.status is AgentStatus.COMPLETED
+    assert result.agent_record.prompt_used is not None
 
 
 @pytest.mark.asyncio
-async def test_gatekeeper_ignores_non_assistant_task_progress_in_transcript(tmp_path):
+async def test_gatekeeper_start_run_surfaces_provider_requests_through_agent_handle(tmp_path):
     FakeGatekeeperAdapter.instances.clear()
-    FakeGatekeeperAdapter.scenario = "project_start_progress_items"
+    FakeGatekeeperAdapter.scenario = "request"
     initialize_project(tmp_path)
 
     gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
-    result = await gatekeeper.run(
+    handle = await gatekeeper.start_run(
         GatekeeperRequest(
-            trigger=GatekeeperTrigger.PROJECT_START,
-            trigger_description="Build a resilient multi-agent orchestrator.",
+            trigger=GatekeeperTrigger.TASK_COMPLETION,
+            trigger_description="Review task-001 output.",
+            agent_summary="The task implementation is ready for review.",
         )
     )
 
-    assert result.transcript == "Verdict: planned"
-    assert "Create the initial plan." not in result.transcript
-    assert result.verdict == "planned"
+    for _ in range(50):
+        if handle.awaiting_input:
+            break
+        await asyncio.sleep(0)
+    else:
+        raise AssertionError("Gatekeeper handle never entered awaiting_input state")
+
+    assert handle.awaiting_input is True
+    assert handle.agent_record.status is AgentStatus.AWAITING_INPUT
+    assert handle.input_requests[0].request_id == "req-1"
+    assert handle.input_requests[0].message == "Choose the API strategy."
+
+    await handle.respond_to_request("req-1", result={"answer": "Use OAuth first."})
+    result = await handle.wait()
+
+    adapter = FakeGatekeeperAdapter.instances[0]
+    assert adapter.respond_calls[0]["request_id"] == "req-1"
+    assert adapter.respond_calls[0]["result"] == {"answer": "Use OAuth first."}
+    assert result.succeeded is True
+    assert result.agent_record.status is AgentStatus.COMPLETED
+    assert "Recorded the user decision." in result.transcript
+    assert any(event["type"] == "request.opened" for event in result.events)
+    assert any(event["type"] == "request.resolved" for event in result.events)
 
 
 @pytest.mark.asyncio
 async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_path):
     FakeGatekeeperAdapter.instances.clear()
-    FakeGatekeeperAdapter.scenario = "project_start"
+    FakeGatekeeperAdapter.scenario = "complete"
     initialize_project(tmp_path)
 
     forwarded: list[dict[str, Any]] = []
@@ -330,53 +277,6 @@ async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_pat
     assert forwarded
     assert forwarded[0]["agent_id"].startswith("gatekeeper-project_start-")
     assert forwarded[0]["task_id"] == "gatekeeper-project_start"
-    assert any(event["type"] == "content.delta" and event["delta"] == "Verdict: planned\n" for event in forwarded)
+    assert any(event["type"] == "content.delta" for event in forwarded)
     assert result.agent_record is not None
-    assert result.agent_record.status.value == "completed"
-
-
-@pytest.mark.asyncio
-async def test_gatekeeper_task_completion_run_records_verdict_and_questions(tmp_path):
-    FakeGatekeeperAdapter.instances.clear()
-    FakeGatekeeperAdapter.scenario = "task_completion"
-    initialize_project(tmp_path)
-
-    consensus_path = tmp_path / ".vibrant" / "consensus.md"
-    roadmap_path = tmp_path / ".vibrant" / "roadmap.md"
-    current = ConsensusParser().parse_file(consensus_path)
-    current.status = ConsensusStatus.EXECUTING
-    ConsensusWriter().write(consensus_path, current)
-    RoadmapParser().write(
-        roadmap_path,
-        RoadmapParser().parse(
-            """# Roadmap — Project Vibrant
-
-### Task task-001 — Finish task one
-- **Status**: completed
-- **Priority**: high
-- **Dependencies**: none
-- **Skills**: none
-- **Branch**: vibrant/task-001
-- **Prompt**: Finalize and validate the task.
-
-**Acceptance Criteria**:
-- [ ] Task is done
-"""
-        ),
-    )
-
-    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
-    result = await gatekeeper.run(
-        GatekeeperRequest(
-            trigger=GatekeeperTrigger.TASK_COMPLETION,
-            trigger_description="Review task-001 output.",
-            agent_summary="The agent implemented the feature and ran tests.",
-        )
-    )
-
-    assert result.verdict == "accepted"
-    assert result.consensus_updated is True
-    assert result.roadmap_updated is True
-    assert result.questions == ["Should the UI ship in v1?"]
-    assert result.roadmap_document is not None
-    assert result.roadmap_document.tasks[0].status is TaskStatus.ACCEPTED
+    assert result.agent_record.status is AgentStatus.COMPLETED

@@ -77,6 +77,7 @@ class AgentBase(ABC):
         self.on_canonical_event = on_canonical_event
         self.on_agent_record_updated = on_agent_record_updated
         self.timeout_seconds = timeout_seconds or float(config.agent_timeout_seconds)
+        self._live_adapter: Any | None = None
 
     # ------------------------------------------------------------------
     # Abstract / required methods
@@ -203,6 +204,16 @@ class AgentBase(ABC):
                         error={"code": -32000, "message": runtime_error},
                     )
                 turn_finished.set()
+            elif event_type == "request.opened":
+                if agent_record.can_transition_to(AgentStatus.AWAITING_INPUT):
+                    agent_record.transition_to(AgentStatus.AWAITING_INPUT)
+                    self._notify_record_updated(agent_record)
+            elif event_type == "request.resolved":
+                if agent_record.status is AgentStatus.AWAITING_INPUT and agent_record.can_transition_to(
+                    AgentStatus.RUNNING
+                ):
+                    agent_record.transition_to(AgentStatus.RUNNING)
+                    self._notify_record_updated(agent_record)
 
             await maybe_forward_event(self.on_canonical_event, event_copy)
 
@@ -225,6 +236,7 @@ class AgentBase(ABC):
                 agent_record=agent_record,
                 on_canonical_event=handle_event,
             )
+            self._live_adapter = adapter
             await adapter.start_session(cwd=working_dir)
             agent_record.pid = extract_pid(adapter)
             self._notify_record_updated(agent_record)
@@ -255,6 +267,7 @@ class AgentBase(ABC):
         finally:
             if adapter is not None:
                 await stop_adapter_safely(adapter)
+            self._live_adapter = None
 
         transcript = "".join(transcript_chunks).strip()
         exit_code = extract_exit_code(adapter)

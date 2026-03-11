@@ -13,7 +13,7 @@ from vibrant.agents.merge_agent import MergeAgent
 from vibrant.agents.runtime import AgentRuntime, BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root, load_config
 from vibrant.consensus import RoadmapDocument, RoadmapParser
-from vibrant.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.state import OrchestratorStatus
 from vibrant.orchestrator.engine import OrchestratorEngine
@@ -256,7 +256,7 @@ class CodeAgentLifecycle:
 
             handle = await start_run(request, **kwargs)
             if supports_on_result:
-                self._track_gatekeeper_future(handle.result_future)
+                self._track_gatekeeper_future(asyncio.create_task(handle.wait(), name=f"gatekeeper-wait-{trigger.value}"))
                 return handle
 
             async def wait_and_apply() -> GatekeeperRunResult:
@@ -287,7 +287,10 @@ class CodeAgentLifecycle:
 
     async def _apply_gatekeeper_result_async(self, result: GatekeeperRunResult) -> None:
         self.state_store.apply_gatekeeper_result(result)
-        self.roadmap_service.merge_result(result.roadmap_document)
+        self.roadmap_service.reload(
+            project_name=self.roadmap_service.project_name,
+            concurrency_limit=self.state_store.state.concurrency_limit,
+        )
         self.roadmap_service.persist()
         self.workflow_service.maybe_complete_workflow()
         self.state_store.refresh()

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
-from vibrant.gatekeeper import GatekeeperRunResult
+from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator.git_manager import GitMergeResult

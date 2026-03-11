@@ -9,9 +9,10 @@ from typing import Any
 
 import pytest
 
+from vibrant.agents.runtime import RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.gatekeeper import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
@@ -228,20 +229,23 @@ class FakeGatekeeper:
         ConsensusWriter().write(consensus_path, consensus)
         RoadmapParser().write(roadmap_path, roadmap)
 
-        consensus_document = ConsensusParser().parse_file(consensus_path)
-        roadmap_document = RoadmapParser().parse_file(roadmap_path)
         transcript = f"Verdict: {verdict}"
+        gatekeeper_record = AgentRecord(
+            agent_id=f"gatekeeper-{request.trigger.value}-test",
+            task_id=f"gatekeeper-{request.trigger.value}",
+            type=AgentType.GATEKEEPER,
+            status=AgentStatus.AWAITING_INPUT if (questions or consensus.questions) else AgentStatus.COMPLETED,
+            summary=transcript,
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-gatekeeper-1",
+                resume_cursor={"threadId": "thread-gatekeeper-1"},
+            ),
+        )
         return GatekeeperRunResult(
-            request=request,
-            prompt="gatekeeper prompt",
+            agent_record=gatekeeper_record,
+            state=RunState.AWAITING_INPUT if (questions or consensus.questions) else RunState.COMPLETED,
             transcript=transcript,
-            verdict=verdict,
-            questions=questions or list(consensus_document.questions),
-            consensus_updated=True,
-            roadmap_updated=True,
-            plan_modified=plan_modified,
-            consensus_document=consensus_document,
-            roadmap_document=roadmap_document,
+            summary=transcript,
             error=None,
             turn_result={"turn": {"id": "gatekeeper-turn-1"}},
         )
@@ -326,7 +330,7 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     assert record.provider.runtime_mode == "workspace-write"
     assert record.provider.native_event_log is not None
     assert record.provider.canonical_event_log is not None
-    assert lifecycle.engine.state.total_agent_spawns == 1
+    assert lifecycle.engine.state.total_agent_spawns == 2
     assert lifecycle.engine.state.active_agents == []
     assert lifecycle.engine.state.status is OrchestratorStatus.COMPLETED
 
@@ -340,7 +344,7 @@ async def test_submit_gatekeeper_message_routes_initial_prompt_to_project_start(
     lifecycle = CodeAgentLifecycle(repo, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
     result = await lifecycle.submit_gatekeeper_message("Build an auth MVP for the app.")
 
-    assert result.request.trigger is GatekeeperTrigger.PROJECT_START
+    assert result.state is RunState.COMPLETED
     assert gatekeeper.requests[0].trigger is GatekeeperTrigger.PROJECT_START
     assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
 
@@ -364,7 +368,7 @@ async def test_start_gatekeeper_message_returns_handle_before_result_is_applied(
     result = await handle.wait()
     await asyncio.sleep(0)
 
-    assert result.request.trigger is GatekeeperTrigger.PROJECT_START
+    assert result.state is RunState.COMPLETED
     assert lifecycle.engine.state.status is OrchestratorStatus.PLANNING
 
 

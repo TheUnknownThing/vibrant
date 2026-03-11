@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from vibrant.gatekeeper import GatekeeperRunResult
+from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.consensus import ConsensusDocument
-from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus
+from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, reconcile_question_records
 from vibrant.orchestrator.engine import OrchestratorEngine
 
 from .projection import build_user_input_requested_event, rebuild_derived_state, sync_status_from_consensus
@@ -106,22 +106,35 @@ class StateStore:
                 )
             else:
                 self.engine.upsert_agent_record(result.agent_record, increment_spawn=increment_spawn)
-        if result.consensus_document is not None:
-            self.set_consensus(result.consensus_document)
+
+        self.engine.consensus = self.engine._load_consensus(self.engine.consensus_path)
 
         self.rebuild_derived_state()
         self.sync_status_from_consensus()
 
         events: list[dict[str, object]] = []
-        if result.questions:
+        pending_messages = [
+            request.message or f"Gatekeeper request: {request.request_kind}"
+            for request in result.input_requests
+        ]
+        if pending_messages:
+            self.engine.state.replace_questions(
+                reconcile_question_records(
+                    self.engine.state.questions,
+                    pending_messages,
+                    source_agent_id=result.agent_record.agent_id if result.agent_record is not None else None,
+                    source_role="gatekeeper",
+                )
+            )
+            self.engine.state.gatekeeper_status = GatekeeperStatus.AWAITING_USER
             event = build_user_input_requested_event(
-                result.questions,
+                pending_messages,
                 banner_text=self.user_input_banner(),
                 terminal_bell=self.notification_bell_enabled(),
             )
             events.append(event)
             self.engine.emitted_events.append(event)
-        else:
+        elif not self.engine.state.pending_questions and self.engine.state.gatekeeper_status is not GatekeeperStatus.RUNNING:
             self.engine.state.gatekeeper_status = GatekeeperStatus.IDLE
 
         self.persist()
