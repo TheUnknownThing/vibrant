@@ -153,7 +153,7 @@ class ConsensusView(Static):
                 yield Button("Edit", id="consensus-edit-toggle", compact=True)
             with Vertical(id="consensus-body"):
                 yield Markdown("", id="consensus-preview")
-                yield TextArea("", id="consensus-editor", language="markdown", soft_wrap=True, show_line_numbers=False)
+                yield TextArea("", id="consensus-editor", language="markdown", soft_wrap=True, show_line_numbers=True)
             yield Static("", id="consensus-meta", markup=True)
             with Horizontal(id="consensus-actions"):
                 yield Button("Cancel", id="consensus-cancel", compact=True)
