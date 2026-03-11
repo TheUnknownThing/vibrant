@@ -720,3 +720,11 @@ def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path)
     snapshots = lifecycle.agent_manager.list_agents(agent_type=" CODE ")
 
     assert [snapshot.agent_id for snapshot in snapshots] == [code_record.agent_id]
+
+
+def test_agent_management_service_rejects_invalid_string_agent_type_filters(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = CodeAgentLifecycle(repo, engine=engine, gatekeeper=FakeGatekeeper(repo), adapter_factory=FakeCodeAgentAdapter)
+
+    with pytest.raises(ValueError, match="Unsupported agent type filter"):
+        lifecycle.agent_manager.list_agents(agent_type="bogus")

@@ -192,13 +192,16 @@ def _normalize_runtime_mode(value: str) -> str:
         "danger_full_access": "danger-full-access",
         "dangerfullaccess": "danger-full-access",
     }
-    return mapping.get(normalized, value)
+    try:
+        return mapping[normalized]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported provider runtime mode: {value!r}") from exc
 
 
 def _infer_task_id(data: dict[str, Any]) -> str:
     agent_id = data.get("agent_id")
     if not isinstance(agent_id, str) or not agent_id.strip():
-        return "unknown"
+        raise ValueError("Cannot infer task_id from legacy agent record without a valid agent_id")
 
     normalized_agent_id = agent_id.removeprefix("agent-")
     agent_type = data.get("type") or data.get("agent_kind")
