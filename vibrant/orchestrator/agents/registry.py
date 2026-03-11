@@ -9,7 +9,7 @@ from uuid import uuid4
 from vibrant.agents.runtime import ProviderThreadHandle
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.git_manager import GitWorktreeInfo
+from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
 from .store import AgentRecordStore
 

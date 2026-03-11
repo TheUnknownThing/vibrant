@@ -17,17 +17,17 @@ from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_projec
 from vibrant.consensus import RoadmapDocument, RoadmapParser
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.state import OrchestratorStatus
+from vibrant.orchestrator.execution.git_manager import GitManager
 from vibrant.orchestrator.state.backend import OrchestratorStateBackend
-from vibrant.orchestrator.git_manager import GitManager
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 
 from .agents import AgentManagementService, AgentRecordStore, AgentRegistry, AgentRuntimeService
+from .execution.dispatcher import TaskDispatcher
 from .execution import GitWorkspaceService, PromptService, RetryPolicyService, ReviewService, TaskExecutionService, scoped_worktree_root
 from .artifacts import ConsensusService, PlanningService, QuestionService, RoadmapService, WorkflowService
 from .state import StateStore
-from .task_dispatch import TaskDispatcher
 from .types import CodeAgentLifecycleResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]

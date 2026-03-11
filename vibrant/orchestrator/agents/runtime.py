@@ -16,7 +16,7 @@ from vibrant.agents.runtime import (
     RunState,
 )
 from vibrant.models.agent import AgentRecord
-from vibrant.orchestrator.git_manager import GitWorktreeInfo
+from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 from vibrant.providers.base import CanonicalEvent
 
 from ..types import RuntimeExecutionResult

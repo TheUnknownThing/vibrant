@@ -9,9 +9,10 @@ from typing import Any
 from vibrant.agents.runtime import AgentHandle, InputRequest, ProviderThreadHandle
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.git_manager import GitWorktreeInfo
+from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
-from ..types import CodeAgentLifecycleResult, RuntimeExecutionResult
+from ..agent_output import AgentOutputProjectionService
+from ..types import AgentOutput, CodeAgentLifecycleResult, RuntimeExecutionResult
 from .registry import AgentRegistry
 from .runtime import AgentRuntimeService, RuntimeHandleSnapshot
 from ..execution.service import TaskExecutionAttempt, TaskExecutionService
@@ -48,6 +49,7 @@ class ManagedAgentSnapshot:
     input_requests: list[InputRequest] = field(default_factory=list)
     native_event_log: str | None = None
     canonical_event_log: str | None = None
+    output: AgentOutput | None = None
 
 
 class AgentManagementService:
@@ -65,10 +67,12 @@ class AgentManagementService:
         agent_registry: AgentRegistry,
         runtime_service: AgentRuntimeService,
         execution_service: TaskExecutionService,
+        output_service: AgentOutputProjectionService | None = None,
     ) -> None:
         self._agent_registry = agent_registry
         self._runtime_service = runtime_service
         self._execution_service = execution_service
+        self._output_service = output_service
 
     @property
     def agent_registry(self) -> AgentRegistry:
@@ -139,6 +143,8 @@ class AgentManagementService:
             provider_resume_cursor = record.provider.resume_cursor
             input_requests = []
 
+        output = self._output_service.output_for_record(record) if self._output_service is not None else None
+
         return ManagedAgentSnapshot(
             agent_id=record.agent_id,
             task_id=record.task_id,
@@ -162,6 +168,7 @@ class AgentManagementService:
             input_requests=input_requests,
             native_event_log=record.provider.native_event_log,
             canonical_event_log=record.provider.canonical_event_log,
+            output=output,
         )
 
     def get_agent(self, agent_id: str) -> ManagedAgentSnapshot | None:

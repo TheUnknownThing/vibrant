@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from vibrant.agents.runtime import AgentHandle
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.git_manager import GitWorktreeInfo
 
 from ..types import CodeAgentLifecycleResult
+from .git_manager import GitWorktreeInfo
 from .git_workspace import GitWorkspaceService, format_merge_error
 from .prompts import PromptService
 from .retry_policy import RetryPolicyService

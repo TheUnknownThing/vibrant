@@ -7,7 +7,7 @@ from typing import Any
 
 from vibrant.consensus import RoadmapDocument, RoadmapParser
 from vibrant.models.task import TaskInfo, TaskStatus
-from vibrant.orchestrator.task_dispatch import TaskDispatcher
+from vibrant.orchestrator.execution.dispatcher import TaskDispatcher
 
 
 _UNSET = object()
@@ -36,8 +36,7 @@ class RoadmapService:
             self.document = self.parser.parse_file(self.roadmap_path)
         else:
             self.document = RoadmapDocument(project=self.project_name, tasks=[])
-        if self.dispatcher is None:
-            self.dispatcher = TaskDispatcher(self.document.tasks, concurrency_limit=1)
+        self._sync_dispatcher(concurrency_limit=1)
         return self.document
 
     def reload(self, *, project_name: str, concurrency_limit: int) -> RoadmapDocument:
@@ -50,14 +49,11 @@ class RoadmapService:
 
         if self.document is None or self.dispatcher is None:
             self.document = incoming
-            self.dispatcher = TaskDispatcher(
-                incoming.tasks,
-                concurrency_limit=concurrency_limit,
-            )
+            self.dispatcher = TaskDispatcher(incoming.tasks, concurrency_limit=concurrency_limit)
             return self.document
 
-        self.dispatcher.concurrency_limit = concurrency_limit
         self.merge_updates(incoming)
+        self._sync_dispatcher(concurrency_limit=concurrency_limit)
         return self.document
 
     def persist(self) -> None:
@@ -77,8 +73,6 @@ class RoadmapService:
         """Merge an updated roadmap document into tracked state."""
 
         assert self.document is not None
-        assert self.dispatcher is not None
-
         existing_by_id = {task.id: task for task in self.document.tasks}
         merged_tasks: list[TaskInfo] = []
         incoming_ids: set[str] = set()
@@ -88,7 +82,6 @@ class RoadmapService:
             existing = existing_by_id.get(incoming_task.id)
             if existing is None:
                 merged_tasks.append(incoming_task)
-                self.dispatcher.add_task(incoming_task)
                 continue
 
             _apply_task_definition(existing, incoming_task)
@@ -100,6 +93,7 @@ class RoadmapService:
 
         self.document.project = incoming.project
         self.document.tasks = merged_tasks
+        self._sync_dispatcher()
 
     def get_task(self, task_id: str) -> TaskInfo | None:
         document = self._ensure_document()
@@ -121,6 +115,7 @@ class RoadmapService:
         updated_tasks.insert(insertion_index, task)
         self.parser.validate_dependency_graph(updated_tasks)
         document.tasks = updated_tasks
+        self._sync_dispatcher()
         self.persist()
         return task
 
@@ -145,12 +140,12 @@ class RoadmapService:
                 raise ValueError(f"Unsupported task field update: {field_name}")
             setattr(updated, field_name, value)
 
+        _copy_task(existing=current, updated=updated)
         updated_tasks = list(document.tasks)
-        updated_tasks[index] = updated
         self.parser.validate_dependency_graph(updated_tasks)
-        document.tasks = updated_tasks
+        self._sync_dispatcher()
         self.persist()
-        return updated
+        return current
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
         document = self._ensure_document()
@@ -160,8 +155,19 @@ class RoadmapService:
 
         by_id = {task.id: task for task in document.tasks}
         document.tasks = [by_id[task_id] for task_id in ordered_task_ids]
+        self._sync_dispatcher()
         self.persist()
         return document
+
+    def _sync_dispatcher(self, *, concurrency_limit: int | None = None) -> None:
+        if self.document is None:
+            return
+        if self.dispatcher is None:
+            self.dispatcher = TaskDispatcher(self.document.tasks, concurrency_limit=concurrency_limit or 1)
+            return
+        if concurrency_limit is not None:
+            self.dispatcher.concurrency_limit = concurrency_limit
+        self.dispatcher.reconcile_tasks(self.document.tasks)
 
 
 def _apply_task_definition(existing: TaskInfo, incoming: TaskInfo) -> None:
@@ -172,3 +178,8 @@ def _apply_task_definition(existing: TaskInfo, incoming: TaskInfo) -> None:
     existing.dependencies = list(incoming.dependencies)
     existing.priority = incoming.priority
     existing.branch = incoming.branch or existing.branch
+
+
+def _copy_task(*, existing: TaskInfo, updated: TaskInfo) -> None:
+    for field_name in type(existing).model_fields:
+        setattr(existing, field_name, getattr(updated, field_name))

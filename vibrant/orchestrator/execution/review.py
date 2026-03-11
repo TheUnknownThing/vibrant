@@ -8,12 +8,13 @@ import inspect
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
-from vibrant.orchestrator.git_manager import GitWorktreeInfo
 from vibrant.prompts import (
     build_task_completion_trigger_description,
     build_task_escalation_trigger_description,
     build_task_failure_trigger_description,
 )
+
+from .git_manager import GitWorktreeInfo
 
 from .git_workspace import GitWorkspaceService
 from ..artifacts.roadmap import RoadmapService
