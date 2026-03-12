@@ -22,7 +22,7 @@ from uuid import uuid4
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
-from vibrant.providers.codex.adapter import CodexProviderAdapter
+from vibrant.providers.registry import provider_transport, resolve_provider_adapter
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
 
 from .base import ReadOnlyAgentBase
@@ -120,6 +120,8 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             lifecycle={"status": AgentStatus.SPAWNING},
             context={"worktree_path": str(self.project_root)},
             provider=AgentProviderMetadata(
+                kind=self.config.provider_kind.value,
+                transport=provider_transport(self.config.provider_kind),
                 runtime_mode=RuntimeMode.READ_ONLY.codex_thread_sandbox,
                 native_event_log=str(native_log),
                 canonical_event_log=str(canonical_log),
@@ -173,7 +175,7 @@ class Gatekeeper:
         self.agent = GatekeeperAgent(
             self.project_root,
             self.config,
-            adapter_factory=adapter_factory or CodexProviderAdapter,
+            adapter_factory=adapter_factory or resolve_provider_adapter(self.config.provider_kind),
             on_canonical_event=on_canonical_event,
             timeout_seconds=timeout_seconds,
         )

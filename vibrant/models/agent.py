@@ -125,6 +125,10 @@ class AgentProviderMetadata(BaseModel):
             data["runtime_mode"] = _normalize_runtime_mode(runtime_mode)
 
         resume_cursor = data.get("resume_cursor")
+        if "provider_thread_id" not in data:
+            provider_thread_id = _resume_cursor_thread_id(resume_cursor)
+            if provider_thread_id is not None:
+                data["provider_thread_id"] = provider_thread_id
         if "thread_path" not in data and isinstance(resume_cursor, dict):
             thread_path = resume_cursor.get("threadPath") or resume_cursor.get("thread_path")
             if isinstance(thread_path, str) and thread_path:
@@ -316,6 +320,16 @@ def _move_if_missing(data: dict[str, Any], old_key: str, new_key: str) -> None:
 def _move_if_present(source: dict[str, Any], destination: dict[str, Any], key: str) -> None:
     if key in source and key not in destination:
         destination[key] = source.pop(key)
+
+
+def _resume_cursor_thread_id(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    for key in ("threadId", "sessionId"):
+        thread_id = value.get(key)
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id
+    return None
 
 
 def _normalize_runtime_mode(value: str) -> str:

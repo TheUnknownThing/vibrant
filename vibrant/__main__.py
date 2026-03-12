@@ -11,17 +11,29 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from pathlib import Path
 import shutil
 import sys
 from collections.abc import Sequence
 
 from .config import find_project_root, load_config
 from .project_init import initialize_project
+from .providers.base import ProviderKind
 
 
-def _check_codex(binary: str = "codex") -> str | None:
-    """Return the path to the codex binary, or ``None`` if not found."""
-    return shutil.which(binary)
+def _check_binary(binary: str | None) -> str | None:
+    """Return the configured executable path, or ``None`` if it cannot be found."""
+
+    if binary is None or not binary.strip():
+        return None
+    candidate = binary.strip()
+    resolved = shutil.which(candidate)
+    if resolved:
+        return resolved
+    path = Path(candidate).expanduser()
+    if path.exists() and path.is_file():
+        return str(path.resolve())
+    return None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -66,16 +78,27 @@ def main(argv: Sequence[str] | None = None) -> None:
     start_path = args.cwd or os.getcwd()
     project_root = find_project_root(start_path)
     config = load_config(start_path=start_path)
-
-    codex_path = _check_codex(config.codex_binary)
-    if not codex_path:
-        print(
-            f"❌ Error: '{config.codex_binary}' CLI not found in PATH.\n"
-            "Install it: npm install -g @openai/codex\n"
-            "Then run: codex auth",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    provider_binary = config.codex_binary
+    resolved_provider_binary = None
+    if config.provider_kind is ProviderKind.CODEX:
+        resolved_provider_binary = _check_binary(config.codex_binary)
+        if not resolved_provider_binary:
+            print(
+                f"❌ Error: '{config.codex_binary}' CLI not found in PATH.\n"
+                "Install it: npm install -g @openai/codex\n"
+                "Then run: codex auth",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        provider_binary = resolved_provider_binary
+    elif config.claude_cli_path:
+        resolved_provider_binary = _check_binary(config.claude_cli_path)
+        if not resolved_provider_binary:
+            print(
+                f"❌ Error: Claude CLI '{config.claude_cli_path}' was configured but could not be found.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     if args.debug:
         import pathlib
@@ -96,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     settings = AppSettings(
         default_model=args.model or config.model,
         default_cwd=args.cwd,
-        codex_binary=codex_path,
+        codex_binary=provider_binary,
         history_dir=str(config.resolve_conversation_directory(project_root)),
     )
 

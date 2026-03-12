@@ -205,6 +205,13 @@ class CodexAuthMode(str, enum.Enum):
     CHATGPT_AUTH_TOKENS = "chatgptAuthTokens"
 
 
+class ProviderKind(str, enum.Enum):
+    """Supported provider backends."""
+
+    CODEX = "codex"
+    CLAUDE = "claude"
+
+
 @dataclass(slots=True)
 class CodexAuthConfig:
     """Optional authentication configuration for a Codex session.

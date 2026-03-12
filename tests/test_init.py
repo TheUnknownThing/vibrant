@@ -12,6 +12,7 @@ from vibrant.config import DEFAULT_CONVERSATION_DIRECTORY, RoadmapExecutionMode,
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
 from vibrant.project_init import ensure_project_files
+from vibrant.providers.base import ProviderKind
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DIRECTORIES = [
@@ -86,10 +87,12 @@ class TestVibrantInit:
             assert (tmp_path / relative_file).is_file(), relative_file
 
         config = load_config(start_path=tmp_path)
+        assert config.provider_kind is ProviderKind.CODEX
         assert config.codex_binary == "codex"
         assert config.model_provider is None
         assert config.conversation_directory == str(DEFAULT_CONVERSATION_DIRECTORY)
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
+        assert 'kind = "codex"' in (tmp_path / ".vibrant" / "vibrant.toml").read_text(encoding="utf-8")
         assert 'execution-mode = "automatic"' in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
         assert (
             'conversation-directory = ".vibrant/conversations"'
