@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.providers.base import RuntimeMode
 from vibrant.prompts import build_merge_prompt as render_merge_prompt
 
@@ -54,10 +54,10 @@ class MergeAgent(AgentBase):
         *,
         task_id: str,
         branch: str,
-    ) -> AgentRecord:
-        """Create an AgentRecord for a merge agent run."""
+    ) -> AgentRunRecord:
+        """Create an AgentRunRecord for a merge agent run."""
         agent_id = f"merge-{task_id}-{uuid4().hex[:8]}"
-        return AgentRecord(
+        return AgentRunRecord(
             identity={
                 "agent_id": agent_id,
                 "task_id": task_id,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from vibrant.agents.runtime import AgentHandle, ProviderThreadHandle
-from vibrant.models.agent import AgentInstanceRecord, AgentRecord, ProviderResumeHandle
+from vibrant.models.agent import AgentInstanceRecord, AgentRunRecord, ProviderResumeHandle
 
 from ..types import (
     AgentSnapshotIdentity,
@@ -27,7 +27,7 @@ class StartedAgentRun:
     """Prepared run record plus its live runtime handle."""
 
     agent: "ManagedAgentInstance"
-    agent_record: AgentRecord
+    agent_record: AgentRunRecord
     handle: AgentHandle
 
 
@@ -50,15 +50,21 @@ class AgentInstance(Protocol):
     @property
     def record(self) -> AgentInstanceRecord: ...
 
-    def latest_run(self) -> AgentRecord | None: ...
+    def latest_run(self) -> AgentRunRecord | None: ...
 
-    def active_run(self) -> AgentRecord | None: ...
+    def active_run(self) -> AgentRunRecord | None: ...
 
     def provider_thread_handle(self) -> ProviderThreadHandle | None: ...
 
+    @property
+    def persistent_thread(self) -> bool: ...
+
+    @property
+    def supports_interactive_requests(self) -> bool: ...
+
     def get_handle(self) -> AgentHandle | None: ...
 
-    def snapshot(self, *, record: AgentRecord | None = None) -> OrchestratorAgentSnapshot: ...
+    def snapshot(self, *, record: AgentRunRecord | None = None) -> OrchestratorAgentSnapshot: ...
 
     def create_run_record(
         self,
@@ -70,12 +76,12 @@ class AgentInstance(Protocol):
         skills: list[str] | None = None,
         retry_count: int = 0,
         max_retries: int = 3,
-    ) -> AgentRecord: ...
+    ) -> AgentRunRecord: ...
 
     async def start_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         resume_thread_id: str | None = None,
@@ -85,7 +91,7 @@ class AgentInstance(Protocol):
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         provider_thread: ProviderThreadHandle | None = None,
@@ -174,7 +180,7 @@ class ManagedAgentInstance:
             return self._seed_record
         raise KeyError(f"Unknown agent instance: {self._agent_id}")
 
-    def latest_run(self) -> AgentRecord | None:
+    def latest_run(self) -> AgentRunRecord | None:
         latest_run_id = self.record.latest_run_id
         if latest_run_id is not None:
             latest_run = self._agent_registry.get_run(latest_run_id)
@@ -182,7 +188,7 @@ class ManagedAgentInstance:
                 return latest_run
         return self._agent_registry.get(self._agent_id)
 
-    def active_run(self) -> AgentRecord | None:
+    def active_run(self) -> AgentRunRecord | None:
         active_run_id = self.record.active_run_id
         if active_run_id is None:
             return None
@@ -191,10 +197,18 @@ class ManagedAgentInstance:
     def provider_thread_handle(self) -> ProviderThreadHandle | None:
         return self._agent_registry.provider_thread_handle(self._agent_id)
 
+    @property
+    def persistent_thread(self) -> bool:
+        return self._agent_registry.role_catalog.get(self.role).persistent_thread
+
+    @property
+    def supports_interactive_requests(self) -> bool:
+        return self._agent_registry.role_catalog.get(self.role).supports_interactive_requests
+
     def get_handle(self) -> AgentHandle | None:
         return self._runtime_service.get_handle(self._agent_id)
 
-    def snapshot(self, *, record: AgentRecord | None = None) -> OrchestratorAgentSnapshot:
+    def snapshot(self, *, record: AgentRunRecord | None = None) -> OrchestratorAgentSnapshot:
         return build_agent_snapshot(
             agent_id=self._agent_id,
             instance=self.record,
@@ -213,7 +227,7 @@ class ManagedAgentInstance:
         skills: list[str] | None = None,
         retry_count: int = 0,
         max_retries: int = 3,
-    ) -> AgentRecord:
+    ) -> AgentRunRecord:
         return self._agent_registry.create_run_record(
             agent=self.record,
             task_id=task_id,
@@ -228,7 +242,7 @@ class ManagedAgentInstance:
     async def start_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         resume_thread_id: str | None = None,
@@ -277,7 +291,7 @@ class ManagedAgentInstance:
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         provider_thread: ProviderThreadHandle | None = None,
@@ -326,7 +340,7 @@ def build_agent_snapshot(
     *,
     agent_id: str,
     instance: AgentInstanceRecord,
-    record: AgentRecord | None,
+    record: AgentRunRecord | None,
     runtime_service: AgentRuntimeService,
     output_service: AgentOutputProjectionService | None = None,
 ) -> OrchestratorAgentSnapshot:
@@ -357,7 +371,7 @@ def build_agent_snapshot(
             canonical_event_log=record.provider.canonical_event_log,
         )
     elif record is not None:
-        done = record.lifecycle.status in AgentRecord.TERMINAL_STATUSES
+        done = record.lifecycle.status in AgentRunRecord.TERMINAL_STATUSES
         provider_thread = ProviderResumeHandle.from_provider_metadata(record.provider) or ProviderResumeHandle(
             kind=record.provider.kind
         )

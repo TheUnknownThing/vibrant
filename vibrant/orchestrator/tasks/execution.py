@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from vibrant.agents.runtime import AgentHandle
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskInfo
 
 from ..agents.instance import ManagedAgentInstance
@@ -32,7 +32,7 @@ class TaskExecutionAttempt:
     worktree: GitWorktreeInfo
     prompt: str
     agent: ManagedAgentInstance
-    agent_record: AgentRecord
+    agent_record: AgentRunRecord
     handle: AgentHandle
     run_record: TaskRunRecord | None = None
 

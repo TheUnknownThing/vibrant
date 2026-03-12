@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from vibrant.config import RoadmapExecutionMode
-from vibrant.models.agent import AgentRecord, AgentStatus
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionRecord
 from vibrant.orchestrator import Orchestrator, OrchestratorAgentSnapshot, OrchestratorFacade
 from vibrant.orchestrator.types import (
@@ -27,9 +27,9 @@ def _record(
     role: str = "code",
     status: AgentStatus = AgentStatus.RUNNING,
     summary: str | None = None,
-) -> AgentRecord:
+) -> AgentRunRecord:
     now = datetime.now(timezone.utc)
-    return AgentRecord(
+    return AgentRunRecord(
         identity={"agent_id": agent_id, "task_id": task_id, "role": role},
         lifecycle={"status": status, "started_at": now},
         outcome={"summary": summary},
@@ -70,6 +70,9 @@ class _FakeAgentManager:
     def list_active_agents(self):
         return self.list_agents(active_only=True)
 
+    def list_agent_instances(self, **kwargs):
+        return self.list_agents(**kwargs)
+
 
 class _FakeQuestionService:
     def __init__(self, records: list[QuestionRecord] | None = None) -> None:
@@ -89,7 +92,7 @@ class _FakeQuestionService:
         return pending[0] if pending else None
 
 
-def _state_store(status: OrchestratorStatus, *, records: list[AgentRecord] | None = None) -> SimpleNamespace:
+def _state_store(status: OrchestratorStatus, *, records: list[AgentRunRecord] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         status=status,
         user_input_banner=lambda: "banner",
@@ -211,6 +214,24 @@ def test_facade_exposes_workflow_and_question_state() -> None:
     assert facade.list_question_records() == [question]
     assert facade.list_pending_question_records() == [question]
     assert facade.get_current_pending_question() == "Need approval?"
+
+
+def test_facade_snapshot_exposes_instance_snapshots() -> None:
+    running = OrchestratorAgentSnapshot(
+        identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", role="code"),
+        runtime=AgentSnapshotRuntime(
+            status="running",
+            state="running",
+            has_handle=False,
+            active=True,
+            done=False,
+            awaiting_input=False,
+        ),
+    )
+    facade = OrchestratorFacade(_facade_lifecycle(agent_manager=_FakeAgentManager([running])))
+
+    snapshot = facade.snapshot()
+    assert [agent.identity.agent_id for agent in snapshot.agents] == ["agent-1"]
 
 
 def _make_test_orchestrator() -> Orchestrator:

@@ -11,7 +11,7 @@ import pytest
 from vibrant.agents import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.agents.runtime import RunState
 from vibrant.consensus.writer import ConsensusWriter
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
 from vibrant.orchestrator import OrchestratorStateBackend
@@ -19,7 +19,7 @@ from vibrant.orchestrator.state import StateStore
 from vibrant.project_init import initialize_project
 
 
-def _write_agent_record(path: Path, record: AgentRecord) -> None:
+def _write_agent_record(path: Path, record: AgentRunRecord) -> None:
     path.write_text(record.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
 
@@ -91,7 +91,7 @@ def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
         ),
     )
 
-    gatekeeper_record = AgentRecord(
+    gatekeeper_record = AgentRunRecord(
         identity={
             "agent_id": "gatekeeper-task_completion-test",
             "task_id": "gatekeeper-task_completion",
@@ -138,8 +138,9 @@ class TestOrchestratorEnginePersistence:
     def test_restart_recovers_from_state_agents_and_consensus(self, tmp_path):
         vibrant_dir = initialize_project(tmp_path)
         state_path = vibrant_dir / "state.json"
-        agents_dir = vibrant_dir / "agents"
+        agents_dir = vibrant_dir / "agent-runs"
         consensus_path = vibrant_dir / "consensus.md"
+        agents_dir.mkdir(parents=True, exist_ok=True)
 
         state = OrchestratorState(
             session_id="session-crash",
@@ -150,7 +151,7 @@ class TestOrchestratorEnginePersistence:
         )
         state_path.write_text(state.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
-        running_agent = AgentRecord(
+        running_agent = AgentRunRecord(
             identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"},
             lifecycle={"status": AgentStatus.RUNNING},
             provider=AgentProviderMetadata(
@@ -158,11 +159,11 @@ class TestOrchestratorEnginePersistence:
                 resume_cursor={"threadId": "thread-001"},
             ),
         )
-        completed_agent = AgentRecord(
+        completed_agent = AgentRunRecord(
             identity={"agent_id": "agent-task-002", "task_id": "task-002", "role": "merge"},
             lifecycle={"status": AgentStatus.COMPLETED},
         )
-        failed_agent = AgentRecord(
+        failed_agent = AgentRunRecord(
             identity={"agent_id": "agent-task-003", "task_id": "task-003", "role": "code"},
             lifecycle={"status": AgentStatus.FAILED},
             outcome={"error": "boom"},
@@ -193,10 +194,11 @@ class TestOrchestratorEnginePersistence:
         assert recovered.state.last_consensus_version == 14
         assert recovered.state.provider_runtime["agent-task-001"].provider_thread_id == "thread-001"
 
-    def test_restart_migrates_legacy_runtime_state_and_reads_nested_agents(self, tmp_path):
+    def test_restart_migrates_legacy_runtime_state_and_reads_agent_runs(self, tmp_path):
         vibrant_dir = initialize_project(tmp_path)
         state_path = vibrant_dir / "state.json"
-        agent_path = vibrant_dir / "agents" / "agent-gatekeeper-user_discussion-001.json"
+        agent_path = vibrant_dir / "agent-runs" / "agent-gatekeeper-user_discussion-001.json"
+        agent_path.parent.mkdir(parents=True, exist_ok=True)
 
         state_path.write_text(
             json.dumps(

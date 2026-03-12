@@ -117,8 +117,8 @@ Fields:
   - Current consensus document if it is available.
 - `consensus_path: Path | None`
   - Backing consensus file path when the orchestrator root exposes one.
-- `agent_records: tuple[AgentRecord, ...]`
-  - Durable agent **run** records known to the orchestrator state layer.
+- `agents: tuple[OrchestratorAgentSnapshot, ...]`
+  - Stable agent-instance snapshots, each anchored to its latest known run.
 - `execution_mode: RoadmapExecutionMode | None`
   - Manual/automatic execution mode when available.
 - `user_input_banner: str`
@@ -187,7 +187,7 @@ Fields:
 - `task_id: str | None`
 - `outcome: str`
 - `task_status: TaskStatus | None`
-- `agent_record: AgentRecord | None`
+- `agent_record: AgentRunRecord | None`
 - `gatekeeper_result: GatekeeperRunResult | None`
 - `merge_result: GitMergeResult | None`
 - `events: list[CanonicalEvent]`
@@ -256,9 +256,9 @@ It is the intended long-term boundary for:
 
 #### Agent reads
 
-- `agent_records() -> list[AgentRecord]`
+- `list_agent_records() -> list[AgentRunRecord]`
   - Returns the durable agent run records currently visible through the facade.
-- `list_agent_run_records() -> list[AgentRecord]`
+- `list_agent_run_records() -> list[AgentRunRecord]`
   - Stable alias with explicit run-record terminology.
 - `get_agent(agent_id) -> OrchestratorAgentSnapshot | None`
   - Returns one stable agent-instance snapshot by id.

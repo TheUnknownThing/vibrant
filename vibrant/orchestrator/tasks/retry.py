@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from vibrant.agents.gatekeeper import GatekeeperRunResult
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 
 from ..artifacts.roadmap import RoadmapService
@@ -31,7 +31,7 @@ class RetryPolicyService:
         self,
         *,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
         events: list[dict[str, object]],
         reason: str,

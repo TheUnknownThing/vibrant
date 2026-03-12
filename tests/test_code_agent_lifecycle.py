@@ -12,7 +12,7 @@ import pytest
 from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.agents.runtime import InputRequest, RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
@@ -319,7 +319,7 @@ class FakeGatekeeper:
         RoadmapParser().write(roadmap_path, roadmap)
 
         transcript = f"Verdict: {verdict}"
-        gatekeeper_record = AgentRecord(
+        gatekeeper_record = AgentRunRecord(
             identity={
                 "agent_id": f"gatekeeper-{request.trigger.value}-test",
                 "task_id": f"gatekeeper-{request.trigger.value}",
@@ -369,8 +369,8 @@ def _agent_record(
     task_id: str = "task-001",
     role: str = "code",
     status: AgentStatus = AgentStatus.RUNNING,
-) -> AgentRecord:
-    return AgentRecord(
+) -> AgentRunRecord:
+    return AgentRunRecord(
         identity={"agent_id": agent_id, "task_id": task_id, "role": role},
         lifecycle={"status": status},
     )
@@ -447,7 +447,7 @@ async def test_task_execution_uses_task_agent_role_for_run_creation(tmp_path):
     assert result.agent_record.provider.runtime_mode == "read-only"
     agent_files = sorted((repo / ".vibrant" / "agent-runs").glob("run-test-task-001-*.json"))
     assert len(agent_files) == 1
-    record = AgentRecord.model_validate_json(agent_files[0].read_text(encoding="utf-8"))
+    record = AgentRunRecord.model_validate_json(agent_files[0].read_text(encoding="utf-8"))
     assert record.lifecycle.status is record.lifecycle.status.COMPLETED
     assert record.context.branch == "vibrant/task-001"
     assert record.outcome.summary == "Implemented task-001."

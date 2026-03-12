@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibrant.config import VibrantConfig
-from vibrant.models.agent import AgentRecord, AgentStatus
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 
 from .utils import (
@@ -46,7 +46,7 @@ class AgentRunResult:
 
     transcript: str = ""
     events: list[CanonicalEvent] = field(default_factory=list)
-    agent_record: AgentRecord | None = None
+    agent_record: AgentRunRecord | None = None
     turn_result: Any | None = None
     exit_code: int | None = None
     pid: int | None = None
@@ -68,7 +68,7 @@ class AgentBase(ABC):
         *,
         adapter_factory: Any,
         on_canonical_event: Callable[[CanonicalEvent], Any] | None = None,
-        on_agent_record_updated: Callable[[AgentRecord], Any] | None = None,
+        on_agent_record_updated: Callable[[AgentRunRecord], Any] | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
         self.project_root = Path(project_root)
@@ -123,7 +123,7 @@ class AgentBase(ABC):
     def enrich_event(
         self,
         event: dict[str, Any],
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
     ) -> dict[str, Any]:
         """Add agent-specific metadata to a canonical event before forwarding."""
         event.setdefault("agent_id", agent_record.identity.agent_id)
@@ -141,7 +141,7 @@ class AgentBase(ABC):
             return transcript
         return extract_summary_from_turn_result(turn_result)
 
-    def on_run_started(self, agent_record: AgentRecord) -> None:
+    def on_run_started(self, agent_record: AgentRunRecord) -> None:
         """Hook called when the adapter session starts. No-op by default."""
 
     def on_run_completed(self, result: AgentRunResult) -> None:
@@ -155,7 +155,7 @@ class AgentBase(ABC):
         self,
         *,
         prompt: str,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         cwd: str | Path | None = None,
         resume_thread_id: str | None = None,
     ) -> AgentRunResult:
@@ -307,7 +307,7 @@ class AgentBase(ABC):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _notify_record_updated(self, agent_record: AgentRecord) -> None:
+    def _notify_record_updated(self, agent_record: AgentRunRecord) -> None:
         if self.on_agent_record_updated is not None:
             self.on_agent_record_updated(agent_record)
 

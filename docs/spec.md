@@ -399,7 +399,7 @@ Vibrant should persist provider-session bindings durably:
 - log file paths
 
 On restart:
-1. Reconstruct active agents from `state.json` and `.vibrant/agents/*.json`.
+1. Reconstruct active agents from `state.json` and `.vibrant/agent-runs/*.json`.
 2. Re-launch `codex app-server` for any recoverable in-flight agent.
 3. Attempt `thread/resume` using `provider_thread_id` as the primary key.
 4. If resume fails with a recoverable “missing thread / unknown thread” class of error, mark the session stale, fall back to a fresh session, and route the decision to the Gatekeeper.
@@ -548,13 +548,13 @@ Tasks with dependencies are merged in dependency order. Independent tasks can be
 ---
 ## 13. Error Handling & Resilience
 ### 13.1 Process Crash Recovery
-1. **Orchestrator crash**: On restart, the Orchestrator reads `state.json`, `.vibrant/agents/*.json`, and `consensus.md` to reconstruct state. For in-flight agents with persisted `resume_cursor` metadata, it re-launches `codex app-server` and attempts `thread/resume` before deciding whether the task must be retried.
+1. **Orchestrator crash**: On restart, the Orchestrator reads `state.json`, `.vibrant/agent-runs/*.json`, and `consensus.md` to reconstruct state. For in-flight agents with persisted `resume_cursor` metadata, it re-launches `codex app-server` and attempts `thread/resume` before deciding whether the task must be retried.
 2. **Agent crash**: Treated as task failure unless the provider thread can be resumed cleanly. The Gatekeeper receives the crash details, canonical runtime log excerpt, and resume outcome before deciding whether to retry.
 3. **Gatekeeper crash**: Orchestrator re-spawns the Gatekeeper with the same context and, if available, the same persisted provider-thread metadata.
 ### 13.2 State Durability
 - `state.json` is written atomically (write to temp file, then `os.rename`).
 - `consensus.md` is written atomically with the same pattern.
-- Agent record updates in `.vibrant/agents/` are written atomically so provider resume metadata is never partially persisted.
+- Agent run updates in `.vibrant/agent-runs/` are written atomically so provider resume metadata is never partially persisted.
 - Provider event logs are best-effort observability artifacts; they should flush frequently, but the canonical persisted state remains the source of truth.
 - File locks prevent concurrent writes.
 ### 13.3 Timeout Handling

@@ -16,7 +16,7 @@ from vibrant.agents.runtime import (
     ProviderThreadHandle,
     RunState,
 )
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
 from ..types import (
@@ -28,7 +28,7 @@ from ..types import (
 )
 from .registry import AgentRegistry
 
-RuntimeFactory = Callable[[AgentRecord], AgentRuntime]
+RuntimeFactory = Callable[[AgentRunRecord], AgentRuntime]
 
 
 @dataclass(slots=True)
@@ -61,12 +61,12 @@ class AgentRuntimeService:
     def _make_record_callback(self) -> AgentRecordCallback:
         registry = self.agent_registry
 
-        def _persist(record: AgentRecord) -> None:
+        def _persist(record: AgentRunRecord) -> None:
             registry.upsert(record)
 
         return _persist
 
-    def _resolve_runtime(self, agent_record: AgentRecord) -> AgentRuntime:
+    def _resolve_runtime(self, agent_record: AgentRunRecord) -> AgentRuntime:
         runtime = self._agent_runtime
         if runtime is None:
             raise RuntimeError("No protocol-based AgentRuntime configured")
@@ -94,7 +94,7 @@ class AgentRuntimeService:
     def _resolve_provider_thread(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         provider_thread: ProviderThreadHandle | None,
     ) -> ProviderThreadHandle:
         if provider_thread is not None:
@@ -111,7 +111,7 @@ class AgentRuntimeService:
         *,
         agent_id: str | None = None,
         handle: AgentHandle | None = None,
-        agent_record: AgentRecord | None = None,
+        agent_record: AgentRunRecord | None = None,
     ) -> RuntimeHandleSnapshot:
         """Return a serializable snapshot for a tracked handle."""
         if handle is None:
@@ -180,7 +180,7 @@ class AgentRuntimeService:
     async def start_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         resume_thread_id: str | None = None,
@@ -207,7 +207,7 @@ class AgentRuntimeService:
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         provider_thread: ProviderThreadHandle | None = None,
@@ -240,7 +240,7 @@ class AgentRuntimeService:
         *,
         worktree: GitWorktreeInfo,
         prompt: str,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         resume_thread_id: str | None = None,
     ) -> AgentHandle:
         """Start a worktree-scoped agent run."""
@@ -257,7 +257,7 @@ class AgentRuntimeService:
         *,
         worktree: GitWorktreeInfo,
         prompt: str,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         provider_thread: ProviderThreadHandle | None = None,
     ) -> AgentHandle:
         """Resume a worktree-scoped agent run."""

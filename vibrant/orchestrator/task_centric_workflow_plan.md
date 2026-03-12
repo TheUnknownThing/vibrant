@@ -9,7 +9,7 @@ Today the workflow is split across multiple domains:
 - task definition and status in `.vibrant/roadmap.md`
 - scheduling and execution orchestration in `vibrant/orchestrator/execution/`
 - derived workflow projections in `vibrant/orchestrator/state/`
-- per-agent execution history in `.vibrant/agents/*.json`
+- per-agent execution history in `.vibrant/agent-runs/*.json`
 - Gatekeeper review effects applied through a mix of task mutation and state rebuilds
 
 The target model is:
@@ -544,7 +544,7 @@ During the dual-write phase:
 
 - `.vibrant/roadmap.md` may continue to render a simplified human-readable task status
 - `.vibrant/state.json` may continue to hold machine-readable task records
-- `.vibrant/agents/*.json` remains execution evidence, not the sole workflow truth
+- `.vibrant/agent-runs/*.json` remains execution evidence, not the sole workflow truth
 
 ## Recommended End State
 
@@ -574,4 +574,3 @@ Recommended commands during implementation:
 
 - `uv run pytest`
 - targeted orchestrator and MCP tests for task workflow, review, and authorization boundaries
-

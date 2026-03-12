@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 
 from .base import AgentBase
 
@@ -32,8 +32,8 @@ class CodeAgent(AgentBase):
         worktree: GitWorktreeInfo,
         prompt: str,
         vibrant_dir: str | Path | None = None,
-    ) -> AgentRecord:
-        """Create an AgentRecord for a code agent run.
+    ) -> AgentRunRecord:
+        """Create an AgentRunRecord for a code agent run.
 
         This is the canonical factory for code agent records, extracted from
         the legacy ``AgentRegistry.create_code_agent_record``.
@@ -48,7 +48,7 @@ class CodeAgent(AgentBase):
             provider_kwargs["native_event_log"] = str(native_log)
             provider_kwargs["canonical_event_log"] = str(canonical_log)
 
-        return AgentRecord(
+        return AgentRunRecord(
             identity={
                 "agent_id": agent_id,
                 "task_id": task.id,

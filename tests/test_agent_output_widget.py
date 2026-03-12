@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from textual.app import App, ComposeResult
 
-from vibrant.models.agent import AgentRecord, AgentStatus
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.tui.widgets.agent_output import AgentOutput
 
 
@@ -47,7 +47,7 @@ async def test_agent_output_displays_streaming_reasoning_with_spinner(tmp_path: 
         },
     )
 
-    record = AgentRecord(
+    record = AgentRunRecord(
         identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"},
         lifecycle={"status": AgentStatus.RUNNING, "started_at": datetime.now(timezone.utc)},
         provider={"native_event_log": str(native_log)},

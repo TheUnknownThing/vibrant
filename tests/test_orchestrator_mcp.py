@@ -15,7 +15,7 @@ from vibrant.mcp.authz import (
     orchestrator_agent_scopes,
     orchestrator_gatekeeper_scopes,
 )
-from vibrant.models.agent import AgentRecord, AgentStatus
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionStatus
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator import OrchestratorStateBackend
@@ -107,7 +107,7 @@ class _StubAgentManager:
         }
 
 
-def _snapshot_from_record(record: AgentRecord) -> OrchestratorAgentSnapshot:
+def _snapshot_from_record(record: AgentRunRecord) -> OrchestratorAgentSnapshot:
     status = record.lifecycle.status.value
     done = record.lifecycle.status not in {AgentStatus.RUNNING, AgentStatus.AWAITING_INPUT}
     awaiting_input = record.lifecycle.status is AgentStatus.AWAITING_INPUT
@@ -173,7 +173,7 @@ def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, Quest
 
 
 def _persist_agent_record(state_store: StateStore, *, agent_id: str, task_id: str, status: str = "completed") -> None:
-    record = AgentRecord.model_validate(
+    record = AgentRunRecord.model_validate(
         {
             "identity": {"agent_id": agent_id, "task_id": task_id, "role": "code"},
             "lifecycle": {"status": status},

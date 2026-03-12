@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from vibrant.agents.runtime import AgentHandle, ProviderThreadHandle
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
@@ -69,27 +69,27 @@ class AgentManagementService:
     # Durable record / instance / snapshot access
     # ------------------------------------------------------------------
 
-    def get_record(self, agent_id: str) -> AgentRecord | None:
+    def get_record(self, agent_id: str) -> AgentRunRecord | None:
         """Return the latest persisted run record for one stable agent."""
         return self._agent_registry.get(agent_id)
 
-    def get_run(self, run_id: str) -> AgentRecord | None:
+    def get_run(self, run_id: str) -> AgentRunRecord | None:
         """Return one persisted run record by run id."""
         return self._agent_registry.get_run(run_id)
 
-    def list_records(self) -> list[AgentRecord]:
+    def list_records(self) -> list[AgentRunRecord]:
         """Return all persisted run records."""
         return self._agent_registry.list_records()
 
-    def list_run_records(self) -> list[AgentRecord]:
+    def list_run_records(self) -> list[AgentRunRecord]:
         """Return all persisted run records."""
         return self.list_records()
 
-    def records_for_task(self, task_id: str) -> list[AgentRecord]:
+    def records_for_task(self, task_id: str) -> list[AgentRunRecord]:
         """Return persisted run records for one task."""
         return self._agent_registry.records_for_task(task_id)
 
-    def run_records_for_task(self, task_id: str) -> list[AgentRecord]:
+    def run_records_for_task(self, task_id: str) -> list[AgentRunRecord]:
         """Return persisted run records for one task."""
         return self.records_for_task(task_id)
 
@@ -147,7 +147,7 @@ class AgentManagementService:
             instances = [instance for instance in instances if instance.role == resolved_role]
         return instances
 
-    def snapshot_for_record(self, record: AgentRecord) -> ManagedAgentSnapshot:
+    def snapshot_for_record(self, record: AgentRunRecord) -> ManagedAgentSnapshot:
         """Return an instance snapshot anchored on a specific run record."""
         instance = self.get_instance(record.identity.agent_id)
         if instance is None:
@@ -219,7 +219,7 @@ class AgentManagementService:
     # Record construction helpers
     # ------------------------------------------------------------------
 
-    def create_code_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRecord:
+    def create_code_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRunRecord:
         return self._agent_registry.create_code_agent_record(task=task, worktree=worktree, prompt=prompt)
 
     def create_task_agent_record(
@@ -234,7 +234,7 @@ class AgentManagementService:
         retry_count: int = 0,
         max_retries: int = 3,
         runtime_mode: str | None = None,
-    ) -> AgentRecord:
+    ) -> AgentRunRecord:
         return self._agent_registry.create_task_agent_record(
             role=role,
             task_id=task_id,
@@ -247,7 +247,7 @@ class AgentManagementService:
             runtime_mode=runtime_mode,
         )
 
-    def create_merge_agent_record(self, *, task_id: str, branch: str, worktree_path: str) -> AgentRecord:
+    def create_merge_agent_record(self, *, task_id: str, branch: str, worktree_path: str) -> AgentRunRecord:
         return self._agent_registry.create_merge_agent_record(
             task_id=task_id,
             branch=branch,
@@ -261,7 +261,7 @@ class AgentManagementService:
         branch: str | None,
         worktree_path: str,
         prompt: str | None = None,
-    ) -> AgentRecord:
+    ) -> AgentRunRecord:
         return self._agent_registry.create_test_agent_record(
             task_id=task_id,
             branch=branch,
@@ -288,7 +288,7 @@ class AgentManagementService:
         *,
         agent_id: str | None = None,
         handle: AgentHandle | None = None,
-        agent_record: AgentRecord | None = None,
+        agent_record: AgentRunRecord | None = None,
     ) -> RuntimeHandleSnapshot:
         return self._runtime_service.snapshot_handle(
             agent_id=agent_id,
@@ -302,7 +302,7 @@ class AgentManagementService:
     async def start_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         resume_thread_id: str | None = None,
@@ -322,7 +322,7 @@ class AgentManagementService:
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str,
         provider_thread: ProviderThreadHandle | None = None,
@@ -342,7 +342,7 @@ class AgentManagementService:
         *,
         worktree: GitWorktreeInfo,
         prompt: str,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         resume_thread_id: str | None = None,
     ) -> AgentHandle:
         return await self.start_run(
@@ -357,7 +357,7 @@ class AgentManagementService:
         *,
         worktree: GitWorktreeInfo,
         prompt: str,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         provider_thread: ProviderThreadHandle | None = None,
     ) -> AgentHandle:
         return await self.resume_run(

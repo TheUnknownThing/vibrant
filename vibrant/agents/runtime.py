@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from vibrant.models.agent import AgentRecord, AgentStatus, ProviderResumeHandle
+from vibrant.models.agent import AgentRunRecord, AgentStatus, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ class NormalizedRunResult:
     inspect adapter internals.
     """
 
-    agent_record: AgentRecord
+    agent_record: AgentRunRecord
     state: RunState
     transcript: str = ""
     summary: str | None = None
@@ -108,7 +108,7 @@ class NormalizedRunResult:
 
 # ── Callback type ────────────────────────────────────────────────────
 
-AgentRecordCallback = Callable[[AgentRecord], Any]
+AgentRecordCallback = Callable[[AgentRunRecord], Any]
 """Invoked by the runtime on every record mutation so the orchestrator
 can persist / broadcast without the runtime knowing about state stores."""
 
@@ -272,7 +272,7 @@ class AgentRuntime(Protocol):
     async def start(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str | None = None,
         resume_thread_id: str | None = None,
@@ -303,7 +303,7 @@ class AgentRuntime(Protocol):
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         provider_thread: ProviderThreadHandle,
         cwd: str | None = None,
@@ -361,7 +361,7 @@ class BaseAgentRuntime:
     async def start(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str | None = None,
         resume_thread_id: str | None = None,
@@ -378,7 +378,7 @@ class BaseAgentRuntime:
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         provider_thread: ProviderThreadHandle,
         cwd: str | None = None,
@@ -403,7 +403,7 @@ class BaseAgentRuntime:
     async def _launch(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str | None,
         resume_thread_id: str | None,
@@ -425,7 +425,7 @@ class BaseAgentRuntime:
         # mutation without coupling to a specific store.
         original_callback = self._agent.on_agent_record_updated
 
-        def _bridge_callback(record: AgentRecord) -> None:
+        def _bridge_callback(record: AgentRunRecord) -> None:
             # Update handle state from the record status.
             _sync_handle_state(handle, record)
             # Forward to the original callback if set.
@@ -515,7 +515,7 @@ class BaseAgentRuntime:
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _sync_handle_state(handle: AgentHandle, record: AgentRecord) -> None:
+def _sync_handle_state(handle: AgentHandle, record: AgentRunRecord) -> None:
     """Map AgentStatus to RunState on the handle."""
     mapping: dict[AgentStatus, RunState] = {
         AgentStatus.SPAWNING: RunState.STARTING,

@@ -12,7 +12,7 @@ from vibrant.models.agent import (
     AgentInstanceProviderConfig,
     AgentInstanceRecord,
     AgentProviderMetadata,
-    AgentRecord,
+    AgentRunRecord,
     AgentStatus,
 )
 from vibrant.models.task import TaskInfo
@@ -21,7 +21,7 @@ from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 from .catalog import build_builtin_provider_catalog, build_builtin_role_catalog
 from .store import AgentInstanceStore, AgentRecordStore
 
-AgentRecordCallback = Callable[[AgentRecord], Any]
+AgentRecordCallback = Callable[[AgentRunRecord], Any]
 """Callback type matching ``vibrant.agents.runtime.AgentRecordCallback``."""
 
 
@@ -44,7 +44,7 @@ class AgentRegistry:
 
     def upsert(
         self,
-        record: AgentRecord,
+        record: AgentRunRecord,
         *,
         increment_spawn: bool = False,
         rebuild_state: bool = True,
@@ -64,16 +64,16 @@ class AgentRegistry:
     def make_record_callback(self, *, increment_spawn: bool = False) -> AgentRecordCallback:
         """Return a callback that persists every run-record mutation."""
 
-        def _persist(record: AgentRecord) -> None:
+        def _persist(record: AgentRunRecord) -> None:
             self.upsert(record, increment_spawn=increment_spawn)
 
         return _persist
 
-    def get(self, agent_id: str) -> AgentRecord | None:
+    def get(self, agent_id: str) -> AgentRunRecord | None:
         """Look up the latest persisted run for a stable agent id."""
         return self.agent_store.latest_for_agent(agent_id)
 
-    def get_run(self, run_id: str) -> AgentRecord | None:
+    def get_run(self, run_id: str) -> AgentRunRecord | None:
         """Look up a persisted run record by run id."""
         return self.agent_store.get(run_id)
 
@@ -81,7 +81,7 @@ class AgentRegistry:
         """Look up a persisted stable agent instance by id."""
         return self.instance_store.get(agent_id)
 
-    def list_records(self) -> list[AgentRecord]:
+    def list_records(self) -> list[AgentRunRecord]:
         """Return all known run records ordered by start time then run id."""
         return self.agent_store.list_records()
 
@@ -89,11 +89,11 @@ class AgentRegistry:
         """Return all known stable agent instances in id order."""
         return self.instance_store.list_records()
 
-    def list_active_records(self) -> list[AgentRecord]:
+    def list_active_records(self) -> list[AgentRunRecord]:
         """Return non-terminal run records ordered by start time then run id."""
-        return [record for record in self.list_records() if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES]
+        return [record for record in self.list_records() if record.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES]
 
-    def records_for_task(self, task_id: str) -> list[AgentRecord]:
+    def records_for_task(self, task_id: str) -> list[AgentRunRecord]:
         """Return run records for a task ordered by start time then run id."""
         return self.agent_store.records_for_task(task_id)
 
@@ -102,7 +102,7 @@ class AgentRegistry:
         task_id: str,
         *,
         role: str | None = None,
-    ) -> AgentRecord | None:
+    ) -> AgentRunRecord | None:
         """Return the latest run for a task, optionally filtered by role."""
         return self.agent_store.latest_for_task(task_id, role=role)
 
@@ -156,7 +156,7 @@ class AgentRegistry:
         self.instance_store.upsert(record)
         return record
 
-    def ensure_instance_for_run(self, record: AgentRecord) -> AgentInstanceRecord:
+    def ensure_instance_for_run(self, record: AgentRunRecord) -> AgentInstanceRecord:
         existing = self.instance_store.get(record.identity.agent_id)
         if existing is not None:
             return existing
@@ -185,10 +185,10 @@ class AgentRegistry:
         self.instance_store.upsert(instance)
         return instance
 
-    def create_code_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRecord:
+    def create_code_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRunRecord:
         return self.create_execution_agent_record(task=task, worktree=worktree, prompt=prompt)
 
-    def create_execution_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRecord:
+    def create_execution_agent_record(self, *, task: TaskInfo, worktree: GitWorktreeInfo, prompt: str) -> AgentRunRecord:
         return self.create_task_agent_record(
             role=task.agent_role,
             task_id=task.id,
@@ -213,7 +213,7 @@ class AgentRegistry:
         max_retries: int = 3,
         runtime_mode: str | None = None,
         provider_kind: str | None = None,
-    ) -> AgentRecord:
+    ) -> AgentRunRecord:
         """Build a persisted-friendly run record for a task-scoped agent."""
         instance = self.resolve_instance(
             role=role,
@@ -244,7 +244,7 @@ class AgentRegistry:
         skills: list[str] | None = None,
         retry_count: int = 0,
         max_retries: int = 3,
-    ) -> AgentRecord:
+    ) -> AgentRunRecord:
         """Build one execution run beneath a stable agent instance."""
         run_id = f"run-{agent.identity.agent_id}-{uuid4().hex[:8]}"
         native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{run_id}.ndjson"
@@ -256,7 +256,7 @@ class AgentRegistry:
             native_event_log=str(native_log),
             canonical_event_log=str(canonical_log),
         )
-        return AgentRecord(
+        return AgentRunRecord(
             identity={
                 "run_id": run_id,
                 "agent_id": agent.identity.agent_id,
@@ -277,7 +277,7 @@ class AgentRegistry:
             provider=provider,
         )
 
-    def create_merge_agent_record(self, *, task_id: str, branch: str, worktree_path: str) -> AgentRecord:
+    def create_merge_agent_record(self, *, task_id: str, branch: str, worktree_path: str) -> AgentRunRecord:
         """Build a merge-agent run record for conflict-resolution flows."""
         return self.create_task_agent_record(
             role="merge",
@@ -293,7 +293,7 @@ class AgentRegistry:
         branch: str | None,
         worktree_path: str,
         prompt: str | None = None,
-    ) -> AgentRecord:
+    ) -> AgentRunRecord:
         """Build a read-only validation/test agent run record."""
         return self.create_task_agent_record(
             role="test",

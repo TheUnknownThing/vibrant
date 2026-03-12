@@ -12,7 +12,7 @@ from vibrant.agents.utils import maybe_forward_event
 from vibrant.agents.runtime import AgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
 from vibrant.consensus import RoadmapDocument, RoadmapParser
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.orchestrator.state.backend import OrchestratorStateBackend
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
@@ -394,7 +394,7 @@ def _build_default_agent_runtime_factory(
     on_canonical_event: CanonicalEventCallback | None,
     agent_registry: AgentRegistry,
 ):
-    def _build(agent_record: AgentRecord) -> AgentRuntime:
+    def _build(agent_record: AgentRunRecord) -> AgentRuntime:
         config = config_getter()
         role_spec = role_catalog.get(agent_record.identity.role)
         return role_spec.build_runtime(

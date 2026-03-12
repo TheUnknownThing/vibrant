@@ -1,381 +1,426 @@
 # Role / Agent / Run Architecture
 
-This document describes the **current** role / agent / run architecture in Vibrant, what was actually implemented, how the workflow behaves now, and what still remains to be done.
+This document describes the **current implemented architecture** in Vibrant as of **2026-03-12**.
 
-The key architectural point is still the same:
+The core model is:
 
-- **Role** = policy and behavior
+- **Role** = policy and capabilities
 - **Agent instance** = stable logical actor identity
-- **Run record** = one execution of that actor
+- **Run** = one execution of that actor
 
-The important correction is that this is **no longer only a future direction**. The codebase now has the core persistence and orchestration split in place. What remains is mostly about making that split more explicit and more consistently authoritative across the rest of the system.
+That split is no longer just a design goal. It is present in the durable model, in the default task-execution path, and in the managed Gatekeeper path.
 
-## Status
+## Current Status
 
-As of **2026-03-12**, the architecture is in a **hybrid but structurally real role / agent / run model**.
+Vibrant now uses a **real role / agent-instance / run architecture**.
 
-### What is now implemented
+What is already true in the codebase:
 
-The core structural refactor is now present in the codebase:
+- stable agent instances are persisted as `AgentInstanceRecord`
+- individual executions are persisted as `AgentRunRecord`
+- instance state and run history are stored separately
+- orchestrator-facing agent snapshots expose both `agent_id` and `run_id`
+- task execution resolves a stable task-scoped instance, then creates a fresh run under it
+- the managed Gatekeeper path resolves a stable project-scoped instance, then creates a fresh run per interaction
+- provider-thread reuse is anchored to the stable agent identity, not to one long-lived run record
 
-- persisted **stable agent instances** exist as `AgentInstanceRecord`
-- persisted **run records** exist as `AgentRunRecord`
-- stable agents and run history are stored separately
-- orchestrator snapshots now expose both **`agent_id`** and **`run_id`**
-- task execution resolves a **stable task-scoped agent instance** and then creates a new run under it
-- Gatekeeper now uses a **stable project-scoped agent instance** and creates one run per interaction
-- provider thread reuse is now tied to the stable agent identity instead of pretending one run record is the durable actor
+What is still notable:
 
-### What is still transitional
+- some APIs still expose explicit run-history naming alongside instance-aware defaults
+- Gatekeeper still has dedicated orchestration logic and a fallback non-managed execution path
+- role capability fields exist, but not every behavior is driven from them generically
 
-The implementation is not fully finished in every layer.
+## Primary Code Locations
 
-The main remaining gaps are:
+The main implementation lives in these files:
 
-- there is now a first-class in-memory `AgentInstance` / `ManagedAgentInstance` abstraction, but not every orchestration path depends on it yet
-- `AgentRecord` still exists as a compatibility alias for the run record model
-- some role semantics are still implemented through dedicated services instead of a generic role/instance policy surface
-- some compatibility reading of legacy `.vibrant/agents` data is still present for migration/recovery
+- `vibrant/models/agent.py`
+  - `AgentInstanceRecord`
+  - `AgentRunRecord`
+- `vibrant/orchestrator/agents/store.py`
+  - `AgentInstanceStore`
+  - `AgentRecordStore`
+- `vibrant/orchestrator/agents/registry.py`
+  - stable-instance resolution
+  - run-record creation
+  - startup reconciliation from persisted runs
+- `vibrant/orchestrator/agents/instance.py`
+  - `AgentInstance` protocol
+  - `ManagedAgentInstance`
+- `vibrant/orchestrator/agents/runtime.py`
+  - live runtime-handle management
+  - wait / resume / interrupt / kill by stable `agent_id`
+- `vibrant/orchestrator/tasks/execution.py`
+  - task execution through stable task-scoped agent instances
+- `vibrant/orchestrator/gatekeeper_runtime.py`
+  - Gatekeeper orchestration through the stable project-scoped instance in the managed path
+- `vibrant/orchestrator/facade.py`
+  - public read/write facade
+- `vibrant/orchestrator/STABLE_API.md`
+  - stable public snapshot semantics
 
-So the system is **no longer run-centric in storage**, but it is still **partly transitional in API shape and service boundaries**.
+## Layered Model
 
-## Core Architectural Point
+### 1. Role Layer
 
-The central idea of this design remains:
+The role layer is the built-in role catalog in `vibrant/orchestrator/agents/catalog.py`.
 
-> The real refactor is not just “make roles data-driven.”
-> The real refactor is to separate **Role**, **Agent Instance**, and **Run** into explicit layers.
+`AgentRoleSpec` currently carries:
 
-That split is now present in the codebase in the durable model and in the orchestration path:
+- `role`
+- `display_name`
+- `agent_id_prefix`
+- `workflow_class`
+- `default_provider_kind`
+- `default_runtime_mode`
+- `supports_interactive_requests`
+- `persistent_thread`
+- `question_source_role`
+- `contributes_control_plane_status`
+- `ui_model_name`
+- `runtime_builder`
 
-- role metadata defines policy defaults
-- stable agent instances define identity and scope
-- run records capture execution history
+This means the orchestrator can resolve policy from persisted role names instead of branching on closed role enums.
 
-Data-driven catalogs are still important, but they are a **supporting mechanism inside the role layer**, not the whole architecture.
+Current built-in roles are:
 
-## Current Model in the Codebase
+- `code`
+- `merge`
+- `test`
+- `gatekeeper`
 
-### 1. Role layer
+The provider side is similarly catalog-driven through `ProviderKindSpec` and `ProviderKindCatalog`.
 
-The role layer is represented by the built-in role catalog.
+### Role Metadata: What Is Authoritative Today
 
-It currently provides:
+The role catalog is not just descriptive. Some fields already control real behavior today, while others are still mostly documentation or future-policy hooks.
 
-- role name
-- display name
-- agent id prefix
-- workflow class metadata
-- default provider kind
-- default runtime mode
-- interactive-request capability metadata
-- persistent-thread capability metadata
-- question-source metadata
-- control-plane contribution metadata
-- role-specific runtime construction
+Fields that are already authoritative in the current implementation:
 
-In practice, this means the orchestrator can resolve policy from the role name instead of branching on closed enums.
+- `agent_id_prefix`
+  - used by `AgentRegistry.resolve_instance(...)` to derive stable instance ids
+- `default_provider_kind`
+  - used by `AgentRegistry.resolve_instance(...)`
+  - also used by Gatekeeper bootstrap/runtime setup when a provider is not explicitly overridden
+- `default_runtime_mode`
+  - used by `AgentRegistry.resolve_instance(...)` to populate instance provider defaults
+  - used when Gatekeeper-specific runtime setup falls back to role defaults
+- `runtime_builder`
+  - used by runtime assembly to construct the concrete runtime for a persisted run
+- `question_source_role`
+  - used by orchestrator question/state services when attributing structured questions
+- `contributes_control_plane_status`
+  - used by state/projection logic when determining which roles contribute control-plane status
+- `ui_model_name`
+  - used by UI-facing projection helpers to map a role to its display/model identity
 
-### 2. Agent-instance layer
+Fields that exist but are not yet fully authoritative across the system:
 
-The stable actor layer is now represented by persisted agent instance records.
+- `workflow_class`
+  - carried in the catalog, but not yet the main generic dispatch input for orchestration
+- `supports_interactive_requests`
+  - correctly describes role intent, but is not yet enforced as a generic runtime/facade rule
+- `persistent_thread`
+  - now drives default managed Gatekeeper thread-resume policy through `ManagedAgentInstance`
+  - fallback direct Gatekeeper execution still has bespoke resume logic
 
-An agent instance now answers questions like:
+So the role layer is already partially authoritative, but it is not yet the sole policy source for every role-dependent branch.
+
+### 2. Agent-Instance Layer
+
+The stable actor layer is represented by `AgentInstanceRecord` plus the in-memory `ManagedAgentInstance` facade.
+
+An agent instance answers questions like:
 
 - who is the logical actor?
 - what role does it implement?
 - what scope does it belong to?
 - what provider defaults belong to this actor?
-- what is its latest run?
-- what run is currently active?
+- what was its latest run?
+- what run is active right now?
+
+The instance record contains:
+
+- `identity.agent_id`
+- `identity.role`
+- `scope.scope_type`
+- `scope.scope_id`
+- default provider configuration
+- `latest_run_id`
+- `active_run_id`
 
 Current built-in scope patterns are:
 
-- **task-scoped execution actors**
-  - example: `agent-task-001`
-  - example: `test-task-001`
-  - example: `merge-task-001`
-- **project-scoped gatekeeper actor**
+- **task-scoped agents**
+  - `agent-task-001`
+  - `test-task-001`
+  - `merge-task-001`
+- **project-scoped Gatekeeper**
   - `gatekeeper-project`
 
-### 3. Run layer
+Agent ids are derived from the role's `agent_id_prefix` plus a slugged scope key.
 
-The run layer is now represented by explicit run records.
+### 3. Run Layer
+
+The execution layer is represented by `AgentRunRecord`.
 
 A run record answers questions like:
 
 - what happened this time?
-- what prompt and workspace were used?
-- what lifecycle state did this run reach?
-- what summary/error belongs to this execution?
-- which provider thread/logs belong to this execution?
+- which prompt and workspace were used?
+- what lifecycle state did this execution reach?
+- what summary or error belongs to this execution?
+- which provider thread and logs belong to this execution?
 
-A run now has its own stable `run_id`, separate from the stable `agent_id`.
-
-Example shape:
+Run identity is explicitly separate from stable agent identity:
 
 - stable agent id: `agent-task-001`
 - run id: `run-agent-task-001-3f2a9b7c`
 
-That distinction is the core of the refactor.
+That distinction is the substance of the refactor.
 
-## Where Role Logic Lives Now
+## Runtime and Persistence Semantics
 
-### Runtime behavior
+The important current runtime rules are:
 
-Runtime-level differences still naturally live close to agent/runtime construction.
+- stable instances are stored in `.vibrant/agent-instances`
+- run records are stored in `.vibrant/agent-runs`
+- live runtime handles are tracked by stable `agent_id`
+- provider-thread lookup is done per stable `agent_id`, using the latest persisted resumable handle across that agent's runs
+- the runtime currently allows **at most one active live run per stable agent instance**
 
-Examples:
-
-- code role uses the standard execution runtime
-- merge role uses a more privileged runtime mode
-- gatekeeper role supports interactive requests and persistent conversation continuity
-
-This part is fine: runtime-level variation does belong near the runtime layer.
-
-### Workflow behavior
-
-Workflow behavior is now split across:
-
-- role metadata in the catalog
-- agent-instance resolution in the registry
-- run creation in the registry
-- execution in the runtime service
-- orchestration in task and gatekeeper services
-- state projection / question handling in generic services
-
-This is better than the old enum-driven model, but not fully unified yet. Some workflow behavior is still expressed through dedicated services, especially around Gatekeeper.
-
-### Persistence and recovery
-
-Persistence is now split into two durable stores:
-
-- **agent instance store**
-  - stable identities in `.vibrant/agent-instances`
-- **agent run store**
-  - run history in `.vibrant/agent-runs`
-
-For migration and restart recovery, legacy `.vibrant/agents` data is still read when present.
+That last point matters: the system is structurally multi-run, but not currently multi-concurrent-run for a single stable agent.
 
 ## Current Workflow
 
-This section describes how the system actually behaves **now**, not the historical design.
+This section describes the default behavior that the code implements now.
 
-### Current workflow: task-scoped execution
+### Task Execution
 
-When a task is executed now, the workflow is:
+When a task runs through `TaskExecutionService`, the flow is:
 
-1. `TaskExecutionService` chooses a task to run.
-2. It creates the task worktree and builds the task prompt.
-3. It resolves the stable task-scoped `AgentInstance` for `task.agent_role`.
-   - for example `agent-task-001`
-   - or `test-task-001`
-4. The instance creates a **new run record** under that stable actor.
-   - for example `run-agent-task-001-<suffix>`
-5. The instance starts the run through the runtime service.
-6. The resulting `TaskExecutionAttempt` carries both:
+1. Choose the next task.
+2. Create a fresh worktree and build the prompt.
+3. Resolve the stable task-scoped `ManagedAgentInstance` for `task.agent_role` and `task.id`.
+4. Record a task-run attempt in task state.
+5. Create a **new run record** under that stable agent instance.
+6. Start the run through `AgentRuntimeService`.
+7. Return a `TaskExecutionAttempt` that carries both:
    - the stable `agent` instance
-   - the freshly created `agent_record` run record
-7. Live runtime handles are tracked by the **stable agent id**.
-8. Waiting for task completion now goes back through the stable `AgentInstance`, not directly through a run-centric service call.
-9. When the run finishes, the run record is updated and the instance record is updated with:
-   - `latest_run_id`
-   - `active_run_id`
-10. Orchestrator-facing snapshots expose both:
-   - `agent_id` = stable actor identity
-   - `run_id` = current/latest execution
+   - the current `agent_record` run record
+8. Wait for completion through the stable agent instance.
+9. Persist run updates as the runtime progresses.
+10. Update the instance record with `latest_run_id` and `active_run_id`.
+11. Review, merge, retry, or pause based on the run result.
 
 Important consequence:
 
-> Re-running the same task role creates a **new run** for the **same stable task actor**, instead of inventing a brand-new actor identity each time.
+> Re-running the same task role creates a new run for the same stable task-scoped actor.
 
-### Current workflow: Gatekeeper interaction
+### Gatekeeper Interaction
 
-Gatekeeper is now structurally different from the old model.
+When Gatekeeper runs through the **managed runtime path**, the flow is:
 
-When Gatekeeper runs now, the workflow is:
-
-1. Planning / review / question-answering code creates a `GatekeeperRequest`.
-2. `GatekeeperRuntimeService` resolves the stable project-scoped gatekeeper `AgentInstance`.
-3. If resume behavior is enabled, that instance is consulted for the latest resumable provider thread.
-4. The instance creates a new run with:
+1. Create a `GatekeeperRequest`.
+2. Resolve the stable project-scoped Gatekeeper instance.
+3. Optionally reuse the latest persisted provider thread for that stable instance.
+4. Create a new run record with:
    - stable `agent_id = gatekeeper-project`
    - fresh `run_id = run-gatekeeper-project-<suffix>`
-5. The instance starts that run through the runtime service.
-6. Managed Gatekeeper waiting/callback flows now also go back through the stable gatekeeper instance.
-7. The run persists into the run store.
-8. The gatekeeper instance remains the same stable actor across interactions.
+5. Start the run through `AgentRuntimeService`.
+6. Wait for completion through the stable instance when needed.
+7. Persist the run into `.vibrant/agent-runs`.
+8. Keep the Gatekeeper instance stable across interactions.
 
 Important consequence:
 
-> Gatekeeper is now modeled as **one stable project actor with many runs**, which is exactly the intended meaning of the agent layer.
+> Gatekeeper continuity is modeled as one stable project actor with many runs.
 
-### Current workflow: restart / recovery
+There is still a fallback path for gatekeeper objects that expose older direct `start_run(...)` or `run(...)` APIs. That fallback is one reason the architecture is still partly transitional.
 
-On restart, the system now rebuilds state from persisted run history and stable instances.
+### Restart and Recovery
 
-In practice:
+On startup, the registry rebuilds instance/run relationships from persisted data:
 
-- run records are loaded from `.vibrant/agent-runs`
-- legacy run data can still be loaded from `.vibrant/agents`
-- instance records are loaded from `.vibrant/agent-instances`
-- if legacy run data exists without a matching instance record, instances are reconciled from runs
-- derived orchestrator state is rebuilt from persisted run data
+- load run records from `.vibrant/agent-runs`
+- load stable instances from `.vibrant/agent-instances`
+- reconcile missing instance records from existing runs
+- rebuild derived orchestrator state from the resulting run set
 
-This means the runtime no longer depends on one overloaded record shape pretending to be both identity and execution history.
+This means recovery is no longer based on one overloaded record pretending to be both durable actor identity and execution history.
 
-## What This Fixes
+## Public API Shape Today
 
-The main architectural improvements now in place are:
+The current public API is intentionally mixed while the refactor settles.
 
-- role identity is open and string-driven
+Stable-agent reads:
+
+- `get_agent(agent_id)`
+- `get_agent_instance(agent_id)`
+- `list_agents(...)`
+- `list_agent_instances(...)`
+
+Run-centric reads:
+
+- `get_run(run_id)`
+- `list_agent_records()`
+- `list_agent_run_records()`
+- `records_for_task(task_id)`
+
+Instance-aware default surface at the top level:
+
+- `OrchestratorFacade.snapshot()` returns `OrchestratorSnapshot`
+- `OrchestratorSnapshot.agents` is a tuple of stable agent snapshots
+
+So the durable architecture is instance-aware by default, even though some explicit run-history APIs still remain.
+
+## Coordination Boundaries Today
+
+The current implementation is easiest to understand if you separate durable ownership from orchestration ownership.
+
+### Durable ownership
+
+- `AgentRegistry`
+  - resolves or creates stable agent instances
+  - creates fresh run records beneath a stable instance
+  - reconciles instance state from persisted run history on startup
+- `AgentInstanceStore`
+  - owns stable instance persistence in `.vibrant/agent-instances`
+- `AgentRecordStore`
+  - owns run persistence in `.vibrant/agent-runs`
+
+### Runtime / orchestration ownership
+
+- `ManagedAgentInstance`
+  - is the role-neutral lifecycle facade for one stable actor
+  - exposes create/start/resume/wait/interrupt/kill operations in stable-agent terms
+- `AgentRuntimeService`
+  - owns live handle tracking by stable `agent_id`
+  - starts and resumes concrete provider-backed runs
+- `TaskExecutionService`
+  - owns task-scoped execution flow around worktrees, prompts, retries, review, and merge
+  - uses a stable task-scoped `ManagedAgentInstance` as the execution anchor
+- `GatekeeperRuntimeService`
+  - owns Gatekeeper request orchestration and Gatekeeper-specific fallback handling
+  - uses a stable project-scoped `ManagedAgentInstance` in the managed path
+- `AgentManagementService`
+  - provides the public stable-agent query/control surface consumed by the facade
+
+This is why the architecture is now structurally correct even though some policy still lives in service-specific layers: durable identity and execution history are cleanly separated, but orchestration policy is not yet fully generic.
+
+## Terminology Crosswalk
+
+Some names still reflect the transition from the old run-centric model to the current instance-aware model.
+
+- **Stable instance terminology**
+  - `AgentInstanceRecord`
+  - `AgentInstanceStore`
+  - `AgentInstance`
+  - `ManagedAgentInstance`
+  - `get_agent_instance(...)`
+  - `list_agent_instances(...)`
+- **Run terminology still present for explicit history access**
+  - `AgentRunRecord`
+  - `list_agent_records()`
+  - `list_agent_run_records()`
+  - `records_for_task(...)`
+
+When reading current APIs, the practical rule is:
+
+> If you need durable history for individual executions, use the run-centric surface.
+> If you need the stable logical actor, use the instance-aware surface.
+
+## What This Refactor Already Fixed
+
+The architecture now has these real improvements:
+
+- role identity is string-driven and open to catalog extension
 - stable actor identity is distinct from run identity
-- Gatekeeper continuity is modeled as **same agent, new run**, not **same run pretending to continue forever**
-- task roles can be selected by policy without forcing the whole system back into hard-coded role enums
-- provider thread reuse is anchored to the stable actor layer
-- snapshots can distinguish the actor from a specific execution
+- task execution can rerun the same stable actor without inventing a new actor id each time
+- provider-thread continuity is anchored to the stable actor layer
+- agent snapshots can distinguish the actor from one specific execution
+- Gatekeeper continuity is modeled as same agent, new run
 
-This is the real substance of the refactor.
+## Remaining Design Choices
 
-## What Is Still Not Fully Finished
+The storage-model split itself is now complete. What remains is mostly about how far to push generic policy and naming cleanup.
 
-Even though the core storage/orchestration split is implemented, there are still meaningful follow-up tasks.
+### 1. `AgentInstance` is the primary coordination boundary
 
-### 1. A first-class `AgentInstance` abstraction now exists
-
-The codebase now has all of the following layers in real code:
+The codebase now has all of these pieces:
 
 - `AgentInstanceRecord`
 - `AgentInstanceStore`
 - `AgentInstance` protocol
-- `ManagedAgentInstance` runtime/domain facade
+- `ManagedAgentInstance`
 
-That instance abstraction now owns the stable-agent lifecycle surface directly, including operations such as:
+Task execution and the managed Gatekeeper path use this abstraction directly, and the default orchestrator snapshot now exposes instance snapshots by default.
 
-```python
-class AgentInstance(Protocol):
-    async def start_run(...): ...
-    async def resume_run(...): ...
-    def latest_run(...): ...
-    def active_run(...): ...
-    def snapshot(...): ...
-```
+### 2. Some role metadata is authoritative, but not fully generic yet
 
-Task execution and managed Gatekeeper execution now both resolve a stable agent instance first and then create/start a new run through that instance.
-
-What is still incomplete is not the existence of the abstraction itself, but its adoption as the only coordination boundary everywhere in the codebase.
-
-### 2. Some role fields are still descriptive more than authoritative
-
-The following role fields exist, but are not yet used consistently as the one generic source of truth:
+These fields are still the main places where policy may become more generic over time:
 
 - `workflow_class`
 - `supports_interactive_requests`
 - `persistent_thread`
 
-Today they inform behavior, but not every behavior is driven from them generically.
+Today, `persistent_thread` already influences managed Gatekeeper resume behavior, while the other two fields are still partly descriptive.
 
-### 3. Gatekeeper still has dedicated orchestration code
+### 3. Gatekeeper still carries bespoke orchestration policy
 
-This is not necessarily wrong, but it is still a sign that the generic role/instance model is not yet the only path.
+That currently shows up in areas such as:
 
-Examples that still need refinement:
+- busy-state semantics
+- fallback execution paths for older gatekeeper interfaces
 
-- dedicated gatekeeper runtime coordination
-- gatekeeper-specific busy-state semantics
-- gatekeeper-specific resume-selection logic
+The model is structurally correct, but not every policy has been pushed behind generic role or instance capabilities yet.
 
-The model is structurally correct now, but some of the policy is still implemented in bespoke services.
+### 4. Some public APIs still expose run-centric terminology
 
-### 4. Compatibility cleanup is not complete
+That is now mostly an API-shape choice rather than a storage or migration artifact.
 
-The refactor intentionally preserves some migration bridges.
+## Recommended Direction
 
-Examples:
+The right next step is **not** another broad naming pass.
 
-- `AgentRecord` still aliases the run record model
-- legacy `.vibrant/agents` data is still read
-- some older docs and names still refer to the older run-centric vocabulary
+The right next step is to keep tightening the remaining policy edges without re-opening the storage model:
 
-Those should eventually be removed once the new model is fully normalized across the project.
+- keep moving helper and orchestration paths toward `AgentInstance`
+- decide which role fields should become generic policy inputs and which should be removed
+- make public read models more consistently instance-aware
+- simplify or remove remaining redundant run-centric names when that improves the public API
+- continue updating docs so they describe the current instance-aware model first
 
-## Recommended Direction From Here
+## Short Checklist
 
-The right direction now is **not** another round of string replacement or “more data-driven role names.”
+### Implemented
 
-The right direction is to finish making the already-implemented split fully authoritative:
+- [x] Separate stable instance records from run records
+- [x] Persist instances in `.vibrant/agent-instances`
+- [x] Persist runs in `.vibrant/agent-runs`
+- [x] Expose both `agent_id` and `run_id` in stable agent snapshots
+- [x] Resolve task execution through stable task-scoped instances
+- [x] Resolve managed Gatekeeper execution through a stable project-scoped instance
+- [x] Add a first-class `AgentInstance` / `ManagedAgentInstance` abstraction
+- [x] Keep provider-thread continuity at the stable-agent layer
 
-- continue moving more orchestration paths to depend on the explicit agent-instance abstraction directly
-- move more policy behind generic role/instance capabilities
-- remove remaining compatibility aliases and legacy paths
-- keep role metadata focused on policy, not on replacing every service boundary
+### Follow-Ups
 
-## TODO List
-
-The checklist below reflects the **current post-refactor state**.
-
-### Completed core structural work
-
-These were the core of the refactor, and they are now in place.
-
-- [x] Introduce a first-class `AgentInstanceRecord` separate from the run record model
-- [x] Introduce an explicit run record model with a distinct `run_id`
-- [x] Introduce a dedicated run repository/store separate from the instance repository/store
-- [x] Add stable actor identity for long-lived agents such as the project gatekeeper
-- [x] Define stable scopes for built-in actors, including project-scoped gatekeeper and task-scoped execution roles
-- [x] Update orchestrator-facing snapshots so callers can distinguish `agent_id` from `run_id`
-- [x] Make `latest_for_task(...)` operate on explicit run history rather than implicit single-record identity
-
-### Completed supporting role-system work
-
-- [x] Replace closed role enums with persisted `identity.role`
-- [x] Introduce `AgentRoleSpec` / `AgentRoleCatalog`
-- [x] Introduce `ProviderKindSpec` / `ProviderKindCatalog`
-- [x] Resolve runtime construction through the role catalog
-- [x] Use role metadata for default provider kind and runtime mode
-- [x] Use role capability metadata for control-plane status projection
-- [x] Use role capability metadata for question-source projection where available
-- [x] Make task execution choose role from workflow/policy instead of always creating `code` runs
-
-- [x] Replace remaining hard-coded `"gatekeeper"` defaults in question/state/facade APIs
-- [x] Move UI-facing role naming/model identity behind role metadata consistently
-
-### Remaining structural work
-
-These items are still important, but they are no longer the main storage-model refactor.
-
-- [x] Introduce a first-class `AgentInstance` runtime/domain abstraction with role-neutral lifecycle operations
-- [x] Shift task execution and managed Gatekeeper start/wait flows to resolve, start, and wait through `AgentInstance`
-- [ ] Continue shifting smaller orchestration and helper paths to depend on `AgentInstance` directly where that improves clarity
-- [ ] Decide whether agent instances themselves should own more lifecycle policy directly, or whether registry/manager services should remain the main coordination boundary
-- [ ] Decide whether multiple concurrent runs per stable agent should ever be supported, and if so how active-run semantics should be expressed
-
-### Remaining supporting role-system work
-
-- [ ] Move Gatekeeper thread-resume policy behind a generic role-level or instance-level policy surface
-- [ ] Move Gatekeeper busy-state semantics behind generic role/instance capabilities
-- [ ] Decide whether `workflow_class` should become an authoritative dispatch input or be removed
-- [ ] Decide whether `supports_interactive_requests` should be enforced generically by runtime/bootstrap layers
-- [ ] Decide whether `persistent_thread` should drive generic resume behavior or be replaced by a richer hook/policy abstraction
-- [ ] Broaden provider extensibility beyond the currently exercised built-in `codex` provider kind
-
-### Remaining cleanup work
-
-- [ ] Remove the `AgentRecord` compatibility alias once the codebase consistently uses explicit run-record naming everywhere
-- [ ] Remove legacy `.vibrant/agents` compatibility reads once migration support is no longer needed
-- [ ] Remove historical/stale references to `AgentType` and `identity.type` from older docs and comments
-- [ ] Update any remaining docs that still describe the architecture as primarily run-centric or merely “data-driven”
-- [x] Add focused tests for the explicit agent-instance abstraction and multi-run instance behavior
+- [x] Make more helper paths depend directly on `AgentInstance`
+- [x] Decide whether role capability fields should become authoritative or be simplified
+- [x] Remove the `AgentRunRecord` compatibility alias
+- [x] Remove legacy `.vibrant/agents` compatibility reads
+- [x] Reshape remaining public read models that still expose run-centric naming by default
+- [x] Audit and update older docs that still describe the pre-refactor storage layout
 
 ## Final Summary
 
-The architecture is now best described as:
+Vibrant is now best described as:
 
 - **Role** defines policy
 - **Agent instance** defines stable actor identity and scope
 - **Run** defines one execution of that actor
 
-That core split is now implemented in the durable model and in the runtime workflow.
+That architecture is already real in the durable model and in the main orchestration paths.
 
-What remains is not the original “major refactor.”
-What remains is the work of making the new split cleaner, more generic, and more explicit across every API and service boundary.
+What remains is mostly API and policy refinement: deciding how much run-centric naming to keep, and how much more Gatekeeper behavior should move behind generic role and instance capabilities.

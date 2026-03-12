@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from vibrant.agents.runtime import ProviderThreadHandle
-from vibrant.models.agent import AgentInstanceRecord, AgentRecord
+from vibrant.models.agent import AgentInstanceRecord, AgentRunRecord
 
 from .catalog import normalize_role_name
 from ..state.store import StateStore
@@ -61,11 +61,7 @@ class AgentInstanceStore:
 
 
 class AgentRecordStore:
-    """Persist and query agent run records from ``.vibrant/agent-runs``.
-
-    The legacy ``.vibrant/agents`` directory is still read as a migration input,
-    but new writes go to ``.vibrant/agent-runs``.
-    """
+    """Persist and query agent run records from ``.vibrant/agent-runs``."""
 
     def __init__(
         self,
@@ -75,33 +71,32 @@ class AgentRecordStore:
     ) -> None:
         self.vibrant_dir = Path(vibrant_dir)
         self.runs_dir = self.vibrant_dir / "agent-runs"
-        self.legacy_runs_dir = self.vibrant_dir / "agents"
         self.state_store = state_store
-        self._records: dict[str, AgentRecord] = {}
+        self._records: dict[str, AgentRunRecord] = {}
         self.refresh()
 
     def __contains__(self, run_id: str) -> bool:
         return run_id in self._records
 
-    def get(self, run_id: str) -> AgentRecord | None:
+    def get(self, run_id: str) -> AgentRunRecord | None:
         return self._records.get(run_id)
 
-    def list_records(self) -> list[AgentRecord]:
+    def list_records(self) -> list[AgentRunRecord]:
         return sorted(self._records.values(), key=_run_sort_key)
 
-    def records_for_agent(self, agent_id: str) -> list[AgentRecord]:
+    def records_for_agent(self, agent_id: str) -> list[AgentRunRecord]:
         return sorted(
             [record for record in self._records.values() if record.identity.agent_id == agent_id],
             key=_run_sort_key,
         )
 
-    def records_for_task(self, task_id: str) -> list[AgentRecord]:
+    def records_for_task(self, task_id: str) -> list[AgentRunRecord]:
         return sorted(
             [record for record in self._records.values() if record.identity.task_id == task_id],
             key=_run_sort_key,
         )
 
-    def latest_for_agent(self, agent_id: str) -> AgentRecord | None:
+    def latest_for_agent(self, agent_id: str) -> AgentRunRecord | None:
         matches = self.records_for_agent(agent_id)
         return matches[-1] if matches else None
 
@@ -110,7 +105,7 @@ class AgentRecordStore:
         task_id: str,
         *,
         role: str | None = None,
-    ) -> AgentRecord | None:
+    ) -> AgentRunRecord | None:
         matches = self.records_for_task(task_id)
         if role is not None:
             resolved_role = normalize_role_name(role)
@@ -124,20 +119,18 @@ class AgentRecordStore:
                 return handle
         return None
 
-    def refresh(self) -> dict[str, AgentRecord]:
-        records: dict[str, AgentRecord] = {}
-        for directory in (self.legacy_runs_dir, self.runs_dir):
-            if not directory.exists():
-                continue
-            for path in sorted(directory.glob("*.json")):
-                record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
+    def refresh(self) -> dict[str, AgentRunRecord]:
+        records: dict[str, AgentRunRecord] = {}
+        if self.runs_dir.exists():
+            for path in sorted(self.runs_dir.glob("*.json")):
+                record = AgentRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
                 records[record.identity.run_id] = record
         self._records = records
         return dict(self._records)
 
     def upsert(
         self,
-        record: AgentRecord,
+        record: AgentRunRecord,
         *,
         increment_spawn: bool = False,
         rebuild_state: bool = True,
@@ -155,7 +148,7 @@ class AgentRecordStore:
 
 
 
-def _run_sort_key(record: AgentRecord) -> tuple[bool, object, str]:
+def _run_sort_key(record: AgentRunRecord) -> tuple[bool, object, str]:
     return (
         (record.lifecycle.started_at or record.lifecycle.finished_at) is None,
         record.lifecycle.started_at or record.lifecycle.finished_at,

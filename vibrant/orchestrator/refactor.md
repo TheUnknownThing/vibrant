@@ -71,7 +71,7 @@ Keep and extend the existing durable artifacts:
 - `.vibrant/state.json`
 - `.vibrant/consensus.md`
 - `.vibrant/roadmap.md`
-- `.vibrant/agents/*.json`
+- `.vibrant/agent-runs/*.json`
 - provider event logs
 
 Persistence should continue to flow through existing structured helpers where possible:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.models.agent import AgentRecord, AgentStatus
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 
 from .agents.catalog import build_builtin_role_catalog
 from .agents.instance import ManagedAgentInstance
@@ -66,7 +66,7 @@ class GatekeeperRuntimeService:
     def busy(self) -> bool:
         managed_busy = any(
             record.identity.role == "gatekeeper"
-            and record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES
+            and record.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES
             and record.lifecycle.status is not AgentStatus.AWAITING_INPUT
             for record in self.agent_registry.list_records()
         )
@@ -90,7 +90,10 @@ class GatekeeperRuntimeService:
         return self._managed_instance(role="gatekeeper", scope_type="project", scope_id="project")
 
     def _latest_thread_id(self) -> str | None:
-        provider_thread = self._gatekeeper_instance().provider_thread_handle()
+        gatekeeper_instance = self._gatekeeper_instance()
+        if not gatekeeper_instance.persistent_thread:
+            return None
+        provider_thread = gatekeeper_instance.provider_thread_handle()
         if provider_thread is None or not provider_thread.resumable:
             return None
         return provider_thread.thread_id
@@ -145,7 +148,7 @@ class GatekeeperRuntimeService:
             should_resume = (
                 resume_latest_thread
                 if resume_latest_thread is not None
-                else request.trigger is GatekeeperTrigger.USER_CONVERSATION
+                else agent_instance.persistent_thread
             )
             resume_thread_id = self._latest_thread_id() if should_resume else None
             started_run = await agent_instance.start_new_run(

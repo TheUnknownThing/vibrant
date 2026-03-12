@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from vibrant.agents.utils import extract_error_message, extract_text_from_progress_item
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.providers.base import CanonicalEvent
 
 from ..types import AgentOutput, AgentOutputError, AgentOutputSegment, AgentProgressItem
@@ -22,7 +22,7 @@ class AgentOutputProjectionService:
         """Return the latest projected output for one agent."""
         return self._outputs.get(agent_id)
 
-    def output_for_record(self, record: AgentRecord) -> AgentOutput | None:
+    def output_for_record(self, record: AgentRunRecord) -> AgentOutput | None:
         """Return the latest projected output for one persisted agent record."""
         return self.output_for_agent(record.identity.agent_id)
 

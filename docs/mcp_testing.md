@@ -19,7 +19,7 @@ uv sync --extra mcp --dev
 
 The repo includes a small dev launcher at `scripts/mcp_dev_server.py`.
 
-For a clean local test project, use a temporary project root instead of the repository root. This avoids loading old `.vibrant/agents/*.json` records that may not match the current schema.
+For a clean local test project, use a temporary project root instead of the repository root. This avoids loading old `.vibrant/agent-runs/*.json` records that may not match the current schema.
 
 ### Start the server over stdio
 

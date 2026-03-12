@@ -8,7 +8,7 @@ from typing import Any
 
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator.execution.git_manager import GitMergeResult
 from vibrant.providers.base import CanonicalEvent
@@ -21,7 +21,7 @@ class TaskResult:
     task_id: str | None
     outcome: str
     task_status: TaskStatus | None = None
-    agent_record: AgentRecord | None = None
+    agent_record: AgentRunRecord | None = None
     gatekeeper_result: GatekeeperRunResult | None = None
     merge_result: GitMergeResult | None = None
     events: list[CanonicalEvent] = field(default_factory=list)
@@ -157,7 +157,7 @@ class OrchestratorAgentSnapshot:
 class RuntimeExecutionResult:
     """Execution-runtime outcome prior to review/merge handling."""
 
-    agent_record: AgentRecord
+    agent_record: AgentRunRecord
     events: list[CanonicalEvent] = field(default_factory=list)
     summary: str | None = None
     error: str | None = None

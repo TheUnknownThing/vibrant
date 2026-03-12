@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 
 if TYPE_CHECKING:
     from vibrant.agents.runtime import AgentRuntime
@@ -62,12 +62,12 @@ class RoleRuntimeContext:
     """Inputs used to build a runtime for one persisted agent run."""
 
     project_root: Path
-    agent_record: AgentRecord
+    agent_record: AgentRunRecord
     config: VibrantConfig
     gatekeeper: Any
     provider_catalog: ProviderKindCatalog
     on_canonical_event: Callable[[CanonicalEvent], Any] | None = None
-    on_agent_record_updated: Callable[[AgentRecord], Any] | None = None
+    on_agent_record_updated: Callable[[AgentRunRecord], Any] | None = None
 
 
 RoleRuntimeBuilder = Callable[[RoleRuntimeContext], AgentRuntime]

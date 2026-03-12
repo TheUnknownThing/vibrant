@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 import inspect
 
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.prompts import (
     build_task_completion_trigger_description,
@@ -67,7 +67,7 @@ class ReviewService:
     async def review_completion(
         self,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
     ) -> tuple[GatekeeperRunResult, str]:
         result = await self.run_gatekeeper_request(self.build_completion_request(task, agent_record, worktree))
@@ -80,7 +80,7 @@ class ReviewService:
     async def review_failure(
         self,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRunResult:
@@ -94,7 +94,7 @@ class ReviewService:
     async def review_escalation(
         self,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRunResult:
@@ -108,7 +108,7 @@ class ReviewService:
     def build_completion_request(
         self,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
     ) -> GatekeeperRequest:
         diff_text = self.git_service.collect_diff(task, worktree)
@@ -128,7 +128,7 @@ class ReviewService:
     def build_failure_request(
         self,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRequest:
@@ -150,7 +150,7 @@ class ReviewService:
     def build_escalation_request(
         self,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
         reason: str,
     ) -> GatekeeperRequest:

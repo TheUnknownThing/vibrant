@@ -397,10 +397,6 @@ class AgentRunRecord(BaseModel):
             self.lifecycle.finished_at = finished_at or self.lifecycle.finished_at or datetime.now(timezone.utc)
 
 
-AgentRecord = AgentRunRecord
-
-
-
 def _move_if_missing(data: dict[str, Any], old_key: str, new_key: str) -> None:
     if new_key not in data and old_key in data:
         data[new_key] = data.pop(old_key)

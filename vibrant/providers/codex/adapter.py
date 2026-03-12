@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
-from ...models.agent import AgentRecord, ProviderResumeHandle
+from ...models.agent import AgentRunRecord, ProviderResumeHandle
 from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
 from .client import CodexClient
@@ -30,7 +30,7 @@ class CodexProviderAdapter(ProviderAdapter):
         codex_binary: str = "codex",
         launch_args: Sequence[str] | None = None,
         codex_home: str | None = None,
-        agent_record: AgentRecord | None = None,
+        agent_record: AgentRunRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
         on_raw_notification: NotificationHandler | None = None,
         on_stderr_line: StderrHandler | None = None,
@@ -515,7 +515,7 @@ class CodexProviderAdapter(ProviderAdapter):
     def _build_thread_payload(
         self,
         kwargs: dict[str, Any],
-    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRecord | None]:
+    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRunRecord | None]:
         data = dict(kwargs)
         runtime_mode = RuntimeMode(data.pop("runtime_mode", RuntimeMode.WORKSPACE_WRITE))
         approval_policy = data.pop("approval_policy", "never")
@@ -547,7 +547,7 @@ class CodexProviderAdapter(ProviderAdapter):
         *,
         runtime_mode: RuntimeMode | None = None,
         approval_policy: str | None = None,
-        agent_record: AgentRecord | None = None,
+        agent_record: AgentRunRecord | None = None,
         fallback_thread_id: str | None = None,
     ) -> None:
         thread_payload = self._extract_thread_payload(result)

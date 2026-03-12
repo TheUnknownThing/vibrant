@@ -10,7 +10,7 @@ from pathlib import Path
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus import RoadmapDocument
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
 from vibrant.models.task import TaskInfo, TaskStatus
@@ -41,7 +41,7 @@ class OrchestratorSnapshot:
     roadmap: RoadmapDocument | None
     consensus: ConsensusDocument | None
     consensus_path: Path | None
-    agent_records: tuple[AgentRecord, ...]
+    agents: tuple[OrchestratorAgentSnapshot, ...]
     execution_mode: RoadmapExecutionMode | None
     user_input_banner: str
     notification_bell_enabled: bool
@@ -55,7 +55,7 @@ class OrchestratorFacade:
         self.questions = orchestrator.question_service
 
     @staticmethod
-    def _task_summary_timestamp(record: AgentRecord) -> float:
+    def _task_summary_timestamp(record: AgentRunRecord) -> float:
         if record.lifecycle.started_at is not None:
             return float(record.lifecycle.started_at.timestamp())
         if record.lifecycle.finished_at is not None:
@@ -79,7 +79,7 @@ class OrchestratorFacade:
             roadmap=self.orchestrator.roadmap_document,
             consensus=self.orchestrator.consensus_service.current(),
             consensus_path=self.orchestrator.consensus_path,
-            agent_records=tuple(self.orchestrator.agent_manager.list_records()),
+            agents=tuple(self.orchestrator.agent_manager.list_agent_instances()),
             execution_mode=self.orchestrator.execution_mode,
             user_input_banner=state_store.user_input_banner(),
             notification_bell_enabled=state_store.notification_bell_enabled(),
@@ -97,10 +97,10 @@ class OrchestratorFacade:
     def get_consensus_source_path(self) -> Path | None:
         return self.orchestrator.consensus_path
 
-    def list_agent_records(self) -> list[AgentRecord]:
+    def list_agent_records(self) -> list[AgentRunRecord]:
         return self.orchestrator.agent_manager.list_records()
 
-    def list_agent_run_records(self) -> list[AgentRecord]:
+    def list_agent_run_records(self) -> list[AgentRunRecord]:
         return self.orchestrator.agent_manager.list_run_records()
 
     def get_agent(self, agent_id: str) -> OrchestratorAgentSnapshot | None:

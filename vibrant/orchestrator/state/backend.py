@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
 from vibrant.consensus.parser import ConsensusParser
-from vibrant.models.agent import AgentRecord, AgentStatus
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import (
     GatekeeperStatus,
@@ -51,7 +51,7 @@ class OrchestratorStateBackend:
         project_root: str | Path,
         *,
         state: OrchestratorState,
-        agents: dict[str, AgentRecord] | None = None,
+        agents: dict[str, AgentRunRecord] | None = None,
         consensus: ConsensusDocument | None = None,
         notification_bell_enabled: bool = True,
     ) -> None:
@@ -59,7 +59,6 @@ class OrchestratorStateBackend:
         self.vibrant_dir = self.project_root / DEFAULT_CONFIG_DIR
         self.state_path = self.vibrant_dir / "state.json"
         self.agents_dir = self.vibrant_dir / "agent-runs"
-        self.legacy_agents_dir = self.vibrant_dir / "agents"
         self.consensus_path = self.vibrant_dir / "consensus.md"
 
         self.state = state
@@ -83,7 +82,7 @@ class OrchestratorStateBackend:
         ensure_project_files(root)
 
         state = cls._load_state(root)
-        agents = cls._load_agents(vibrant_dir / "agent-runs", vibrant_dir / "agents")
+        agents = cls._load_agents(vibrant_dir / "agent-runs")
         consensus = cls._load_consensus(vibrant_dir / "consensus.md")
 
         backend = cls(
@@ -129,13 +128,13 @@ class OrchestratorStateBackend:
         )
 
     @staticmethod
-    def _load_agents(*directories: Path) -> dict[str, AgentRecord]:
-        records: dict[str, AgentRecord] = {}
+    def _load_agents(*directories: Path) -> dict[str, AgentRunRecord]:
+        records: dict[str, AgentRunRecord] = {}
         for directory in directories:
             if not directory.exists():
                 continue
             for path in sorted(directory.glob("*.json")):
-                record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
+                record = AgentRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
                 records[record.identity.run_id] = record
         return records
 
@@ -164,7 +163,7 @@ class OrchestratorStateBackend:
 
     def upsert_agent_record(
         self,
-        record: AgentRecord,
+        record: AgentRunRecord,
         *,
         increment_spawn: bool = False,
     ) -> Path:
@@ -180,7 +179,7 @@ class OrchestratorStateBackend:
         self.persist_state()
         return path
 
-    def register_agent(self, record: AgentRecord) -> None:
+    def register_agent(self, record: AgentRunRecord) -> None:
         self.upsert_agent_record(record)
 
     def refresh_from_disk(self) -> None:
@@ -192,9 +191,9 @@ class OrchestratorStateBackend:
         self.consensus = self._load_consensus(self.consensus_path)
         return self.consensus
 
-    def list_agent_records(self) -> list[AgentRecord]:
+    def list_agent_records(self) -> list[AgentRunRecord]:
         return sorted(
-            self._load_agents(self.agents_dir, self.legacy_agents_dir).values(),
+            self._load_agents(self.agents_dir).values(),
             key=lambda record: (
                 (record.lifecycle.started_at or record.lifecycle.finished_at) is None,
                 record.lifecycle.started_at or record.lifecycle.finished_at,
@@ -202,7 +201,7 @@ class OrchestratorStateBackend:
             ),
         )
 
-    def _reconstruct_state(self, *, agent_records: list[AgentRecord] | None = None) -> None:
+    def _reconstruct_state(self, *, agent_records: list[AgentRunRecord] | None = None) -> None:
         active_agents: list[str] = []
         completed_tasks: list[str] = []
         failed_tasks: list[str] = []
@@ -212,7 +211,7 @@ class OrchestratorStateBackend:
         records = list(agent_records) if agent_records is not None else self.list_agent_records()
 
         for record in records:
-            if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+            if record.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES:
                 active_agents.append(record.identity.agent_id)
                 role_spec = _ROLE_CATALOG.try_get(record.identity.role)
                 if role_spec is not None and role_spec.contributes_control_plane_status:
@@ -226,7 +225,7 @@ class OrchestratorStateBackend:
             provider_thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(
                 record.provider.resume_cursor
             )
-            if provider_thread_id or record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+            if provider_thread_id or record.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES:
                 provider_runtime[record.identity.agent_id] = ProviderRuntimeState(
                     status=record.lifecycle.status.value,
                     provider_thread_id=provider_thread_id,
