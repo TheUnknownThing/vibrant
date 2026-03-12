@@ -67,6 +67,38 @@ class TestCodexClientInit:
             client.send_notification("test", {})
 
 
+    @pytest.mark.asyncio
+    async def test_send_request_fails_when_stdin_closed(self):
+        client = CodexClient()
+
+        class FakeProcess:
+            stdin = None
+            returncode = None
+
+        client._process = FakeProcess()
+        client._running = True
+
+        with pytest.raises(CodexClientError, match="stdin is unavailable"):
+            await client.send_request("test/method", {})
+
+    def test_send_notification_fails_when_pipe_broken(self):
+        client = CodexClient()
+
+        class FakeStdin:
+            def write(self, _data):
+                raise BrokenPipeError("pipe is broken")
+
+        class FakeProcess:
+            stdin = FakeStdin()
+            returncode = None
+
+        client._process = FakeProcess()
+        client._running = True
+
+        with pytest.raises(CodexClientError, match="stdin is closed"):
+            client.send_notification("test/notify", {})
+
+
 # ---------------------------------------------------------------------------
 # Dispatch tests (mock the internal state)
 # ---------------------------------------------------------------------------

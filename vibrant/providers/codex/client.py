@@ -141,7 +141,11 @@ class CodexClient:
             "jsonrpc.request.sent",
             {"id": req_id, "method": method, "params": params or {}},
         )
-        self._write(request.to_line())
+        try:
+            self._write(request.to_line())
+        except CodexClientError:
+            self._pending.pop(req_id, None)
+            raise
         logger.debug("→ %s (id=%s)", method, req_id)
 
         try:
@@ -164,8 +168,13 @@ class CodexClient:
     def _write(self, line: str) -> None:
         """Write a single JSONL message to stdin."""
         proc = self._process
-        if proc and proc.stdin:
+        if proc is None or proc.stdin is None:
+            raise CodexClientError("codex app-server stdin is unavailable")
+
+        try:
             proc.stdin.write((line + "\n").encode())
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            raise CodexClientError("codex app-server stdin is closed") from exc
 
     async def _read_loop(self) -> None:
         """Read stdout line-by-line, dispatch responses and notifications."""

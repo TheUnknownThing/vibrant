@@ -149,6 +149,7 @@ class CodexProviderAdapter(ProviderAdapter):
         if self.client is not None:
             await self.client.stop()
         self._session_started = False
+        self._pending_requests.clear()
         await self._emit_canonical("session.state.changed", state="stopped")
 
     async def start_thread(self, **kwargs: Any) -> Any:
@@ -477,6 +478,7 @@ class CodexProviderAdapter(ProviderAdapter):
                 provider_payload=dict(params),
             )
             self._item_states.clear()
+            self._pending_requests.clear()
         elif method in {"error", "turn/error"}:
             error_payload = params.get("error", params)
             await self._emit_canonical(
@@ -487,6 +489,7 @@ class CodexProviderAdapter(ProviderAdapter):
                 provider_payload=dict(params),
             )
             self._item_states.clear()
+            self._pending_requests.clear()
 
         await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
 
@@ -879,7 +882,6 @@ def _coerce_auth_mode(value: object) -> CodexAuthMode:
             "apikeys": CodexAuthMode.API_KEY,
             "apikeymode": CodexAuthMode.API_KEY,
             "apikeyauth": CodexAuthMode.API_KEY,
-            "apikeymode": CodexAuthMode.API_KEY,
             "apiKey": CodexAuthMode.API_KEY,
             "chatgpt": CodexAuthMode.CHATGPT,
             "chatgptauthtokens": CodexAuthMode.CHATGPT_AUTH_TOKENS,
