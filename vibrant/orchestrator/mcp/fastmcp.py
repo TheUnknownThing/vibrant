@@ -405,17 +405,13 @@ def create_orchestrator_fastmcp(
     )
     async def consensus_update(
         status: str | None = None,
-        objectives: str | None = None,
-        getting_started: str | None = None,
-        questions: list[str] | None = None,
+        context: str | None = None,
     ) -> dict[str, Any]:
         return await registry.call_tool(
             "consensus_update",
             principal=principal(),
             status=status,
-            objectives=objectives,
-            getting_started=getting_started,
-            questions=questions,
+            context=context,
         )
 
     @server.tool(
@@ -614,17 +610,13 @@ def create_orchestrator_fastmcp(
     )
     async def update_consensus(
         status: str | None = None,
-        objectives: str | None = None,
-        getting_started: str | None = None,
-        questions: list[str] | None = None,
+        context: str | None = None,
     ) -> dict[str, Any]:
         return await registry.call_tool(
             "vibrant.update_consensus",
             principal=principal(),
             status=status,
-            objectives=objectives,
-            getting_started=getting_started,
-            questions=questions,
+            context=context,
         )
 
     @server.tool(

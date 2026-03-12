@@ -2,6 +2,8 @@
 
 This document lists the orchestrator MCP surface currently implemented under `vibrant/orchestrator/mcp/`.
 
+For local run and Inspector testing steps, see `docs/mcp_testing.md`.
+
 The implementation has three main layers:
 
 - `server.py` defines the typed registry of MCP resources and tools.

@@ -260,3 +260,7 @@ The embedded auth package is intentionally small:
 - one place for role-to-scope policy
 
 That keeps OAuth protocol complexity inside Authlib while keeping Vibrant's authorization rules inside Vibrant, without bundling premature MCP server integration.
+
+## Manual testing
+
+For practical local MCP server and Inspector workflows, see `docs/mcp_testing.md`.
