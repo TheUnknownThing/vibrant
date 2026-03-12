@@ -268,6 +268,8 @@ class AgentBase(ABC):
                 input_items=[{"type": "text", "text": prompt, "text_elements": []}],
                 runtime_mode=turn_runtime_mode,
                 approval_policy=self.config.approval_policy,
+                reasoning_effort=self.config.reasoning_effort,
+                reasoning_summary=self.config.reasoning_summary,
             )
             await asyncio.wait_for(
                 turn_finished.wait(), timeout=self.timeout_seconds

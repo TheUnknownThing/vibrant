@@ -208,12 +208,18 @@ class CodexProviderAdapter(ProviderAdapter):
     ) -> Any:
         client = self._ensure_client()
         runtime_mode = RuntimeMode(runtime_mode)
+        effort = kwargs.pop("effort", kwargs.pop("reasoning_effort", None))
+        summary = kwargs.pop("summary", kwargs.pop("reasoning_summary", None))
         payload = {
             "input": [dict(item) for item in input_items],
             "sandboxPolicy": runtime_mode.codex_turn_sandbox_policy,
             "approvalPolicy": approval_policy,
             **kwargs,
         }
+        if effort is not None:
+            payload["effort"] = effort
+        if summary is not None:
+            payload["summary"] = summary
         if self.provider_thread_id and "threadId" not in payload:
             payload["threadId"] = self.provider_thread_id
         return await client.send_request("turn/start", payload)
