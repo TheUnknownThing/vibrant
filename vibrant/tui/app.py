@@ -153,8 +153,10 @@ class VibrantApp(App):
 
         await self._stop_project_refresh_loop()
 
-    async def action_open_settings(self) -> None:
-        result = await self.push_screen_wait(SettingsPanel(self._settings))
+    def action_open_settings(self) -> None:
+        self.push_screen(SettingsPanel(self._settings), callback=self._on_settings_panel_dismissed)
+
+    def _on_settings_panel_dismissed(self, result: AppSettings | None) -> None:
         if not result:
             return
 
@@ -482,13 +484,14 @@ class VibrantApp(App):
             self.notify("Consensus edits require an initialized project.", severity="warning")
             return
 
-        try:
-            orchestrator.write_consensus_document(event.document)
-        except Exception as exc:
-            logger.exception("Failed to save consensus edits")
-            self.notify(f"Failed to save consensus edits: {exc}", severity="error")
-            self._set_status(f"Consensus save failed: {exc}")
-            return
+        if not event.already_saved:
+            try:
+                orchestrator.write_consensus_document(event.document)
+            except Exception as exc:
+                logger.exception("Failed to save consensus edits")
+                self.notify(f"Failed to save consensus edits: {exc}", severity="error")
+                self._set_status(f"Consensus save failed: {exc}")
+                return
 
         self._refresh_project_views()
         self.notify("Consensus updated.")
@@ -739,7 +742,7 @@ class VibrantApp(App):
                 if agent_output is not None:
                     agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
                 if consensus_view is not None:
-                    consensus_view.clear_summary("No `.vibrant/consensus.md` found for this workspace.")
+                    consensus_view.clear_summary()
                 with suppress(Exception):
                     vibing_screen.set_roadmap_loading(True)
             self._refresh_gatekeeper_state()

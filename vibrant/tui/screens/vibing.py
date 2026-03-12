@@ -124,6 +124,10 @@ class VibingScreen(Static):
         if tab_id not in self._VALID_TABS:
             return
 
+        if tab_id == "consensus":
+            self.consensus_view.load_document()
+            self.consensus_view.assert_facade()
+
         self._active_tab = tab_id
         self.query_one("#workspace-tabs", TabbedContent).active = tab_id
 

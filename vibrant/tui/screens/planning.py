@@ -113,7 +113,11 @@ class PlanningScreen(Static):
         """Show or hide the docked consensus panel."""
 
         self._consensus_visible = visible
-        self.query_one("#planning-consensus-panel", ConsensusView).display = visible
+        consensus_view = self.query_one("#planning-consensus-panel", ConsensusView)
+        if visible:
+            consensus_view.load_document()
+            consensus_view.assert_facade()
+        consensus_view.display = visible
 
     def toggle_consensus_panel(self) -> None:
         """Toggle the docked consensus panel."""
