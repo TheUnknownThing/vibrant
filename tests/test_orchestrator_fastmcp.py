@@ -6,6 +6,10 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+
+pytest.importorskip("fastmcp")
+pytest.importorskip("starlette")
+
 from starlette.testclient import TestClient
 
 from vibrant.config import RoadmapExecutionMode
@@ -47,7 +51,9 @@ def _build_facade(tmp_path: Path) -> OrchestratorFacade:
         engine=engine,
         state_store=state_store,
         roadmap_service=roadmap_service,
+        roadmap_document=roadmap_service.document,
         consensus_service=consensus_service,
+        consensus_path=repo / ".vibrant" / "consensus.md",
         question_service=question_service,
         execution_mode=RoadmapExecutionMode.MANUAL,
     )
@@ -132,6 +138,43 @@ async def test_create_orchestrator_fastmcp_registers_tools_and_resources(
     assert await server._local_provider.get_tool("vibrant.update_roadmap") is not None
     assert await server._local_provider.get_resource("vibrant://consensus/current") is not None
     assert await server._local_provider.get_resource_template("vibrant://task/{task_id}") is not None
+
+
+@pytest.mark.asyncio
+async def test_create_orchestrator_fastmcp_binds_events_recent_limit_query_param(
+    tmp_path: Path,
+    auth_service: AuthorizationServerService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = OrchestratorMCPServer(_build_facade(tmp_path))
+    provider = EmbeddedOAuthProvider(
+        service=auth_service,
+        base_url="https://mcp.example.com",
+        resolve_current_user=lambda _request: "gatekeeper-1",
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_read_resource(resource_name: str, *, principal, **params):
+        captured["resource_name"] = resource_name
+        captured["principal"] = principal
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(registry, "read_resource", fake_read_resource)
+
+    server = create_orchestrator_fastmcp(registry, auth=provider)
+    template = await server._local_provider.get_resource_template(
+        "vibrant://events/recent/task-1?limit=5"
+    )
+
+    assert template is not None
+    params = template.matches("vibrant://events/recent/task-1?limit=5")
+    assert params == {"task_id": "task-1", "limit": "5"}
+
+    await template._read("vibrant://events/recent/task-1?limit=5", params)
+
+    assert captured["resource_name"] == "events.recent"
+    assert captured["params"] == {"task_id": "task-1", "limit": 5}
 
 
 @pytest.mark.asyncio

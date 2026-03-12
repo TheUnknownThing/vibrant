@@ -310,7 +310,7 @@ def create_orchestrator_fastmcp(
         return await registry.read_resource("agent.status", principal=principal(), agent_id=agent_id)
 
     @server.resource(
-        "vibrant://events/recent/{task_id}",
+        "vibrant://events/recent/{task_id}{?limit}",
         name="events.recent",
         description=registry.get_resource_definition("events.recent").description,
         auth=component_auth(registry.get_resource_definition("events.recent").required_scopes),
