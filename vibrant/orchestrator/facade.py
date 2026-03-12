@@ -281,10 +281,10 @@ class OrchestratorFacade:
         return await self.questions.answer(answer, question=question)
 
     async def execute_next_task(self) -> object | None:
-        execute_next_task = getattr(self.orchestrator, "execute_next_task", None)
-        if not callable(execute_next_task):
+        run_next_task = getattr(self.orchestrator, "run_next_task", None)
+        if not callable(run_next_task):
             raise AttributeError("Lifecycle does not support task execution")
-        return await execute_next_task()
+        return await run_next_task()
 
     def pause_workflow(self) -> None:
         if self.get_workflow_status() is OrchestratorStatus.PAUSED:
@@ -325,15 +325,21 @@ class OrchestratorFacade:
             return task
 
         if normalized_decision in {"reject", "rejected", "retry", "needs_changes"}:
+            review_decision = "rejected" if normalized_decision in {"reject", "rejected"} else "retry"
+            default_reason = (
+                "Gatekeeper rejected the task"
+                if review_decision == "rejected"
+                else "Gatekeeper requested changes"
+            )
             if task.status is TaskStatus.COMPLETED:
                 task = self.update_task(
                     task_id,
                     status=TaskStatus.FAILED,
-                    failure_reason=failure_reason or "Gatekeeper requested changes",
+                    failure_reason=failure_reason or default_reason,
                 )
             task_workflow = getattr(self.orchestrator, "task_workflow", None)
             if task_workflow is not None:
-                task_workflow.record_review(task, decision="retry", reason=failure_reason or "Gatekeeper requested changes")
+                task_workflow.record_review(task, decision=review_decision, reason=failure_reason or default_reason)
             return task
 
         if normalized_decision in {"escalate", "escalated"}:

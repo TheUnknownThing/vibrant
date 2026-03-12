@@ -25,6 +25,8 @@ from vibrant.orchestrator.artifacts import ConsensusService
 from vibrant.orchestrator.artifacts import QuestionService
 from vibrant.orchestrator.artifacts import RoadmapService
 from vibrant.orchestrator.state import StateStore
+from vibrant.orchestrator.tasks.store import TaskStore
+from vibrant.orchestrator.tasks.workflow import TaskWorkflowService
 from vibrant.orchestrator.types import (
     AgentSnapshotIdentity,
     AgentSnapshotOutcome,
@@ -315,6 +317,7 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: Path) -> None:
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
+    facade.orchestrator.task_workflow = TaskWorkflowService(task_store=TaskStore(state_store=state_store))
     server = OrchestratorMCPServer(facade)
     gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
 
@@ -362,6 +365,28 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
     )
     assert retried["status"] == "queued"
     assert retried["prompt"] == "Retry with a safer implementation plan."
+
+    await server.call_tool(
+        "vibrant.update_roadmap",
+        principal=gatekeeper,
+        tasks=[
+            {
+                "id": "task-3",
+                "title": "Reject unsafe implementation",
+                "acceptance_criteria": ["Rejected reviews stay distinguishable in history"],
+                "status": "completed",
+            }
+        ],
+    )
+    rejected = await server.call_tool(
+        "vibrant.review_task_outcome",
+        principal=gatekeeper,
+        task_id="task-3",
+        decision="rejected",
+        failure_reason="Unsafe database migration plan",
+    )
+    assert rejected["status"] == "failed"
+    assert state_store.state.tasks["task-3"].reviews[-1].decision.value == "rejected"
 
 
 @pytest.mark.asyncio
@@ -437,10 +462,10 @@ async def test_orchestrator_mcp_server_supports_safe_agent_tools(tmp_path: Path)
     agent_result = await server.call_tool("agent_result_get", principal=agent, agent_id="agent-task-1")
     assert agent_result["summary"] == "Implemented successfully."
 
-    async def _execute_next_task():
+    async def _run_next_task():
         return {"task_id": "task-1", "outcome": "accepted", "task_status": TaskStatus.ACCEPTED.value}
 
-    facade.orchestrator.execute_next_task = _execute_next_task
+    facade.orchestrator.run_next_task = _run_next_task
     executed = await server.call_tool("workflow_execute_next_task", principal=runner)
     assert executed == {"task_id": "task-1", "outcome": "accepted", "task_status": "accepted"}
 

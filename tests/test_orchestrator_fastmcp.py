@@ -197,6 +197,35 @@ async def test_create_orchestrator_fastmcp_uses_local_principal_without_http_aut
     assert result is not None
 
 
+@pytest.mark.asyncio
+async def test_create_orchestrator_fastmcp_accepts_consensus_context_updates(
+    tmp_path: Path,
+    auth_service: AuthorizationServerService,
+) -> None:
+    registry = OrchestratorMCPServer(_build_facade(tmp_path))
+    provider = EmbeddedOAuthProvider(
+        service=auth_service,
+        base_url="https://mcp.example.com",
+        resolve_current_user=lambda _request: "gatekeeper-1",
+    )
+
+    server = create_orchestrator_fastmcp(registry, auth=provider)
+    consensus_tool = await server._local_provider.get_tool("consensus_update")
+    alias_tool = await server._local_provider.get_tool("vibrant.update_consensus")
+
+    consensus_result = await consensus_tool.run({
+        "status": "planning",
+        "context": "## Objectives\nShip MCP-driven orchestration.",
+    })
+    alias_result = await alias_tool.run({
+        "status": "planning",
+        "context": "## Objectives\nShip MCP-driven orchestration.",
+    })
+
+    assert consensus_result["context"] == "## Objectives\nShip MCP-driven orchestration."
+    assert alias_result["context"] == "## Objectives\nShip MCP-driven orchestration."
+
+
 def test_create_orchestrator_fastmcp_app_exposes_auth_and_resource_routes(
     tmp_path: Path,
     auth_service: AuthorizationServerService,

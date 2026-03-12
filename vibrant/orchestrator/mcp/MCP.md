@@ -208,9 +208,7 @@ The tool surface is split between read-oriented agent tools and write/control-or
 - Purpose: updates orchestrator-owned consensus fields.
 - Parameters:
   - `status: str | None = None`
-  - `objectives: str | None = None`
-  - `getting_started: str | None = None`
-  - `questions: Sequence[str] | None = None`
+  - `context: str | None = None`
 
 #### 11. `question_ask_user`
 
@@ -331,9 +329,7 @@ The tool surface is split between read-oriented agent tools and write/control-or
 - Purpose: alias-style control-plane entry point for consensus updates.
 - Parameters:
   - `status: str | None = None`
-  - `objectives: str | None = None`
-  - `getting_started: str | None = None`
-  - `questions: Sequence[str] | None = None`
+  - `context: str | None = None`
 - Notes:
   - delegates to `consensus_update(...)`
 
