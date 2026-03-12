@@ -342,6 +342,47 @@ class TestCodexProviderAdapter:
         assert events[0]["provider_payload"] == {"error": {"code": -32000, "message": "approval denied"}}
 
 
+    @pytest.mark.asyncio
+    async def test_turn_completed_clears_pending_requests(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+        adapter._pending_requests[10] = {"method": "item/commandExecution/requestApproval", "request_kind": "approval", "params": {}}
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="turn/completed",
+                params={"turn": {"id": "turn-123", "status": "completed"}},
+            )
+        )
+
+        assert adapter._pending_requests == {}
+
+    @pytest.mark.asyncio
+    async def test_runtime_error_clears_pending_requests(self):
+        events: list[dict[str, Any]] = []
+        adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)
+        adapter._pending_requests[11] = {"method": "item/tool/requestUserInput", "request_kind": "user-input", "params": {}}
+
+        await adapter._handle_notification(
+            JsonRpcNotification(
+                method="turn/error",
+                params={"error": {"code": -32000, "message": "approval denied"}},
+            )
+        )
+
+        assert adapter._pending_requests == {}
+
+    @pytest.mark.asyncio
+    async def test_stop_session_clears_pending_requests(self):
+        client = FakeCodexClient()
+        adapter = CodexProviderAdapter(client=client)
+        adapter._pending_requests[12] = {"method": "item/fileChange/requestApproval", "request_kind": "approval", "params": {}}
+
+        await adapter.stop_session()
+
+        assert adapter._pending_requests == {}
+
+
 @pytest.mark.asyncio
 async def test_codex_app_server_handshake_integration(tmp_path: Path):
     if os.environ.get("VIBRANT_RUN_CODEX_INTEGRATION") != "1":
