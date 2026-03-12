@@ -807,6 +807,7 @@ async def test_agent_management_service_exposes_managed_agent_instance_lifecycle
     attempt = await lifecycle.agent_manager.start_task(task)
     instance = lifecycle.agent_manager.get_instance(attempt.agent_record.identity.agent_id)
 
+    assert attempt.agent.agent_id == attempt.agent_record.identity.agent_id
     assert instance is not None
     assert instance.agent_id == attempt.agent_record.identity.agent_id
     assert instance.role == "code"
@@ -866,6 +867,41 @@ def test_agent_management_service_tracks_multiple_runs_on_one_instance(tmp_path)
     assert instances[0].latest_run() is not None
     assert instances[0].latest_run().identity.run_id == second_run.identity.run_id
     assert instances[0].snapshot().identity.run_id == second_run.identity.run_id
+
+
+def test_facade_exposes_explicit_instance_and_run_aliases(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+    facade = OrchestratorFacade(lifecycle)
+
+    instance = lifecycle.agent_manager.resolve_instance(
+        role="code",
+        scope_type="task",
+        scope_id="task-001",
+    )
+    run = instance.create_run_record(
+        task_id="task-001",
+        branch="vibrant/task-001",
+        worktree_path=str(repo),
+        prompt="alias test",
+    )
+    run.lifecycle.status = AgentStatus.COMPLETED
+    lifecycle.agent_registry.upsert(run, increment_spawn=True)
+
+    agent_snapshot = facade.get_agent_instance(instance.agent_id)
+    instances = facade.list_agent_instances(task_id="task-001")
+    run_records = facade.list_agent_run_records()
+
+    assert agent_snapshot is not None
+    assert agent_snapshot.identity.agent_id == instance.agent_id
+    assert agent_snapshot.identity.run_id == run.identity.run_id
+    assert [snapshot.identity.agent_id for snapshot in instances] == [instance.agent_id]
+    assert [record.identity.run_id for record in run_records] == [run.identity.run_id]
 
 
 def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path):

@@ -83,7 +83,7 @@ The authorization helpers in `vibrant/mcp/authz.py` define these default orchest
 - FastMCP URI: `vibrant://agent/{agent_id}/status`
 - Handler: `ResourceHandlers.agent_status`
 - Required scopes: `mcp:access`, `tasks:read`
-- Purpose: returns one agent snapshot, or a list of agent snapshots when used directly through the registry.
+- Purpose: returns one stable agent-instance snapshot, or a list of stable agent-instance snapshots when used directly through the registry.
 - Parameters:
   - Registry handler supports `agent_id: str | None`, `task_id: str | None`, `include_completed: bool = True`, `active_only: bool = False`
   - FastMCP URI currently exposes the `agent_id` form
@@ -129,7 +129,7 @@ The tool surface is split between read-oriented agent tools and write/control-or
 
 - Handler: `AgentToolHandlers.agent_result_get`
 - Required scopes: `mcp:access`, `tasks:read`
-- Purpose: returns the latest known result payload for one agent.
+- Purpose: returns the latest known result payload for one stable agent instance.
 - Response fields include:
   - `agent_id`
   - `task_id`

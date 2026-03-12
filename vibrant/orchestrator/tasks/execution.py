@@ -31,6 +31,7 @@ class TaskExecutionAttempt:
     task: TaskInfo
     worktree: GitWorktreeInfo
     prompt: str
+    agent: ManagedAgentInstance
     agent_record: AgentRecord
     handle: AgentHandle
     run_record: TaskRunRecord | None = None
@@ -63,6 +64,17 @@ class TaskExecutionService:
         self.review_service = review_service
         self.retry_service = retry_service
         self.task_store = task_store
+
+    def _resolve_instance(self, *, role: str, scope_type: str, scope_id: str | None) -> ManagedAgentInstance:
+        return ManagedAgentInstance.from_record(
+            self.agent_registry.resolve_instance(
+                role=role,
+                scope_type=scope_type,
+                scope_id=scope_id,
+            ),
+            agent_registry=self.agent_registry,
+            runtime_service=self.runtime_service,
+        )
 
     async def execute_until_blocked(self) -> list[TaskResult]:
         results: list[TaskResult] = []
@@ -114,14 +126,10 @@ class TaskExecutionService:
         self.roadmap_service.persist()
 
         prompt = self.prompt_service.build_task_prompt(task, worktree)
-        agent_instance = ManagedAgentInstance.from_record(
-            self.agent_registry.resolve_instance(
-                role=task.agent_role,
-                scope_type="task",
-                scope_id=task.id,
-            ),
-            agent_registry=self.agent_registry,
-            runtime_service=self.runtime_service,
+        agent_instance = self._resolve_instance(
+            role=task.agent_role,
+            scope_type="task",
+            scope_id=task.id,
         )
         run_record = self.task_store.record_run_started(
             task=task,
@@ -148,6 +156,7 @@ class TaskExecutionService:
             task=task,
             worktree=worktree,
             prompt=prompt,
+            agent=agent_instance,
             agent_record=started_run.agent_record,
             handle=started_run.handle,
             run_record=run_record,
@@ -157,7 +166,7 @@ class TaskExecutionService:
         dispatcher = self.roadmap_service.dispatcher
         assert dispatcher is not None
 
-        runtime_result = await self.runtime_service.wait_for_run(handle=attempt.handle)
+        runtime_result = await attempt.agent.wait_for_run()
         agent_record = runtime_result.agent_record
 
         if runtime_result.awaiting_input:

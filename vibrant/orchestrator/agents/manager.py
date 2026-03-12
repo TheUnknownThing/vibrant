@@ -73,13 +73,25 @@ class AgentManagementService:
         """Return the latest persisted run record for one stable agent."""
         return self._agent_registry.get(agent_id)
 
+    def get_run(self, run_id: str) -> AgentRecord | None:
+        """Return one persisted run record by run id."""
+        return self._agent_registry.get_run(run_id)
+
     def list_records(self) -> list[AgentRecord]:
         """Return all persisted run records."""
         return self._agent_registry.list_records()
 
+    def list_run_records(self) -> list[AgentRecord]:
+        """Return all persisted run records."""
+        return self.list_records()
+
     def records_for_task(self, task_id: str) -> list[AgentRecord]:
         """Return persisted run records for one task."""
         return self._agent_registry.records_for_task(task_id)
+
+    def run_records_for_task(self, task_id: str) -> list[AgentRecord]:
+        """Return persisted run records for one task."""
+        return self.records_for_task(task_id)
 
     def provider_thread_handle(self, agent_id: str) -> ProviderThreadHandle | None:
         """Return the durable provider-thread handle for a stable agent."""
@@ -149,6 +161,10 @@ class AgentManagementService:
             return None
         return instance.snapshot()
 
+    def get_agent_instance(self, agent_id: str) -> ManagedAgentSnapshot | None:
+        """Return the stable-agent snapshot for one instance."""
+        return self.get_agent(agent_id)
+
     def list_agents(
         self,
         *,
@@ -164,6 +180,22 @@ class AgentManagementService:
         if not include_completed:
             return [snapshot for snapshot in snapshots if not snapshot.runtime.done or snapshot.runtime.awaiting_input]
         return snapshots
+
+    def list_agent_instances(
+        self,
+        *,
+        task_id: str | None = None,
+        role: str | None = None,
+        include_completed: bool = True,
+        active_only: bool = False,
+    ) -> list[ManagedAgentSnapshot]:
+        """Return stable-agent snapshots using explicit instance terminology."""
+        return self.list_agents(
+            task_id=task_id,
+            role=role,
+            include_completed=include_completed,
+            active_only=active_only,
+        )
 
     def list_active_agents(self) -> list[ManagedAgentSnapshot]:
         return self.list_agents(active_only=True)

@@ -166,16 +166,18 @@ This section describes how the system actually behaves **now**, not the historic
 When a task is executed now, the workflow is:
 
 1. `TaskExecutionService` chooses a task to run.
-2. It builds the task prompt.
-3. It asks `AgentRegistry.create_execution_agent_record(...)` for a run record.
-4. The registry resolves the task's role from `task.agent_role`.
-5. The registry resolves or creates the stable task-scoped agent instance.
+2. It creates the task worktree and builds the task prompt.
+3. It resolves the stable task-scoped `AgentInstance` for `task.agent_role`.
    - for example `agent-task-001`
    - or `test-task-001`
-6. The registry creates a **new run record** under that stable agent.
+4. The instance creates a **new run record** under that stable actor.
    - for example `run-agent-task-001-<suffix>`
-7. The runtime service starts that run.
-8. Live runtime handles are tracked by the **stable agent id**.
+5. The instance starts the run through the runtime service.
+6. The resulting `TaskExecutionAttempt` carries both:
+   - the stable `agent` instance
+   - the freshly created `agent_record` run record
+7. Live runtime handles are tracked by the **stable agent id**.
+8. Waiting for task completion now goes back through the stable `AgentInstance`, not directly through a run-centric service call.
 9. When the run finishes, the run record is updated and the instance record is updated with:
    - `latest_run_id`
    - `active_run_id`
@@ -194,13 +196,15 @@ Gatekeeper is now structurally different from the old model.
 When Gatekeeper runs now, the workflow is:
 
 1. Planning / review / question-answering code creates a `GatekeeperRequest`.
-2. Gatekeeper builds a run record with:
+2. `GatekeeperRuntimeService` resolves the stable project-scoped gatekeeper `AgentInstance`.
+3. If resume behavior is enabled, that instance is consulted for the latest resumable provider thread.
+4. The instance creates a new run with:
    - stable `agent_id = gatekeeper-project`
    - fresh `run_id = run-gatekeeper-project-<suffix>`
-3. If resume behavior is enabled, Gatekeeper looks for the latest persisted provider thread across prior gatekeeper runs.
-4. The runtime service starts a **new run** for the stable gatekeeper actor.
-5. The run persists into the run store.
-6. The gatekeeper instance remains the same stable actor across interactions.
+5. The instance starts that run through the runtime service.
+6. Managed Gatekeeper waiting/callback flows now also go back through the stable gatekeeper instance.
+7. The run persists into the run store.
+8. The gatekeeper instance remains the same stable actor across interactions.
 
 Important consequence:
 
@@ -341,7 +345,8 @@ These were the core of the refactor, and they are now in place.
 These items are still important, but they are no longer the main storage-model refactor.
 
 - [x] Introduce a first-class `AgentInstance` runtime/domain abstraction with role-neutral lifecycle operations
-- [ ] Continue shifting orchestration call sites to depend on `AgentInstance` directly where that improves clarity
+- [x] Shift task execution and managed Gatekeeper start/wait flows to resolve, start, and wait through `AgentInstance`
+- [ ] Continue shifting smaller orchestration and helper paths to depend on `AgentInstance` directly where that improves clarity
 - [ ] Decide whether agent instances themselves should own more lifecycle policy directly, or whether registry/manager services should remain the main coordination boundary
 - [ ] Decide whether multiple concurrent runs per stable agent should ever be supported, and if so how active-run semantics should be expressed
 
@@ -360,7 +365,7 @@ These items are still important, but they are no longer the main storage-model r
 - [ ] Remove legacy `.vibrant/agents` compatibility reads once migration support is no longer needed
 - [ ] Remove historical/stale references to `AgentType` and `identity.type` from older docs and comments
 - [ ] Update any remaining docs that still describe the architecture as primarily run-centric or merely “data-driven”
-- [ ] Add focused tests for the explicit agent-instance abstraction if and when that layer is introduced
+- [x] Add focused tests for the explicit agent-instance abstraction and multi-run instance behavior
 
 ## Final Summary
 

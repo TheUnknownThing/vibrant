@@ -8,7 +8,7 @@ continue to evolve.
 
 ## Status
 
-As of **March 11, 2026**, the stable external surface is:
+As of **March 12, 2026**, the stable external surface is:
 
 - `OrchestratorFacade`
 - `OrchestratorMCPServer`
@@ -118,7 +118,7 @@ Fields:
 - `consensus_path: Path | None`
   - Backing consensus file path when the orchestrator root exposes one.
 - `agent_records: tuple[AgentRecord, ...]`
-  - Durable agent records known to the orchestrator state layer.
+  - Durable agent **run** records known to the orchestrator state layer.
 - `execution_mode: RoadmapExecutionMode | None`
   - Manual/automatic execution mode when available.
 - `user_input_banner: str`
@@ -134,16 +134,20 @@ state instead of stitching together several smaller calls.
 `OrchestratorAgentSnapshot` is the stable read model returned by facade
 agent-query methods.
 
-It represents the orchestrator's unified view of one agent, combining durable
-record state with live runtime-handle details when those details are available.
+It represents the orchestrator's unified view of one stable agent instance,
+combining durable instance/run state with live runtime-handle details when those
+details are available.
 
 Fields:
 
 - `identity: AgentSnapshotIdentity`
-  - Stable agent identifiers.
-  - `agent_id: str` — stable identifier for the agent attempt.
-  - `task_id: str` — roadmap task currently or previously associated with the agent.
+  - Stable agent-instance identifiers.
+  - `agent_id: str` — stable identifier for the agent instance.
+  - `task_id: str` — roadmap task currently or previously associated with the latest/current run.
   - `role: str` — logical role such as `code`.
+  - `run_id: str | None` — latest/current run id when one exists.
+  - `scope_type: str | None` — stable instance scope such as `task` or `project`.
+  - `scope_id: str | None` — scope identifier within that scope type.
 - `runtime: AgentSnapshotRuntime`
   - Live/runtime-oriented lifecycle state.
   - `status: str` — durable agent status value.
@@ -253,11 +257,17 @@ It is the intended long-term boundary for:
 #### Agent reads
 
 - `agent_records() -> list[AgentRecord]`
-  - Returns the durable agent records currently visible through the facade.
+  - Returns the durable agent run records currently visible through the facade.
+- `list_agent_run_records() -> list[AgentRecord]`
+  - Stable alias with explicit run-record terminology.
 - `get_agent(agent_id) -> OrchestratorAgentSnapshot | None`
-  - Returns one stable agent snapshot by id.
+  - Returns one stable agent-instance snapshot by id.
+- `get_agent_instance(agent_id) -> OrchestratorAgentSnapshot | None`
+  - Stable alias with explicit instance terminology.
 - `list_agents(*, task_id=None, role=None, include_completed=True, active_only=False) -> list[OrchestratorAgentSnapshot]`
-  - Returns filtered stable agent snapshots.
+  - Returns filtered stable agent-instance snapshots.
+- `list_agent_instances(*, task_id=None, role=None, include_completed=True, active_only=False) -> list[OrchestratorAgentSnapshot]`
+  - Stable alias with explicit instance terminology.
 - `list_active_agents() -> list[OrchestratorAgentSnapshot]`
   - Convenience projection equivalent to `list_agents(active_only=True)`.
 
