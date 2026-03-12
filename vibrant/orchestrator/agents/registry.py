@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -314,7 +315,9 @@ class AgentRegistry:
 def _scope_key(scope_type: str, scope_id: str | None) -> str:
     if scope_id is None:
         return scope_type.strip().lower()
-    return _slug(scope_id)
+    raw_scope = f"{scope_type}:{scope_id}"
+    digest = hashlib.sha1(raw_scope.encode("utf-8")).hexdigest()[:8]
+    return f"{_slug(scope_id)}-{digest}"
 
 
 
