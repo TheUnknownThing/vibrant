@@ -21,6 +21,7 @@ from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 
+from .role_results import RoleResultPayload, build_generic_role_result
 from .utils import (
     extract_error_message,
     extract_exit_code,
@@ -146,6 +147,24 @@ class AgentBase(ABC):
 
     def on_run_completed(self, result: AgentRunResult) -> None:
         """Hook called after the run finishes (success or failure). No-op by default."""
+
+    def build_role_result(
+        self,
+        *,
+        result: AgentRunResult,
+        agent_record: AgentRunRecord,
+        input_requests: list[object],
+    ) -> RoleResultPayload | None:
+        """Build the role-owned semantic payload for one run."""
+
+        return build_generic_role_result(
+            role=agent_record.identity.role,
+            transcript=result.transcript,
+            summary=agent_record.outcome.summary,
+            error=result.error,
+            exit_code=result.exit_code,
+            awaiting_input=agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT,
+        )
 
     # ------------------------------------------------------------------
     # Core run method

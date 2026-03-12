@@ -308,6 +308,7 @@ class AgentOutcome(BaseModel):
     exit_code: int | None = None
     summary: str | None = None
     error: str | None = None
+    role_result: dict[str, Any] | None = None
 
 
 class AgentRetryState(BaseModel):

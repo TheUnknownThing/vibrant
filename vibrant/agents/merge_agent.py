@@ -8,7 +8,8 @@ from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentSta
 from vibrant.providers.base import RuntimeMode
 from vibrant.prompts import build_merge_prompt as render_merge_prompt
 
-from .base import AgentBase
+from .base import AgentBase, AgentRunResult
+from .role_results import RoleResultPayload, build_merge_role_result
 
 
 class MergeAgent(AgentBase):
@@ -26,6 +27,22 @@ class MergeAgent(AgentBase):
 
     def get_turn_runtime_mode(self) -> RuntimeMode:
         return RuntimeMode.FULL_ACCESS
+
+    def build_role_result(
+        self,
+        *,
+        result: AgentRunResult,
+        agent_record: AgentRunRecord,
+        input_requests: list[object],
+    ) -> RoleResultPayload | None:
+        return build_merge_role_result(
+            transcript=result.transcript,
+            summary=agent_record.outcome.summary,
+            error=result.error,
+            exit_code=result.exit_code,
+            awaiting_input=agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT,
+            events=result.events,
+        )
 
     @staticmethod
     def build_merge_prompt(

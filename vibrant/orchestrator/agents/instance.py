@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from vibrant.agents.role_results import parse_role_result
 from vibrant.agents.runtime import AgentHandle, ProviderThreadHandle
 from vibrant.models.agent import AgentInstanceRecord, AgentRunRecord, ProviderResumeHandle
 
@@ -410,6 +411,7 @@ def build_agent_snapshot(
     worktree_path = record.context.worktree_path if record is not None else None
     summary = record.outcome.summary if record is not None else None
     error = record.outcome.error if record is not None else None
+    role_result = parse_role_result(record.outcome.role_result) if record is not None else None
     run_id = record.identity.run_id if record is not None else None
 
     return OrchestratorAgentSnapshot(
@@ -430,6 +432,7 @@ def build_agent_snapshot(
             summary=summary,
             error=error,
             output=output,
+            role_result=role_result,
         ),
         provider=provider,
     )

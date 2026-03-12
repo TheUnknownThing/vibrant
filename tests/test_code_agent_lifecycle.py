@@ -9,7 +9,14 @@ from typing import Any
 
 import pytest
 
-from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents import (
+    Gatekeeper,
+    GatekeeperRequest,
+    GatekeeperRoleResult,
+    GatekeeperRunResult,
+    GatekeeperTrigger,
+    serialize_role_result,
+)
 from vibrant.agents.runtime import InputRequest, RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
@@ -298,6 +305,14 @@ class FakeGatekeeper:
             verdict = self.completion_verdicts.pop(0) if self.completion_verdicts else "accepted"
             if verdict == "accepted":
                 roadmap.tasks[0].status = TaskStatus.ACCEPTED
+            elif verdict in {"retry", "retried"}:
+                roadmap.tasks[0].status = TaskStatus.QUEUED
+                roadmap.tasks[0].prompt = "Retry after gatekeeper review."
+                plan_modified = True
+            elif verdict in {"escalate", "escalated"}:
+                roadmap.tasks[0].retry_count = roadmap.tasks[0].max_retries
+                roadmap.tasks[0].status = TaskStatus.ESCALATED
+                plan_modified = True
             else:
                 roadmap.tasks[0].prompt = "Retry after gatekeeper review."
                 plan_modified = True
@@ -319,6 +334,14 @@ class FakeGatekeeper:
         RoadmapParser().write(roadmap_path, roadmap)
 
         transcript = f"Verdict: {verdict}"
+        suggested_decision = "needs_input" if questions else verdict
+        role_result = GatekeeperRoleResult(
+            succeeded=not questions,
+            awaiting_input=bool(questions),
+            summary=transcript,
+            pending_questions=list(questions),
+            suggested_decision=suggested_decision,
+        )
         gatekeeper_record = AgentRunRecord(
             identity={
                 "agent_id": f"gatekeeper-{request.trigger.value}-test",
@@ -328,7 +351,7 @@ class FakeGatekeeper:
             lifecycle={
                 "status": AgentStatus.AWAITING_INPUT if questions else AgentStatus.COMPLETED,
             },
-            outcome={"summary": transcript},
+            outcome={"summary": transcript, "role_result": serialize_role_result(role_result)},
             provider=AgentProviderMetadata(
                 provider_thread_id="thread-gatekeeper-1",
                 resume_cursor={"threadId": "thread-gatekeeper-1"},
@@ -349,6 +372,7 @@ class FakeGatekeeper:
                 for question in questions
             ],
             turn_result={"turn": {"id": "gatekeeper-turn-1"}},
+            role_result=role_result,
         )
 
 
@@ -445,6 +469,8 @@ async def test_task_execution_uses_task_agent_role_for_run_creation(tmp_path):
     assert result.agent_record is not None
     assert result.agent_record.identity.role == "test"
     assert result.agent_record.provider.runtime_mode == "read-only"
+    assert result.role_result is not None
+    assert result.role_result.role == "test"
     agent_files = sorted((repo / ".vibrant" / "agent-runs").glob("run-test-task-001-*.json"))
     assert len(agent_files) == 1
     record = AgentRunRecord.model_validate_json(agent_files[0].read_text(encoding="utf-8"))
@@ -680,6 +706,69 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
     assert roadmap.tasks[0].status is TaskStatus.ESCALATED
     assert lifecycle.state_backend.state.pending_questions == [gatekeeper.escalation_question]
     assert await lifecycle.run_next_task() is None
+
+
+@pytest.mark.asyncio
+async def test_code_agent_lifecycle_honors_gatekeeper_retry_review_transition(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature needs follow-up\n"]
+
+    class DurableRetryGatekeeper(FakeGatekeeper):
+        async def run(self, request: GatekeeperRequest, *, resume_latest_thread: bool | None = None) -> GatekeeperRunResult:
+            result = await super().run(request, resume_latest_thread=resume_latest_thread)
+            task_state = engine.state.tasks.get("task-001")
+            assert task_state is not None
+            task_state.status = TaskStatus.QUEUED
+            task_state.failure_reason = "Retry after gatekeeper review."
+            engine.persist_state()
+            return result
+
+    gatekeeper = DurableRetryGatekeeper(repo)
+    gatekeeper.completion_verdicts = ["retry"]
+
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    assert result.outcome == "retried"
+    assert (repo / "app.txt").read_text(encoding="utf-8") == "base\n"
+    assert not lifecycle.git_manager.worktree_path("task-001").exists()
+
+
+@pytest.mark.asyncio
+async def test_code_agent_lifecycle_honors_gatekeeper_escalated_review_transition(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature needs escalation\n"]
+
+    class DurableEscalationGatekeeper(FakeGatekeeper):
+        async def run(self, request: GatekeeperRequest, *, resume_latest_thread: bool | None = None) -> GatekeeperRunResult:
+            result = await super().run(request, resume_latest_thread=resume_latest_thread)
+            task_state = engine.state.tasks.get("task-001")
+            assert task_state is not None
+            task_state.retry_count = task_state.max_retries
+            task_state.status = TaskStatus.ESCALATED
+            task_state.failure_reason = "Gatekeeper escalated the task"
+            engine.persist_state()
+            return result
+
+    gatekeeper = DurableEscalationGatekeeper(repo)
+    gatekeeper.completion_verdicts = ["escalated"]
+
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    assert result.outcome == "escalated"
+    assert (repo / "app.txt").read_text(encoding="utf-8") == "base\n"
+    assert not lifecycle.git_manager.worktree_path("task-001").exists()
 
 
 @pytest.mark.asyncio

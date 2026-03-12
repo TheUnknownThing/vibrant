@@ -47,6 +47,8 @@ from typing import Any, Callable, Protocol, runtime_checkable
 from vibrant.models.agent import AgentRunRecord, AgentStatus, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 
+from .role_results import RoleResultPayload, serialize_role_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,6 +98,7 @@ class NormalizedRunResult:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     turn_result: Any | None = None
+    role_result: RoleResultPayload | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -478,6 +481,22 @@ class BaseAgentRuntime:
                 if agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT:
                     state = RunState.AWAITING_INPUT
 
+                role_result = None
+                build_role_result = getattr(self._agent, "build_role_result", None)
+                if callable(build_role_result):
+                    try:
+                        role_result = build_role_result(
+                            result=run_result,
+                            agent_record=agent_record,
+                            input_requests=list(handle._input_requests),
+                        )
+                    except Exception:
+                        logger.exception("Failed to build role result for %s", agent_record.identity.role)
+                    else:
+                        if role_result is not None:
+                            agent_record.outcome.role_result = serialize_role_result(role_result)
+                            _bridge_callback(agent_record)
+
                 return NormalizedRunResult(
                     agent_record=agent_record,
                     state=state,
@@ -491,6 +510,7 @@ class BaseAgentRuntime:
                     started_at=agent_record.lifecycle.started_at,
                     finished_at=agent_record.lifecycle.finished_at,
                     turn_result=run_result.turn_result,
+                    role_result=role_result,
                 )
             except Exception as exc:
                 return NormalizedRunResult(

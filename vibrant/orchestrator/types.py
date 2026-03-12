@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from vibrant.agents.gatekeeper import GatekeeperRunResult
+from vibrant.agents.role_results import RoleResultPayload
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
 from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskStatus
@@ -28,6 +29,7 @@ class TaskResult:
     summary: str | None = None
     error: str | None = None
     worktree_path: str | None = None
+    role_result: RoleResultPayload | None = None
 
 
 @dataclass(slots=True)
@@ -129,6 +131,7 @@ class AgentSnapshotOutcome:
     summary: str | None = None
     error: str | None = None
     output: AgentOutput | None = None
+    role_result: Any | None = None
 
 
 @dataclass(slots=True)
@@ -169,3 +172,4 @@ class RuntimeExecutionResult:
     provider_resume_cursor: dict[str, Any] | None = None
     input_requests: list[InputRequest] = field(default_factory=list)
     normalized_result: NormalizedRunResult | None = None
+    role_result: RoleResultPayload | None = None

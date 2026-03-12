@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable
 import inspect
 
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents.role_results import GatekeeperRoleResult
 from vibrant.models.agent import AgentRunRecord
-from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.models.task import TaskInfo
 from vibrant.prompts import (
     build_task_completion_trigger_description,
     build_task_escalation_trigger_description,
@@ -73,7 +74,7 @@ class ReviewService:
         result = await self.run_gatekeeper_request(self.build_completion_request(task, agent_record, worktree))
         self.state_store.apply_gatekeeper_result(result)
         self._reload_roadmap()
-        decision = self.resolve_decision(result, task.id)
+        decision = self.resolve_decision(result, task_id=task.id)
         self._record_review(task, result, decision=decision, reason=result.error)
         return result, decision
 
@@ -192,18 +193,56 @@ class ReviewService:
             gatekeeper_agent_id=result.agent_record.identity.agent_id if result.agent_record is not None else None,
         )
 
-    def resolve_decision(self, result: GatekeeperRunResult, task_id: str) -> str:
+    def resolve_decision(self, result: GatekeeperRunResult, *, task_id: str | None = None) -> str:
         if result.awaiting_input or result.input_requests:
             return "needs_input"
+
+        decision_from_state = self._resolve_decision_from_task_state(task_id)
+        if decision_from_state is not None:
+            return decision_from_state
+
+        role_result = result.role_result
+        if not isinstance(role_result, GatekeeperRoleResult):
+            if result.error:
+                return "rejected"
+            raise RuntimeError("Gatekeeper result is missing a GatekeeperRoleResult payload")
+
+        normalized = (role_result.suggested_decision or "").strip().lower()
+        if not normalized:
+            if result.error:
+                return "rejected"
+            raise RuntimeError("Gatekeeper result did not provide a suggested decision")
+
+        if normalized in self.ACCEPTED_VERDICTS:
+            return "accepted"
+        if normalized in self.AWAITING_INPUT_VERDICTS:
+            return "needs_input"
+        if normalized in {"retry", "retried"}:
+            return "retry"
+        if normalized in {"escalate", "escalated"}:
+            return "escalated"
+        if normalized in {"rejected", "reject"}:
+            return "rejected"
         if result.error:
             return "rejected"
+        raise RuntimeError(f"Unsupported Gatekeeper decision: {normalized}")
 
-        current_task = None
-        if self.roadmap_service.roadmap_path.exists():
-            document = self.roadmap_service.parser.parse_file(self.roadmap_service.roadmap_path)
-            current_task = next((item for item in document.tasks if item.id == task_id), None)
+    def _resolve_decision_from_task_state(self, task_id: str | None) -> str | None:
+        if not task_id:
+            return None
+
+        current_task = self.roadmap_service.get_task(task_id)
         if current_task is None and self.roadmap_service.dispatcher is not None:
             current_task = self.roadmap_service.dispatcher.get_task(task_id)
-        if current_task is not None and current_task.status is TaskStatus.ACCEPTED:
+        if current_task is None:
+            return None
+
+        if current_task.status.value == "accepted":
             return "accepted"
-        return "rejected"
+        if current_task.status.value == "escalated":
+            return "escalated"
+        if current_task.status.value == "queued":
+            return "retry"
+        if current_task.status.value == "failed":
+            return "rejected"
+        return None

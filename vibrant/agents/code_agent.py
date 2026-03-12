@@ -8,7 +8,8 @@ from uuid import uuid4
 
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 
-from .base import AgentBase
+from .base import AgentBase, AgentRunResult
+from .role_results import RoleResultPayload, build_code_role_result
 
 if TYPE_CHECKING:
     from vibrant.models.task import TaskInfo
@@ -24,6 +25,23 @@ class CodeAgent(AgentBase):
 
     def get_agent_role(self) -> str:
         return "code"
+
+    def build_role_result(
+        self,
+        *,
+        result: AgentRunResult,
+        agent_record: AgentRunRecord,
+        input_requests: list[object],
+    ) -> RoleResultPayload | None:
+        return build_code_role_result(
+            role=agent_record.identity.role,
+            transcript=result.transcript,
+            summary=agent_record.outcome.summary,
+            error=result.error,
+            exit_code=result.exit_code,
+            awaiting_input=agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT,
+            events=result.events,
+        )
 
     def build_agent_record(
         self,

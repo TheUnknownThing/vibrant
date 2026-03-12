@@ -26,7 +26,8 @@ from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
 
-from .base import ReadOnlyAgentBase
+from .base import AgentRunResult, ReadOnlyAgentBase
+from .role_results import RoleResultPayload, build_gatekeeper_role_result
 from .runtime import AgentHandle, BaseAgentRuntime, NormalizedRunResult
 
 PLANNING_COMPLETE_MCP_TOOL = "vibrant.end_planning_phase"
@@ -106,6 +107,22 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         kwargs = super().get_thread_kwargs()
         kwargs["persist_extended_history"] = True
         return kwargs
+
+    def build_role_result(
+        self,
+        *,
+        result: AgentRunResult,
+        agent_record: AgentRunRecord,
+        input_requests: list[object],
+    ) -> RoleResultPayload | None:
+        return build_gatekeeper_role_result(
+            summary=agent_record.outcome.summary,
+            error=result.error,
+            exit_code=result.exit_code,
+            awaiting_input=agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT,
+            input_requests=input_requests,
+            events=result.events,
+        )
 
     def build_agent_record(self, request: GatekeeperRequest) -> AgentRunRecord:
         role_spec = _ROLE_CATALOG.get("gatekeeper")

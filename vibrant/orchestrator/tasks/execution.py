@@ -186,6 +186,7 @@ class TaskExecutionService:
                 summary=runtime_result.summary,
                 error=runtime_result.error,
                 worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
             )
 
         if runtime_result.error:
@@ -202,6 +203,7 @@ class TaskExecutionService:
                 events=runtime_result.events,
                 reason=runtime_result.error,
                 summary=runtime_result.summary,
+                role_result=runtime_result.role_result,
                 notify_gatekeeper_on_retry=True,
             )
 
@@ -226,6 +228,7 @@ class TaskExecutionService:
                 events=runtime_result.events,
                 summary=agent_record.outcome.summary,
                 worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
             )
 
         if decision in self.review_service.ACCEPTED_VERDICTS:
@@ -244,6 +247,7 @@ class TaskExecutionService:
                     merge_result=merge_result,
                     events=runtime_result.events,
                     summary=agent_record.outcome.summary,
+                    role_result=runtime_result.role_result,
                 )
 
             self.git_service.abort_merge_if_needed()
@@ -255,8 +259,41 @@ class TaskExecutionService:
                 events=runtime_result.events,
                 reason=merge_error,
                 summary=agent_record.outcome.summary,
+                role_result=runtime_result.role_result,
                 prior_gatekeeper_result=gatekeeper_result,
                 notify_gatekeeper_on_retry=True,
+            )
+
+        if decision == "retry":
+            retried_task = self.roadmap_service.get_task(completed_task.id) or dispatcher.get_task(completed_task.id)
+            self.roadmap_service.persist()
+            self.git_service.cleanup_worktree(completed_task.id)
+            return TaskResult(
+                task_id=retried_task.id,
+                outcome="retried",
+                task_status=retried_task.status,
+                agent_record=agent_record,
+                gatekeeper_result=gatekeeper_result,
+                events=runtime_result.events,
+                summary=agent_record.outcome.summary,
+                worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
+            )
+
+        if decision == "escalated":
+            escalated_task = self.roadmap_service.get_task(completed_task.id) or dispatcher.get_task(completed_task.id)
+            self.roadmap_service.persist()
+            self.git_service.cleanup_worktree(completed_task.id)
+            return TaskResult(
+                task_id=escalated_task.id,
+                outcome="escalated",
+                task_status=escalated_task.status,
+                agent_record=agent_record,
+                gatekeeper_result=gatekeeper_result,
+                events=runtime_result.events,
+                summary=agent_record.outcome.summary,
+                worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
             )
 
         rejection_reason = gatekeeper_result.error or f"Gatekeeper verdict: {decision or 'rejected'}"
@@ -267,6 +304,7 @@ class TaskExecutionService:
             events=runtime_result.events,
             reason=rejection_reason,
             summary=agent_record.outcome.summary,
+            role_result=runtime_result.role_result,
             prior_gatekeeper_result=gatekeeper_result,
             notify_gatekeeper_on_retry=False,
         )

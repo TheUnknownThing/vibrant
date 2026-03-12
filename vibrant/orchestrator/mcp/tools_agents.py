@@ -60,6 +60,7 @@ class AgentToolHandlers:
             "summary": snapshot.outcome.summary,
             "error": snapshot.outcome.error,
             "output": _serialize_value(snapshot.outcome.output),
+            "role_result": _serialize_value(snapshot.outcome.role_result),
             "provider": _serialize_value(snapshot.provider),
         }
 

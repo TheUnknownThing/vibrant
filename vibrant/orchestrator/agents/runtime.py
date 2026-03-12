@@ -370,4 +370,5 @@ def _normalized_to_execution_result(
         provider_resume_cursor=provider_thread.resume_cursor,
         input_requests=list(result.input_requests),
         normalized_result=result,
+        role_result=result.role_result,
     )

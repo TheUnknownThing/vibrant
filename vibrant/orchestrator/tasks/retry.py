@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from vibrant.agents.gatekeeper import GatekeeperRunResult
+from vibrant.agents.role_results import RoleResultPayload
 from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 
@@ -36,6 +37,7 @@ class RetryPolicyService:
         events: list[dict[str, object]],
         reason: str,
         summary: str | None,
+        role_result: RoleResultPayload | None = None,
         prior_gatekeeper_result: GatekeeperRunResult | None = None,
         notify_gatekeeper_on_retry: bool,
     ) -> TaskResult:
@@ -64,4 +66,5 @@ class RetryPolicyService:
             events=events,
             summary=summary,
             error=reason,
+            role_result=role_result,
         )
