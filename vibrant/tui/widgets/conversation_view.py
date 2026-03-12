@@ -8,6 +8,9 @@ from textual.widgets import Static, Markdown, Collapsible
 
 from ...models import ItemInfo, ItemType, ThreadInfo, TurnInfo, TurnRole
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class MessageBubble(Static):
     """A single message (user or assistant) in the conversation."""
@@ -29,6 +32,7 @@ class MessageBubble(Static):
     def _render_item(self, item: ItemInfo) -> list:
         """Yield one or more widgets for a single item."""
         widgets = []
+        logger.info(f"Bubble: Rendering item {item.type} with content: {item.content}")
 
         if item.type == ItemType.TEXT:
             is_reasoning = item.metadata.get("is_reasoning", False)
@@ -232,6 +236,7 @@ class ConversationView(Static):
             return
 
         try:
+            logger.info(f"View: streaming text: {text}")
             empty_state = self.query_one("#empty-state", Static)
             empty_state.display = False
             self._scroll.display = True

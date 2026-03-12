@@ -1,4 +1,4 @@
-"""Panel D chat and Gatekeeper Q&A widget."""
+"""Chat and Gatekeeper Q&A widget."""
 
 from __future__ import annotations
 
