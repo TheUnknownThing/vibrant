@@ -30,6 +30,7 @@ class CodexProviderAdapter(ProviderAdapter):
         codex_binary: str = "codex",
         launch_args: Sequence[str] | None = None,
         codex_home: str | None = None,
+        resume_thread_id: str | None = None,
         agent_record: AgentRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
         on_raw_notification: NotificationHandler | None = None,
@@ -37,6 +38,7 @@ class CodexProviderAdapter(ProviderAdapter):
         native_logger: NativeLogger | None = None,
         canonical_logger: CanonicalLogger | None = None,
         client_factory: Any | None = None,
+        **_: Any,
     ) -> None:
         super().__init__(on_canonical_event=on_canonical_event)
         self.client = client

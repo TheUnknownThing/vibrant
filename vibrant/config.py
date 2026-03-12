@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from .providers.base import ProviderKind
+
 
 DEFAULT_CONFIG_DIR = ".vibrant"
 DEFAULT_CONFIG_FILE = "vibrant.toml"
@@ -34,6 +36,11 @@ class VibrantConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    provider_kind: ProviderKind = Field(
+        default=ProviderKind.CODEX,
+        validation_alias=AliasChoices("provider_kind", "provider-kind", "kind"),
+        serialization_alias="kind",
+    )
     codex_binary: str = Field(
         default="codex",
         validation_alias=AliasChoices("codex_binary", "codex-binary", "codex-binary-path"),
@@ -48,6 +55,41 @@ class VibrantConfig(BaseModel):
         default=None,
         validation_alias=AliasChoices("codex_home", "codex-home", "CODEX_HOME"),
         serialization_alias="codex-home",
+    )
+    claude_cli_path: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("claude_cli_path", "claude-cli-path"),
+        serialization_alias="claude-cli-path",
+    )
+    claude_settings: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("claude_settings", "claude-settings"),
+        serialization_alias="claude-settings",
+    )
+    claude_add_dirs: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("claude_add_dirs", "claude-add-dirs"),
+        serialization_alias="claude-add-dirs",
+    )
+    claude_allowed_tools: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("claude_allowed_tools", "claude-allowed-tools"),
+        serialization_alias="claude-allowed-tools",
+    )
+    claude_disallowed_tools: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("claude_disallowed_tools", "claude-disallowed-tools"),
+        serialization_alias="claude-disallowed-tools",
+    )
+    claude_fallback_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("claude_fallback_model", "claude-fallback-model"),
+        serialization_alias="claude-fallback-model",
+    )
+    claude_setting_sources: list[str] = Field(
+        default_factory=lambda: ["user", "project", "local"],
+        validation_alias=AliasChoices("claude_setting_sources", "claude-setting-sources"),
+        serialization_alias="claude-setting-sources",
     )
     model: str = "gpt-5.3-codex"
     # Leave unset to preserve Codex's default provider selection from ~/.codex/config.toml.

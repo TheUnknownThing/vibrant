@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.providers.base import RuntimeMode
+from vibrant.providers.registry import provider_transport
 from vibrant.prompts import build_merge_prompt as render_merge_prompt
 
 from .base import AgentBase
@@ -69,6 +70,8 @@ class MergeAgent(AgentBase):
                 "worktree_path": str(self.project_root),
             },
             provider=AgentProviderMetadata(
+                kind=self.config.provider_kind.value,
+                transport=provider_transport(self.config.provider_kind),
                 runtime_mode="danger-full-access",
             ),
         )

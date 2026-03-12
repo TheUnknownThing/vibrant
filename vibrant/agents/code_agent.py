@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.providers.registry import provider_transport
 
 from .base import AgentBase
 
@@ -65,5 +66,9 @@ class CodeAgent(AgentBase):
                 "retry_count": task.retry_count,
                 "max_retries": task.max_retries,
             },
-            provider=AgentProviderMetadata(**provider_kwargs),
+            provider=AgentProviderMetadata(
+                kind=self.config.provider_kind.value,
+                transport=provider_transport(self.config.provider_kind),
+                **provider_kwargs,
+            ),
         )
