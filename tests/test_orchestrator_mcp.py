@@ -6,15 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from vibrant.config import RoadmapExecutionMode
-from vibrant.mcp.authz import (
-    MCP_ACCESS_SCOPE,
-    MCPAuthorizationError,
-    MCPPrincipal,
-    ORCHESTRATOR_WORKFLOW_WRITE_SCOPE,
-    TASKS_RUN_SCOPE,
-    orchestrator_agent_scopes,
-    orchestrator_gatekeeper_scopes,
-)
 from vibrant.models.agent import AgentRecord, AgentStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionStatus
 from vibrant.models.task import TaskStatus
@@ -162,6 +153,7 @@ def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, Quest
         engine=engine,
         state_store=state_store,
         roadmap_service=roadmap_service,
+        roadmap_document=roadmap_service.document,
         consensus_service=consensus_service,
         question_service=question_service,
         agent_manager=_StubAgentManager(state_store),
@@ -215,17 +207,17 @@ def test_question_service_tracks_structured_records(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_mcp_server_enforces_shared_scopes_and_mutates_state(tmp_path: Path) -> None:
+async def test_orchestrator_mcp_server_exposes_full_surface_and_mutates_state(tmp_path: Path) -> None:
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
 
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
-    agent = MCPPrincipal(scopes=orchestrator_agent_scopes(), subject_id="agent-task-1")
+
+    assert "questions.pending" in {definition.name for definition in server.list_resources()}
+    assert "roadmap_update_task" in {definition.name for definition in server.list_tools()}
 
     created = await server.call_tool(
         "roadmap_add_task",
-        principal=gatekeeper,
         task={
             "id": "task-1",
             "title": "Add MCP facade tests",
@@ -236,32 +228,27 @@ async def test_orchestrator_mcp_server_enforces_shared_scopes_and_mutates_state(
 
     question = await server.call_tool(
         "question_ask_user",
-        principal=gatekeeper,
         text="Should we expose workflow_pause to agents?",
     )
     assert question["text"] == "Should we expose workflow_pause to agents?"
 
-    pending = await server.read_resource("questions.pending", principal=gatekeeper)
+    pending = await server.read_resource("questions.pending")
     assert [item["text"] for item in pending] == ["Should we expose workflow_pause to agents?"]
 
-    fetched = await server.call_tool("task_get", principal=agent, task_id="task-1")
+    fetched = await server.call_tool("task_get", task_id="task-1")
     assert fetched["title"] == "Add MCP facade tests"
 
-    with pytest.raises(MCPAuthorizationError, match="roadmap_update_task"):
-        await server.call_tool(
-            "roadmap_update_task",
-            principal=agent,
-            task_id="task-1",
-            updates={"title": "Nope"},
-        )
+    updated = await server.call_tool(
+        "roadmap_update_task",
+        task_id="task-1",
+        title="Add broader MCP facade tests",
+    )
+    assert updated["title"] == "Add broader MCP facade tests"
 
-    with pytest.raises(MCPAuthorizationError, match="questions.pending"):
-        await server.read_resource("questions.pending", principal=agent)
-
-    paused = await server.call_tool("workflow_pause", principal=gatekeeper)
+    paused = await server.call_tool("workflow_pause")
     assert paused == {"status": "paused"}
 
-    workflow = await server.read_resource("workflow.status", principal=gatekeeper)
+    workflow = await server.read_resource("workflow.status")
     assert workflow == {"status": "paused"}
 
 
@@ -271,11 +258,9 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
     state_store.transition_to(OrchestratorStatus.PLANNING)
 
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
 
     updated_consensus = await server.call_tool(
         "vibrant.update_consensus",
-        principal=gatekeeper,
         status="planning",
         context="## Objectives\nShip MCP-driven orchestration.",
     )
@@ -283,7 +268,6 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 
     updated_roadmap = await server.call_tool(
         "vibrant.update_roadmap",
-        principal=gatekeeper,
         tasks=[
             {
                 "id": "task-1",
@@ -296,7 +280,6 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 
     pending = await server.call_tool(
         "vibrant.set_pending_questions",
-        principal=gatekeeper,
         questions=["Should retries stay automatic?"],
     )
     assert [item["text"] for item in pending if item["status"] == "pending"] == ["Should retries stay automatic?"]
@@ -304,12 +287,11 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 
     decision = await server.call_tool(
         "vibrant.request_user_decision",
-        principal=gatekeeper,
         question="Should we expose the new MCPs now?",
     )
     assert decision["text"] == "Should we expose the new MCPs now?"
 
-    transitioned = await server.call_tool("vibrant.end_planning_phase", principal=gatekeeper)
+    transitioned = await server.call_tool("vibrant.end_planning_phase")
     assert transitioned == {"status": "executing"}
 
 
@@ -319,11 +301,9 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
     state_store.transition_to(OrchestratorStatus.PLANNING)
     facade.orchestrator.task_workflow = TaskWorkflowService(task_store=TaskStore(state_store=state_store))
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
 
     await server.call_tool(
         "vibrant.update_roadmap",
-        principal=gatekeeper,
         tasks=[
             {
                 "id": "task-1",
@@ -336,7 +316,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
 
     accepted = await server.call_tool(
         "vibrant.review_task_outcome",
-        principal=gatekeeper,
         task_id="task-1",
         decision="accepted",
     )
@@ -344,7 +323,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
 
     await server.call_tool(
         "vibrant.update_roadmap",
-        principal=gatekeeper,
         tasks=[
             {
                 "id": "task-2",
@@ -358,7 +336,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
     )
     retried = await server.call_tool(
         "vibrant.mark_task_for_retry",
-        principal=gatekeeper,
         task_id="task-2",
         failure_reason="Needs a safer retry path",
         prompt="Retry with a safer implementation plan.",
@@ -368,7 +345,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
 
     await server.call_tool(
         "vibrant.update_roadmap",
-        principal=gatekeeper,
         tasks=[
             {
                 "id": "task-3",
@@ -380,7 +356,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
     )
     rejected = await server.call_tool(
         "vibrant.review_task_outcome",
-        principal=gatekeeper,
         task_id="task-3",
         decision="rejected",
         failure_reason="Unsafe database migration plan",
@@ -394,12 +369,9 @@ async def test_orchestrator_mcp_server_exposes_agent_and_event_reads(tmp_path: P
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
-    agent = MCPPrincipal(scopes=orchestrator_agent_scopes(), subject_id="agent-task-1")
 
     await server.call_tool(
         "roadmap_add_task",
-        principal=gatekeeper,
         task={
             "id": "task-1",
             "title": "Inspect assignment surfaces",
@@ -417,15 +389,15 @@ async def test_orchestrator_mcp_server_exposes_agent_and_event_reads(tmp_path: P
         }
     )
 
-    assigned = await server.read_resource("task.assigned", principal=agent, task_id="task-1")
+    assigned = await server.read_resource("task.assigned", task_id="task-1")
     assert assigned["task"]["id"] == "task-1"
     assert assigned["latest_agent"]["identity"]["agent_id"] == "agent-task-1"
 
-    status = await server.read_resource("agent.status", principal=agent, agent_id="agent-task-1")
+    status = await server.read_resource("agent.status", agent_id="agent-task-1")
     assert status["identity"]["task_id"] == "task-1"
     assert status["runtime"]["done"] is True
 
-    events = await server.read_resource("events.recent", principal=agent, task_id="task-1")
+    events = await server.read_resource("events.recent", task_id="task-1")
     assert len(events) == 1
     assert events[0]["type"] == "task.progress"
 
@@ -435,16 +407,9 @@ async def test_orchestrator_mcp_server_supports_safe_agent_tools(tmp_path: Path)
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
-    agent = MCPPrincipal(scopes=orchestrator_agent_scopes(), subject_id="agent-task-1")
-    runner = MCPPrincipal(
-        scopes=(MCP_ACCESS_SCOPE, TASKS_RUN_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
-        subject_id="operator-1",
-    )
 
     await server.call_tool(
         "roadmap_add_task",
-        principal=gatekeeper,
         task={
             "id": "task-1",
             "title": "Inspect tool surfaces",
@@ -453,35 +418,31 @@ async def test_orchestrator_mcp_server_supports_safe_agent_tools(tmp_path: Path)
     )
     _persist_agent_record(state_store, agent_id="agent-task-1", task_id="task-1")
 
-    agent_snapshot = await server.call_tool("agent_get", principal=agent, agent_id="agent-task-1")
+    agent_snapshot = await server.call_tool("agent_get", agent_id="agent-task-1")
     assert agent_snapshot["identity"]["agent_id"] == "agent-task-1"
 
-    agent_list = await server.call_tool("agent_list", principal=agent, task_id="task-1")
+    agent_list = await server.call_tool("agent_list", task_id="task-1")
     assert [item["identity"]["agent_id"] for item in agent_list] == ["agent-task-1"]
 
-    agent_result = await server.call_tool("agent_result_get", principal=agent, agent_id="agent-task-1")
+    agent_result = await server.call_tool("agent_result_get", agent_id="agent-task-1")
     assert agent_result["summary"] == "Implemented successfully."
 
     async def _run_next_task():
         return {"task_id": "task-1", "outcome": "accepted", "task_status": TaskStatus.ACCEPTED.value}
 
     facade.orchestrator.run_next_task = _run_next_task
-    executed = await server.call_tool("workflow_execute_next_task", principal=runner)
+    executed = await server.call_tool("workflow_execute_next_task")
     assert executed == {"task_id": "task-1", "outcome": "accepted", "task_status": "accepted"}
 
     facade.orchestrator.agent_manager = _StubAgentManager()
-    waited = await server.call_tool("agent_wait", principal=agent, agent_id="agent-task-1")
+    waited = await server.call_tool("agent_wait", agent_id="agent-task-1")
     assert waited["state"] == "completed"
 
     responded = await server.call_tool(
         "agent_respond_to_request",
-        principal=runner,
         agent_id="agent-task-1",
         request_id="req-1",
         result={"approved": True},
     )
     assert responded["request"]["request_id"] == "req-1"
     assert responded["request"]["result"] == {"approved": True}
-
-    with pytest.raises(MCPAuthorizationError, match="workflow_execute_next_task"):
-        await server.call_tool("workflow_execute_next_task", principal=agent)
