@@ -210,6 +210,7 @@ class TokenExchangeRequest(BaseModel):
     redirect_uri: str
     code_verifier: str | None = None
     client_secret: str | None = None
+    client_auth_method: str | None = None
     grant_type: str = "authorization_code"
 
 

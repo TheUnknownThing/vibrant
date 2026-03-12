@@ -28,6 +28,9 @@ class TokenSigner(Protocol):
     def sign(self, claims: Mapping[str, Any]) -> str:
         ...
 
+    def verify(self, token: str) -> dict[str, Any]:
+        ...
+
     def jwks_document(self) -> dict[str, Any]:
         ...
 
@@ -56,6 +59,26 @@ class HMACTokenSigner:
         signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
         signature = hmac.new(self._secret, signing_input, hashlib.sha256).digest()
         return f"{header_segment}.{payload_segment}.{_b64url_encode(signature)}"
+
+    def verify(self, token: str) -> dict[str, Any]:
+        segments = token.split(".")
+        if len(segments) != 3:
+            raise ValueError("Invalid JWT format")
+
+        header_segment, payload_segment, signature_segment = segments
+        header = json.loads(_b64url_decode(header_segment).decode("utf-8"))
+        if header.get("alg") != self.algorithm:
+            raise ValueError(f"Unsupported JWT algorithm: {header.get('alg')}")
+        if header.get("kid") not in {None, self.kid}:
+            raise ValueError(f"Unexpected JWT kid: {header.get('kid')}")
+
+        signing_input = f"{header_segment}.{payload_segment}".encode("ascii")
+        expected_signature = hmac.new(self._secret, signing_input, hashlib.sha256).digest()
+        provided_signature = _b64url_decode(signature_segment)
+        if not hmac.compare_digest(expected_signature, provided_signature):
+            raise ValueError("Invalid JWT signature")
+
+        return json.loads(_b64url_decode(payload_segment).decode("utf-8"))
 
     def jwks_document(self) -> dict[str, Any]:
         return {"keys": []}

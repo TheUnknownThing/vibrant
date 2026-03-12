@@ -212,19 +212,21 @@ Then it enforces any baseline scopes such as `mcp:access`.
 
 ## MCP integration
 
-This package intentionally stops at the auth boundary.
+The orchestrator MCP surface now integrates this package through FastMCP's native auth layer.
 
-It provides an embedded OAuth authorization server that a future MCP layer can integrate with later.
+The relevant adapter lives in `vibrant/orchestrator/mcp/fastmcp.py` and does two things:
 
-That future MCP layer should consume:
+- serves the embedded OAuth endpoints from `AuthorizationServerService`
+- verifies bearer tokens through FastMCP before dispatching MCP tools and resources
 
-- the issuer URL
-- the authorization endpoint
-- the token endpoint
-- the JWKS endpoint
-- the scope model defined here
+The runtime flow is:
 
-The actual MCP server wiring is intentionally deferred.
+1. the embedded OAuth service issues access tokens
+2. `EmbeddedOAuthProvider` exposes OAuth metadata, authorization, token, and JWKS routes
+3. FastMCP uses `EmbeddedOAuthTokenVerifier` to validate bearer tokens on MCP requests
+4. the validated token is converted into an `MCPPrincipal` and the orchestrator registry still enforces scope checks internally
+
+This keeps one shared scope model across token issuance and MCP authorization while using FastMCP's native auth middleware for transport-level enforcement.
 
 ## Development vs production
 

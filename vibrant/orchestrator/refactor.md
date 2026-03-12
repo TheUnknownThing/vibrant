@@ -137,7 +137,7 @@ Current implementation status for this slice:
 - [x] Gatekeeper tools implemented: `consensus_get`, `consensus_update`, `roadmap_get`, `roadmap_add_task`, `roadmap_update_task`, `roadmap_reorder_tasks`, `question_ask_user`, `question_resolve`, `workflow_pause`, `workflow_resume`
 - [x] Sub-agent read tools implemented: `consensus_get`, `roadmap_get`, `task_get`
 - [ ] Wire MCP into live Gatekeeper and sub-agent runtime sessions as the primary control-plane path
-- [ ] Add deferred read surfaces: `task.assigned`, `agent.status`, `events.recent`
+- [x] Add deferred read surfaces: `task.assigned`, `agent.status`, `events.recent`
 - [ ] Add deferred reporting/spawn tools after the unified agent result model lands
 
 ### Resources

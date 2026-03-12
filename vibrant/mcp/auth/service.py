@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from ..config import OAuthServerSettings
 from .models import (
@@ -261,6 +261,40 @@ class AuthorizationServerService:
         """Return the public JWKS document exposed by the signer."""
         return self.signer.jwks_document()
 
+    def verify_access_token(
+        self,
+        token: str,
+        *,
+        audience: str | None = None,
+    ) -> dict[str, Any]:
+        """Verify a signed access token issued by this embedded auth service."""
+        try:
+            claims = self.signer.verify(token)
+        except ValueError as exc:
+            raise OAuthError("invalid_token", str(exc), status_code=401) from exc
+
+        issuer = claims.get("iss")
+        if issuer != self.settings.issuer_url:
+            raise OAuthError("invalid_token", f"Unexpected token issuer: {issuer}", status_code=401)
+
+        expected_audience = audience or self.settings.default_audience
+        actual_audience = claims.get("aud")
+        if expected_audience and actual_audience != expected_audience:
+            raise OAuthError("invalid_token", f"Unexpected token audience: {actual_audience}", status_code=401)
+
+        expires_at = claims.get("exp")
+        if not isinstance(expires_at, int):
+            raise OAuthError("invalid_token", "Access token is missing a valid exp claim", status_code=401)
+        if expires_at <= int(utc_now().timestamp()):
+            raise OAuthError("invalid_token", "Access token has expired", status_code=401)
+
+        if not claims.get("client_id"):
+            raise OAuthError("invalid_token", "Access token is missing client_id", status_code=401)
+        if not isinstance(claims.get("scope"), str):
+            raise OAuthError("invalid_token", "Access token is missing scope", status_code=401)
+
+        return claims
+
     def authorize(
         self,
         request: AuthorizationRequest,
@@ -491,15 +525,21 @@ class AuthorizationServerService:
             "client_id": request.client_id,
             "redirect_uri": request.redirect_uri,
         }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
         if request.code_verifier is not None:
             form["code_verifier"] = request.code_verifier
-        if request.client_secret is not None:
+        if request.client_auth_method == "client_secret_basic":
+            encoded_client_id = quote(request.client_id, safe="")
+            encoded_client_secret = quote(request.client_secret or "", safe="")
+            credentials = f"{encoded_client_id}:{encoded_client_secret}".encode("utf-8")
+            headers["Authorization"] = f"Basic {base64.b64encode(credentials).decode('ascii')}"
+        elif request.client_secret is not None:
             form["client_secret"] = request.client_secret
         return _EmbeddedHTTPRequest(
             method="POST",
             url=self._absolute_url(self.settings.token_endpoint),
             form=form,
-            headers={"content-type": "application/x-www-form-urlencoded"},
+            headers=headers,
         )
 
     def _parse_authorization_decision(self, response: _EmbeddedHTTPResponse) -> AuthorizationDecision:

@@ -399,9 +399,12 @@ is the in-process registry shape and the resource/tool names documented here.
 
 Current stable resource names are:
 
+- `agent.status`
 - `consensus.current`
+- `events.recent`
 - `questions.pending`
 - `roadmap.current`
+- `task.assigned`
 - `task.by_id`
 - `workflow.status`
 
@@ -409,6 +412,11 @@ Current stable resource names are:
 
 Current stable tool names are:
 
+- `agent_get`
+- `agent_list`
+- `agent_result_get`
+- `agent_respond_to_request`
+- `agent_wait`
 - `consensus_get`
 - `consensus_update`
 - `question_ask_user`
@@ -418,6 +426,7 @@ Current stable tool names are:
 - `roadmap_reorder_tasks`
 - `roadmap_update_task`
 - `task_get`
+- `workflow_execute_next_task`
 - `workflow_pause`
 - `workflow_resume`
 - `vibrant.end_planning_phase`

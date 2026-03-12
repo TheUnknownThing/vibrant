@@ -22,6 +22,7 @@ dev = [
 mcp = [
     "authlib>=1.6",
     "fastapi>=0.110",
+    "fastmcp>=3.0",
     "uvicorn>=0.29",
 ]
 [project.scripts]
