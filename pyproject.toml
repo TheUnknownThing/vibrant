@@ -20,8 +20,6 @@ dev = [
     "textual-dev>=1.0",
 ]
 mcp = [
-    "authlib>=1.6",
-    "fastapi>=0.110",
     "fastmcp>=3.0",
     "uvicorn>=0.29",
 ]
