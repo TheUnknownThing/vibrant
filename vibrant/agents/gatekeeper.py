@@ -20,8 +20,9 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
-from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
+from vibrant.orchestrator.agents.catalog import build_builtin_provider_catalog, build_builtin_role_catalog
+from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
 
@@ -45,6 +46,7 @@ MCP_TOOL_NAMES = (
     UPDATE_CONSENSUS_MCP_TOOL,
     UPDATE_ROADMAP_MCP_TOOL,
 )
+_ROLE_CATALOG = build_builtin_role_catalog()
 
 GatekeeperRunHandle = AgentHandle
 GatekeeperRunResult = NormalizedRunResult
@@ -94,8 +96,8 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         self.consensus_path = self.vibrant_dir / "consensus.md"
         self.roadmap_path = self.vibrant_dir / "roadmap.md"
 
-    def get_agent_type(self) -> AgentType:
-        return AgentType.GATEKEEPER
+    def get_agent_role(self) -> str:
+        return "gatekeeper"
 
     def should_auto_reject_requests(self) -> bool:
         return False
@@ -106,21 +108,28 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         return kwargs
 
     def build_agent_record(self, request: GatekeeperRequest) -> AgentRecord:
-        agent_id = f"gatekeeper-{request.trigger.value}-{uuid4().hex[:8]}"
+        role_spec = _ROLE_CATALOG.get("gatekeeper")
+        provider_catalog = build_builtin_provider_catalog(codex_adapter_factory=self.adapter_factory)
+        provider_spec = provider_catalog.get(role_spec.default_provider_kind)
+        agent_id = "gatekeeper-project"
+        run_id = f"run-gatekeeper-project-{uuid4().hex[:8]}"
         task_id = f"gatekeeper-{request.trigger.value}"
-        native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{agent_id}.ndjson"
-        canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
+        native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{run_id}.ndjson"
+        canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{run_id}.ndjson"
 
         return AgentRecord(
             identity={
+                "run_id": run_id,
                 "agent_id": agent_id,
                 "task_id": task_id,
-                "type": AgentType.GATEKEEPER,
+                "role": role_spec.role,
             },
             lifecycle={"status": AgentStatus.SPAWNING},
             context={"worktree_path": str(self.project_root)},
             provider=AgentProviderMetadata(
-                runtime_mode=RuntimeMode.READ_ONLY.codex_thread_sandbox,
+                kind=provider_spec.kind,
+                transport=provider_spec.default_transport,
+                runtime_mode=role_spec.default_runtime_mode,
                 native_event_log=str(native_log),
                 canonical_event_log=str(canonical_log),
             ),
@@ -167,7 +176,8 @@ class Gatekeeper:
     ) -> None:
         self.project_root = find_project_root(project_root)
         self.vibrant_dir = self.project_root / DEFAULT_CONFIG_DIR
-        self.agents_dir = self.vibrant_dir / "agents"
+        self.agents_dir = self.vibrant_dir / "agent-runs"
+        self.legacy_agents_dir = self.vibrant_dir / "agents"
         self.config = config or load_config(start_path=self.project_root)
 
         self.agent = GatekeeperAgent(
@@ -231,7 +241,7 @@ class Gatekeeper:
         if on_result is not None:
             asyncio.create_task(
                 self._forward_result(handle, on_result),
-                name=f"gatekeeper-result-callback-{agent_record.identity.agent_id}",
+                name=f"gatekeeper-result-callback-{agent_record.identity.run_id}",
             )
 
         return handle
@@ -275,29 +285,31 @@ class Gatekeeper:
             await callback_result
 
     def _find_latest_gatekeeper_thread_id(self) -> str | None:
-        if not self.agents_dir.exists():
+        run_dirs = [directory for directory in (self.agents_dir, self.legacy_agents_dir) if directory.exists()]
+        if not run_dirs:
             return None
 
         latest_record: AgentRecord | None = None
         latest_sort_key: tuple[datetime, datetime] | None = None
-        for path in sorted(self.agents_dir.glob("gatekeeper-*.json")):
-            try:
-                record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if record.identity.type is not AgentType.GATEKEEPER:
-                continue
+        for directory in run_dirs:
+            for path in sorted(directory.glob("*.json")):
+                try:
+                    record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if record.identity.role != "gatekeeper":
+                    continue
 
-            thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
-            if not thread_id:
-                continue
+                thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
+                if not thread_id:
+                    continue
 
-            started = record.lifecycle.started_at or datetime.min.replace(tzinfo=timezone.utc)
-            finished = record.lifecycle.finished_at or started
-            sort_key = (started, finished)
-            if latest_sort_key is None or sort_key > latest_sort_key:
-                latest_record = record
-                latest_sort_key = sort_key
+                started = record.lifecycle.started_at or datetime.min.replace(tzinfo=timezone.utc)
+                finished = record.lifecycle.finished_at or started
+                sort_key = (started, finished)
+                if latest_sort_key is None or sort_key > latest_sort_key:
+                    latest_record = record
+                    latest_sort_key = sort_key
 
         if latest_record is None:
             return None
@@ -308,7 +320,7 @@ class Gatekeeper:
 
     def _persist_agent_record(self, agent_record: AgentRecord) -> None:
         self.agents_dir.mkdir(parents=True, exist_ok=True)
-        path = self.agents_dir / f"{agent_record.identity.agent_id}.json"
+        path = self.agents_dir / f"{agent_record.identity.run_id}.json"
         _atomic_write_text(path, agent_record.model_dump_json(indent=2) + "\n")
 
 

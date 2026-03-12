@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord, AgentStatus
 
+from .agents.catalog import build_builtin_role_catalog
+from .agents.instance import ManagedAgentInstance
 from .agents.registry import AgentRegistry
 from .agents.runtime import AgentRuntimeService
 from .artifacts.roadmap import RoadmapService
@@ -21,6 +23,7 @@ from .state.store import StateStore
 
 GatekeeperResultCallback = Callable[[GatekeeperRunResult], Any | Awaitable[Any]]
 _MIN_TIME = datetime.min.replace(tzinfo=timezone.utc)
+_ROLE_CATALOG = build_builtin_role_catalog()
 
 
 @dataclass(slots=True)
@@ -62,7 +65,7 @@ class GatekeeperRuntimeService:
     @property
     def busy(self) -> bool:
         managed_busy = any(
-            record.identity.type is AgentType.GATEKEEPER
+            record.identity.role == "gatekeeper"
             and record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES
             and record.lifecycle.status is not AgentStatus.AWAITING_INPUT
             for record in self.agent_registry.list_records()
@@ -73,25 +76,13 @@ class GatekeeperRuntimeService:
         return isinstance(self.gatekeeper, Gatekeeper) and self.runtime_service.supports_handles
 
     def _latest_thread_id(self) -> str | None:
-        latest_record: AgentRecord | None = None
-        latest_sort_key: tuple[object, object] | None = None
-        for record in self.agent_registry.list_records():
-            if record.identity.type is not AgentType.GATEKEEPER:
-                continue
-            thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
-            if not thread_id:
-                continue
-            started = record.lifecycle.started_at or record.lifecycle.finished_at or _MIN_TIME
-            finished = record.lifecycle.finished_at or started
-            sort_key = (started, finished)
-            if latest_sort_key is None or sort_key > latest_sort_key:
-                latest_record = record
-                latest_sort_key = sort_key
-        if latest_record is None:
+        gatekeeper_instance = self.agent_registry.get_instance("gatekeeper-project")
+        if gatekeeper_instance is None:
             return None
-        return latest_record.provider.provider_thread_id or _extract_provider_thread_id(
-            latest_record.provider.resume_cursor
-        )
+        provider_thread = self.agent_registry.provider_thread_handle(gatekeeper_instance.identity.agent_id)
+        if provider_thread is None or not provider_thread.resumable:
+            return None
+        return provider_thread.thread_id
 
     def track_future(self, future: asyncio.Future[Any]) -> None:
         self._active_futures.add(future)
@@ -138,8 +129,15 @@ class GatekeeperRuntimeService:
     ) -> Any:
         if self._uses_managed_runtime():
             prompt = self.gatekeeper.render_prompt(request)
-            agent_record = self.gatekeeper.build_agent_record(request)
-            agent_record.context.prompt_used = prompt
+            agent_instance = ManagedAgentInstance.from_record(
+                self.agent_registry.resolve_instance(
+                    role="gatekeeper",
+                    scope_type="project",
+                    scope_id="project",
+                ),
+                agent_registry=self.agent_registry,
+                runtime_service=self.runtime_service,
+            )
 
             should_resume = (
                 resume_latest_thread
@@ -147,25 +145,28 @@ class GatekeeperRuntimeService:
                 else request.trigger is GatekeeperTrigger.USER_CONVERSATION
             )
             resume_thread_id = self._latest_thread_id() if should_resume else None
-            handle = await self.runtime_service.start_run(
-                agent_record=agent_record,
+            started_run = await agent_instance.start_new_run(
+                task_id=f"gatekeeper-{request.trigger.value}",
+                branch=None,
+                worktree_path=str(self.project_root),
                 prompt=prompt,
                 cwd=str(self.project_root),
                 resume_thread_id=resume_thread_id,
                 increment_spawn=True,
             )
-            setattr(handle, "agent_record", agent_record)
-            setattr(handle, "request", request)
-            setattr(handle, "prompt", prompt)
+            started_run.agent_record.context.prompt_used = prompt
+            setattr(started_run.handle, "agent_record", started_run.agent_record)
+            setattr(started_run.handle, "request", request)
+            setattr(started_run.handle, "prompt", prompt)
 
             if on_result is not None:
                 future = asyncio.create_task(
-                    self._forward_managed_result(agent_id=agent_record.identity.agent_id, callback=on_result),
-                    name=f"gatekeeper-{request.trigger.value}-{agent_record.identity.agent_id}",
+                    self._forward_managed_result(agent_id=started_run.agent.agent_id, callback=on_result),
+                    name=f"gatekeeper-{request.trigger.value}-{started_run.agent_record.identity.run_id}",
                 )
                 self.track_future(future)
 
-            return handle
+            return started_run.handle
 
         start_run = getattr(self.gatekeeper, "start_run", None)
         if callable(start_run):
@@ -228,7 +229,7 @@ class GatekeeperRuntimeService:
             execution_result = await self.runtime_service.wait_for_run(handle=handle)
             result = execution_result.normalized_result
             if result is None:
-                raise RuntimeError(f"Gatekeeper run {handle.agent_record.identity.agent_id} did not produce a normalized result")
+                raise RuntimeError(f"Gatekeeper run {handle.agent_record.identity.run_id} did not produce a normalized result")
             return result
 
         run_gatekeeper = self.gatekeeper.run

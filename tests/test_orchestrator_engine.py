@@ -11,7 +11,7 @@ import pytest
 from vibrant.agents import GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.agents.runtime import RunState
 from vibrant.consensus.writer import ConsensusWriter
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
 from vibrant.orchestrator import OrchestratorStateBackend
@@ -95,7 +95,7 @@ def test_state_store_apply_gatekeeper_result_syncs_completed_status(tmp_path):
         identity={
             "agent_id": "gatekeeper-task_completion-test",
             "task_id": "gatekeeper-task_completion",
-            "type": AgentType.GATEKEEPER,
+            "role": "gatekeeper",
         },
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
@@ -151,7 +151,7 @@ class TestOrchestratorEnginePersistence:
         state_path.write_text(state.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
         running_agent = AgentRecord(
-            identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE},
+            identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"},
             lifecycle={"status": AgentStatus.RUNNING},
             provider=AgentProviderMetadata(
                 provider_thread_id="thread-001",
@@ -159,11 +159,11 @@ class TestOrchestratorEnginePersistence:
             ),
         )
         completed_agent = AgentRecord(
-            identity={"agent_id": "agent-task-002", "task_id": "task-002", "type": AgentType.MERGE},
+            identity={"agent_id": "agent-task-002", "task_id": "task-002", "role": "merge"},
             lifecycle={"status": AgentStatus.COMPLETED},
         )
         failed_agent = AgentRecord(
-            identity={"agent_id": "agent-task-003", "task_id": "task-003", "type": AgentType.CODE},
+            identity={"agent_id": "agent-task-003", "task_id": "task-003", "role": "code"},
             lifecycle={"status": AgentStatus.FAILED},
             outcome={"error": "boom"},
         )
@@ -238,7 +238,7 @@ class TestOrchestratorEnginePersistence:
                     "identity": {
                         "agent_id": "agent-gatekeeper-user_discussion-001",
                         "task_id": "gatekeeper-user_discussion",
-                        "type": "gatekeeper",
+                        "role": "gatekeeper",
                     },
                     "lifecycle": {
                         "status": "running",

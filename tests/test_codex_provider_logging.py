@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from vibrant.models.agent import AgentRecord, AgentType
+from vibrant.models.agent import AgentRecord
 from vibrant.models.wire import JsonRpcNotification
 from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
@@ -62,7 +62,7 @@ class TestCodexProviderLogging:
         client.responses["thread/start"] = {"thread": {"id": "thread_abc123", "path": ".codex/thread_abc123"}}
 
         agent = AgentRecord(
-            identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE},
+            identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"},
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),
                 "canonical_event_log": str(tmp_path / "canonical.ndjson"),
@@ -99,7 +99,7 @@ class TestCodexProviderLogging:
         client.responses["account/login/start"] = {"type": "apiKey"}
 
         agent = AgentRecord(
-            identity={"agent_id": "agent-auth-redact", "task_id": "task-auth-redact", "type": AgentType.CODE},
+            identity={"agent_id": "agent-auth-redact", "task_id": "task-auth-redact", "role": "code"},
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),
                 "canonical_event_log": str(tmp_path / "canonical.ndjson"),
@@ -127,7 +127,7 @@ async def test_real_agent_run_populates_both_logs(tmp_path: Path):
     if not codex_binary:
         pytest.skip("codex CLI is not available")
 
-    agent = AgentRecord(identity={"agent_id": "agent-task-real-log", "task_id": "task-real-log", "type": AgentType.CODE})
+    agent = AgentRecord(identity={"agent_id": "agent-task-real-log", "task_id": "task-real-log", "role": "code"})
     adapter = CodexProviderAdapter(cwd=str(tmp_path), codex_binary=codex_binary, agent_record=agent)
 
     await adapter.start_session(cwd=str(tmp_path))

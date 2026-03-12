@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibrant.config import VibrantConfig
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord, AgentStatus
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 
 from .utils import (
@@ -84,8 +84,8 @@ class AgentBase(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def get_agent_type(self) -> AgentType:
-        """Return the agent type for this implementation."""
+    def get_agent_role(self) -> str:
+        """Return the agent role for this implementation."""
 
     # ------------------------------------------------------------------
     # Overridable hooks (sensible defaults)
@@ -127,6 +127,7 @@ class AgentBase(ABC):
     ) -> dict[str, Any]:
         """Add agent-specific metadata to a canonical event before forwarding."""
         event.setdefault("agent_id", agent_record.identity.agent_id)
+        event.setdefault("run_id", agent_record.identity.run_id)
         event.setdefault("task_id", agent_record.identity.task_id)
         return event
 

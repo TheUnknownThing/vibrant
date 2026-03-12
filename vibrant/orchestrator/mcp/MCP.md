@@ -133,7 +133,7 @@ The tool surface is split between read-oriented agent tools and write/control-or
 - Response fields include:
   - `agent_id`
   - `task_id`
-  - `agent_type`
+  - `role`
   - `status`
   - `done`
   - `awaiting_input`

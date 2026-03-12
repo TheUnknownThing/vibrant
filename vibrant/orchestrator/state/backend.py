@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, find_project_root, load_config
 from vibrant.consensus.parser import ConsensusParser
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import (
     GatekeeperStatus,
@@ -17,8 +17,11 @@ from vibrant.models.state import (
     OrchestratorStatus,
     ProviderRuntimeState,
 )
-from vibrant.providers.base import CanonicalEvent
+from vibrant.orchestrator.agents.catalog import build_builtin_role_catalog
 from vibrant.project_init import ensure_project_files
+from vibrant.providers.base import CanonicalEvent
+
+_ROLE_CATALOG = build_builtin_role_catalog()
 
 
 class OrchestratorStateBackend:
@@ -55,7 +58,8 @@ class OrchestratorStateBackend:
         self.project_root = find_project_root(project_root)
         self.vibrant_dir = self.project_root / DEFAULT_CONFIG_DIR
         self.state_path = self.vibrant_dir / "state.json"
-        self.agents_dir = self.vibrant_dir / "agents"
+        self.agents_dir = self.vibrant_dir / "agent-runs"
+        self.legacy_agents_dir = self.vibrant_dir / "agents"
         self.consensus_path = self.vibrant_dir / "consensus.md"
 
         self.state = state
@@ -79,7 +83,7 @@ class OrchestratorStateBackend:
         ensure_project_files(root)
 
         state = cls._load_state(root)
-        agents = cls._load_agents(vibrant_dir / "agents")
+        agents = cls._load_agents(vibrant_dir / "agent-runs", vibrant_dir / "agents")
         consensus = cls._load_consensus(vibrant_dir / "consensus.md")
 
         backend = cls(
@@ -89,7 +93,7 @@ class OrchestratorStateBackend:
             consensus=consensus,
             notification_bell_enabled=notification_bell_enabled,
         )
-        backend._reconstruct_state(agent_records=agents.values())
+        backend._reconstruct_state(agent_records=list(agents.values()))
         backend.persist_state()
         return backend
 
@@ -100,8 +104,6 @@ class OrchestratorStateBackend:
         *,
         notification_bell_enabled: bool = True,
     ) -> OrchestratorStateBackend:
-        """Create a new engine using the project configuration defaults."""
-
         root = find_project_root(project_root)
         config = load_config(start_path=root)
         state = OrchestratorState(
@@ -127,14 +129,14 @@ class OrchestratorStateBackend:
         )
 
     @staticmethod
-    def _load_agents(agents_dir: Path) -> dict[str, AgentRecord]:
-        if not agents_dir.exists():
-            return {}
-
+    def _load_agents(*directories: Path) -> dict[str, AgentRecord]:
         records: dict[str, AgentRecord] = {}
-        for path in sorted(agents_dir.glob("*.json")):
-            record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
-            records[record.identity.agent_id] = record
+        for directory in directories:
+            if not directory.exists():
+                continue
+            for path in sorted(directory.glob("*.json")):
+                record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
+                records[record.identity.run_id] = record
         return records
 
     @staticmethod
@@ -144,13 +146,9 @@ class OrchestratorStateBackend:
         return ConsensusParser().parse_file(consensus_path)
 
     def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
-        """Return whether the current workflow state may transition."""
-
         return next_status in self.ALLOWED_TRANSITIONS[self.state.status]
 
     def transition_to(self, next_status: OrchestratorStatus) -> None:
-        """Transition to a new workflow state and persist immediately."""
-
         if not self.can_transition_to(next_status):
             raise ValueError(
                 f"Invalid orchestrator state transition: {self.state.status.value} -> {next_status.value}"
@@ -160,8 +158,6 @@ class OrchestratorStateBackend:
         self.persist_state()
 
     def persist_state(self) -> None:
-        """Write ``state.json`` atomically using a temp file and rename."""
-
         self.vibrant_dir.mkdir(parents=True, exist_ok=True)
         payload = self.state.model_dump_json(indent=2) + "\n"
         _atomic_write_text(self.state_path, payload)
@@ -172,14 +168,12 @@ class OrchestratorStateBackend:
         *,
         increment_spawn: bool = False,
     ) -> Path:
-        """Persist one agent record and refresh derived orchestrator state."""
-
-        existing_agent_ids = {agent.agent_id for agent in self.list_agent_records()}
-        if increment_spawn and record.identity.agent_id not in existing_agent_ids:
+        existing_run_ids = {agent.identity.run_id for agent in self.list_agent_records()}
+        if increment_spawn and record.identity.run_id not in existing_run_ids:
             self.state.total_agent_spawns += 1
 
         self.agents_dir.mkdir(parents=True, exist_ok=True)
-        path = self.agents_dir / f"{record.identity.agent_id}.json"
+        path = self.agents_dir / f"{record.identity.run_id}.json"
         _atomic_write_text(path, record.model_dump_json(indent=2) + "\n")
 
         self._reconstruct_state()
@@ -187,27 +181,26 @@ class OrchestratorStateBackend:
         return path
 
     def register_agent(self, record: AgentRecord) -> None:
-        """Track an agent record in memory and refresh derived state."""
-
         self.upsert_agent_record(record)
 
     def refresh_from_disk(self) -> None:
-        """Reload agent records and consensus metadata from disk."""
-
         self.reload_consensus()
         self._reconstruct_state()
         self.persist_state()
 
     def reload_consensus(self) -> ConsensusDocument | None:
-        """Reload consensus metadata from disk without mutating agent state."""
-
         self.consensus = self._load_consensus(self.consensus_path)
         return self.consensus
 
     def list_agent_records(self) -> list[AgentRecord]:
-        """Load durable agent records from disk."""
-
-        return list(self._load_agents(self.agents_dir).values())
+        return sorted(
+            self._load_agents(self.agents_dir, self.legacy_agents_dir).values(),
+            key=lambda record: (
+                (record.lifecycle.started_at or record.lifecycle.finished_at) is None,
+                record.lifecycle.started_at or record.lifecycle.finished_at,
+                record.identity.run_id,
+            ),
+        )
 
     def _reconstruct_state(self, *, agent_records: list[AgentRecord] | None = None) -> None:
         active_agents: list[str] = []
@@ -221,7 +214,8 @@ class OrchestratorStateBackend:
         for record in records:
             if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
                 active_agents.append(record.identity.agent_id)
-                if record.identity.type is AgentType.GATEKEEPER:
+                role_spec = _ROLE_CATALOG.try_get(record.identity.role)
+                if role_spec is not None and role_spec.contributes_control_plane_status:
                     active_gatekeeper = True
 
             if record.lifecycle.status is AgentStatus.COMPLETED:
@@ -259,6 +253,8 @@ class OrchestratorStateBackend:
         else:
             self.state.gatekeeper_status = GatekeeperStatus.IDLE
 
+
+
 def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
@@ -272,6 +268,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
         raise
+
 
 
 def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorStatus:
@@ -288,8 +285,10 @@ def _consensus_to_orchestrator_status(status: ConsensusStatus) -> OrchestratorSt
         raise ValueError(f"Unsupported consensus status: {status!r}") from exc
 
 
+
 def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
+
 
 
 def _extract_provider_thread_id(resume_cursor: object) -> str | None:
@@ -297,5 +296,6 @@ def _extract_provider_thread_id(resume_cursor: object) -> str | None:
         return None
     thread_id = resume_cursor.get("threadId")
     return thread_id if isinstance(thread_id, str) and thread_id else None
+
 
 __all__ = ["OrchestratorStateBackend"]

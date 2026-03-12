@@ -42,18 +42,7 @@ class RuntimeHandleSnapshot:
 
 
 class AgentRuntimeService:
-    """Own provider adapter session/thread/turn execution details.
-
-    This service is the orchestrator's entry point for running agents.
-    It programs against the ``AgentRuntime`` protocol rather than
-    driving adapter internals directly, giving the orchestrator a clean
-    service boundary for agent execution.
-
-    The service also owns orchestrator-facing handle tracking so future
-    MCP surfaces can list in-flight runs, inspect suspension state,
-    resume them, and wait for normalized results without reaching into
-    provider internals.
-    """
+    """Own provider adapter session/thread/turn execution details."""
 
     def __init__(
         self,
@@ -70,7 +59,6 @@ class AgentRuntimeService:
         return True
 
     def _make_record_callback(self) -> AgentRecordCallback:
-        """Build a callback that persists record mutations through the registry."""
         registry = self.agent_registry
 
         def _persist(record: AgentRecord) -> None:
@@ -90,7 +78,7 @@ class AgentRuntimeService:
         return candidate
 
     def get_handle(self, agent_id: str) -> AgentHandle | None:
-        """Return the currently tracked handle for an agent, if one exists."""
+        """Return the currently tracked handle for a stable agent, if one exists."""
         return self._handles.get(agent_id)
 
     def release_handle(self, agent_id: str) -> AgentHandle | None:
@@ -146,8 +134,9 @@ class AgentRuntimeService:
         return RuntimeHandleSnapshot(
             identity=AgentSnapshotIdentity(
                 agent_id=agent_record.identity.agent_id,
+                run_id=agent_record.identity.run_id,
                 task_id=agent_record.identity.task_id,
-                agent_type=agent_record.identity.type.value,
+                role=agent_record.identity.role,
             ),
             runtime=AgentSnapshotRuntime(
                 status=agent_record.lifecycle.status.value,
@@ -169,6 +158,8 @@ class AgentRuntimeService:
                 thread_id=provider_thread.thread_id,
                 thread_path=provider_thread.thread_path,
                 resume_cursor=provider_thread.resume_cursor,
+                native_event_log=agent_record.provider.native_event_log,
+                canonical_event_log=agent_record.provider.canonical_event_log,
             ),
         )
 
@@ -196,6 +187,10 @@ class AgentRuntimeService:
         increment_spawn: bool = True,
     ) -> AgentHandle:
         """Start an agent run and return the durable handle immediately."""
+        existing = self.get_handle(agent_record.identity.agent_id)
+        if existing is not None and not existing.done:
+            raise RuntimeError(f"Agent {agent_record.identity.agent_id} already has an active run")
+
         runtime = self._resolve_runtime(agent_record)
         agent_record.lifecycle.started_at = datetime.now(timezone.utc)
         self.agent_registry.upsert(agent_record, increment_spawn=increment_spawn)
@@ -218,6 +213,10 @@ class AgentRuntimeService:
         provider_thread: ProviderThreadHandle | None = None,
     ) -> AgentHandle:
         """Resume an existing handle-backed run using durable provider metadata."""
+        existing = self.get_handle(agent_record.identity.agent_id)
+        if existing is not None and not existing.done:
+            raise RuntimeError(f"Agent {agent_record.identity.agent_id} already has an active run")
+
         runtime = self._resolve_runtime(agent_record)
         provider_thread = self._resolve_provider_thread(
             agent_record=agent_record,
@@ -343,6 +342,7 @@ class AgentRuntimeService:
         if release_terminal and not result.awaiting_input:
             self.release_handle(normalized.agent_record.identity.agent_id)
         return result
+
 
 def _normalized_to_execution_result(
     result: NormalizedRunResult,

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from vibrant.config import RoadmapExecutionMode
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRecord, AgentStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionRecord
 from vibrant.orchestrator import Orchestrator, OrchestratorAgentSnapshot, OrchestratorFacade
 from vibrant.orchestrator.types import (
@@ -24,13 +24,13 @@ def _record(
     agent_id: str,
     *,
     task_id: str = "task-1",
-    agent_type: AgentType = AgentType.CODE,
+    role: str = "code",
     status: AgentStatus = AgentStatus.RUNNING,
     summary: str | None = None,
 ) -> AgentRecord:
     now = datetime.now(timezone.utc)
     return AgentRecord(
-        identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type},
+        identity={"agent_id": agent_id, "task_id": task_id, "role": role},
         lifecycle={"status": status, "started_at": now},
         outcome={"summary": summary},
     )
@@ -47,14 +47,13 @@ class _FakeAgentManager:
         task_id = kwargs.get("task_id")
         include_completed = kwargs.get("include_completed", True)
         active_only = kwargs.get("active_only", False)
-        agent_type = kwargs.get("agent_type")
-        agent_type_value = getattr(agent_type, "value", agent_type)
+        role = kwargs.get("role")
 
         snapshots = list(self._snapshots.values())
         if task_id is not None:
             snapshots = [snapshot for snapshot in snapshots if snapshot.identity.task_id == task_id]
-        if agent_type_value is not None:
-            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.agent_type == agent_type_value]
+        if role is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.role == role.strip().lower()]
         if active_only:
             snapshots = [snapshot for snapshot in snapshots if snapshot.runtime.active]
         elif not include_completed:
@@ -120,7 +119,7 @@ def _facade_lifecycle(
 def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
     output = AgentOutput(agent_id="agent-1", task_id="task-1", partial_text="Still working")
     managed = OrchestratorAgentSnapshot(
-        identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", agent_type="code"),
+        identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", role="code"),
         runtime=AgentSnapshotRuntime(
             status="running",
             state="awaiting_input",
@@ -161,7 +160,7 @@ def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
 
 def test_facade_lists_agents_from_agent_manager() -> None:
     running = OrchestratorAgentSnapshot(
-        identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", agent_type="code"),
+        identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", role="code"),
         runtime=AgentSnapshotRuntime(
             status="running",
             state="running",
@@ -172,7 +171,7 @@ def test_facade_lists_agents_from_agent_manager() -> None:
         ),
     )
     completed = OrchestratorAgentSnapshot(
-        identity=AgentSnapshotIdentity(agent_id="agent-2", task_id="task-2", agent_type="code"),
+        identity=AgentSnapshotIdentity(agent_id="agent-2", task_id="task-2", role="code"),
         runtime=AgentSnapshotRuntime(
             status="completed",
             state="completed",
@@ -189,8 +188,8 @@ def test_facade_lists_agents_from_agent_manager() -> None:
     snapshots = facade.list_agents(include_completed=False)
     assert [item.identity.agent_id for item in snapshots] == ["agent-1"]
 
-    by_type = facade.list_agents(agent_type=AgentType.CODE)
-    assert [item.identity.agent_id for item in by_type] == ["agent-1", "agent-2"]
+    by_role = facade.list_agents(role="code")
+    assert [item.identity.agent_id for item in by_role] == ["agent-1", "agent-2"]
 
     completed_snapshot = facade.get_agent("agent-2")
     assert completed_snapshot is not None

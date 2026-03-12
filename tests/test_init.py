@@ -16,7 +16,8 @@ from vibrant.project_init import ensure_project_files
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DIRECTORIES = [
     ".vibrant/skills",
-    ".vibrant/agents",
+    ".vibrant/agent-instances",
+    ".vibrant/agent-runs",
     ".vibrant/conversations",
     ".vibrant/prompts",
     ".vibrant/logs/providers/native",
@@ -30,7 +31,7 @@ EXPECTED_FILES = [
     ".vibrant/state.json",
     ".vibrant/.gitignore",
 ]
-EXPECTED_GITIGNORE_ENTRIES = ["logs/", "conversations/", "agents/*.json"]
+EXPECTED_GITIGNORE_ENTRIES = ["logs/", "conversations/", "agent-runs/*.json", "agent-instances/*.json"]
 
 
 def _run_vibrant_init(cwd: Path) -> subprocess.CompletedProcess[str]:

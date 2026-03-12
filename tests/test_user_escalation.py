@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperTrigger
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -78,7 +78,7 @@ class FollowUpAdapter:
 
 def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: str) -> None:
     record = AgentRecord(
-        identity={"agent_id": agent_id, "task_id": "gatekeeper-user_conversation", "type": AgentType.GATEKEEPER},
+        identity={"agent_id": agent_id, "task_id": "gatekeeper-user_conversation", "role": "gatekeeper"},
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
             provider_thread_id=thread_id,
@@ -125,6 +125,6 @@ async def test_start_answer_question_returns_gatekeeper_handle(tmp_path):
     )
     result = await handle.wait()
 
-    assert handle.agent_record.identity.type is AgentType.GATEKEEPER
+    assert handle.agent_record.identity.role == "gatekeeper"
     assert handle.request.trigger is GatekeeperTrigger.USER_CONVERSATION
     assert result.succeeded is True

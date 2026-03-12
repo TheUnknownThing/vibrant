@@ -66,14 +66,13 @@ class _StubAgentManager:
         task_id = kwargs.get("task_id")
         include_completed = kwargs.get("include_completed", True)
         active_only = kwargs.get("active_only", False)
-        agent_type = kwargs.get("agent_type")
-        agent_type_value = getattr(agent_type, "value", agent_type)
+        role = kwargs.get("role")
 
         snapshots = [_snapshot_from_record(record) for record in self.state_store.agent_records()]
         if task_id is not None:
             snapshots = [snapshot for snapshot in snapshots if snapshot.identity.task_id == task_id]
-        if agent_type_value is not None:
-            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.agent_type == agent_type_value]
+        if role is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.role == role.strip().lower()]
         if active_only:
             snapshots = [snapshot for snapshot in snapshots if snapshot.runtime.active]
         elif not include_completed:
@@ -99,7 +98,7 @@ class _StubAgentManager:
         error=None,
     ):
         return {
-            "identity": {"agent_id": agent_id, "task_id": "task-1", "agent_type": "code"},
+            "identity": {"agent_id": agent_id, "task_id": "task-1", "role": "code"},
             "runtime": {"status": "running", "state": "running", "has_handle": True, "active": True, "done": False, "awaiting_input": False},
             "workspace": {"branch": "vibrant/task-1", "worktree_path": "/tmp/task-1"},
             "outcome": {"summary": None, "error": None, "output": None},
@@ -116,7 +115,7 @@ def _snapshot_from_record(record: AgentRecord) -> OrchestratorAgentSnapshot:
         identity=AgentSnapshotIdentity(
             agent_id=record.identity.agent_id,
             task_id=record.identity.task_id,
-            agent_type=record.identity.type.value,
+            role=record.identity.role,
         ),
         runtime=AgentSnapshotRuntime(
             status=status,
@@ -176,7 +175,7 @@ def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, Quest
 def _persist_agent_record(state_store: StateStore, *, agent_id: str, task_id: str, status: str = "completed") -> None:
     record = AgentRecord.model_validate(
         {
-            "identity": {"agent_id": agent_id, "task_id": task_id, "type": "code"},
+            "identity": {"agent_id": agent_id, "task_id": task_id, "role": "code"},
             "lifecycle": {"status": status},
             "context": {"branch": f"vibrant/{task_id}", "worktree_path": f"/tmp/{task_id}", "prompt_used": "Prompt"},
             "outcome": {"summary": "Implemented successfully." if status == "completed" else None},
@@ -205,6 +204,7 @@ def test_question_service_tracks_structured_records(tmp_path: Path) -> None:
 
     created = questions.ask("Should we ship the UI in v1?", source_agent_id="gatekeeper-1")
     assert created.question_id.startswith("question-")
+    assert created.source_role == "gatekeeper"
     assert state_store.state.pending_questions == ["Should we ship the UI in v1?"]
     assert state_store.state.questions[0].source_agent_id == "gatekeeper-1"
 

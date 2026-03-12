@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 
 from .base import AgentBase
 
@@ -22,8 +22,8 @@ class CodeAgent(AgentBase):
     Interactive requests are auto-rejected.
     """
 
-    def get_agent_type(self) -> AgentType:
-        return AgentType.CODE
+    def get_agent_role(self) -> str:
+        return "code"
 
     def build_agent_record(
         self,
@@ -52,7 +52,7 @@ class CodeAgent(AgentBase):
             identity={
                 "agent_id": agent_id,
                 "task_id": task.id,
-                "type": AgentType.CODE,
+                "role": "code",
             },
             lifecycle={"status": AgentStatus.SPAWNING},
             context={

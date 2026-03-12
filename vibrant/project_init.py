@@ -14,12 +14,15 @@ from .models.state import OrchestratorState, OrchestratorStatus
 GITIGNORE_ENTRIES = [
     "logs/",
     "conversations/",
-    "agents/*.json",
+    "agent-runs/*.json",
+    "agent-instances/*.json",
     "state.json",
 ]
 
 DIRECTORIES = [
     Path("skills"),
+    Path("agent-instances"),
+    Path("agent-runs"),
     Path("agents"),
     Path("conversations"),
     Path("prompts"),

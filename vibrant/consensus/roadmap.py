@@ -62,6 +62,7 @@ class RoadmapParser:
         lines = [f"# Roadmap — Project {document.project}", ""]
         for task in document.tasks:
             prompt_lines = self._render_prompt_lines(task.prompt)
+            role_lines = [f"- **Agent Role**: {task.agent_role}"] if task.agent_role != "code" else []
             lines.extend(
                 [
                     f"### Task {task.id} — {task.title}",
@@ -74,6 +75,7 @@ class RoadmapParser:
                     f"- **Max Retries**: {task.max_retries}",
                 ]
             )
+            lines.extend(role_lines)
             lines.extend(prompt_lines)
             lines.extend(["", "**Acceptance Criteria**:"])
             if task.acceptance_criteria:
@@ -225,6 +227,7 @@ class RoadmapParser:
             title=title.strip(),
             status=self._parse_status(metadata.get("Status", TaskStatus.PENDING.value)),
             priority=self._parse_priority(metadata.get("Priority")),
+            agent_role=metadata.get("Agent Role", "code"),
             dependencies=self._parse_csv_list(metadata.get("Dependencies", "")),
             skills=self._parse_csv_list(metadata.get("Skills", "")),
             branch=metadata.get("Branch") or None,

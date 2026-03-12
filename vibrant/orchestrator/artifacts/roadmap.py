@@ -146,6 +146,7 @@ class RoadmapService:
         title: str | None = None,
         acceptance_criteria: Sequence[str] | None = None,
         status: TaskStatus | str | None = None,
+        agent_role: str | None = None,
         branch: str | None = None,
         retry_count: int | None = None,
         max_retries: int | None = None,
@@ -166,6 +167,8 @@ class RoadmapService:
             updated.title = title
         if acceptance_criteria is not None:
             updated.acceptance_criteria = list(acceptance_criteria)
+        if agent_role is not None:
+            updated.agent_role = agent_role
         if branch is not None:
             updated.branch = branch
         if retry_count is not None:
@@ -236,6 +239,7 @@ class RoadmapService:
 def _apply_task_definition(existing: TaskInfo, incoming: TaskInfo) -> None:
     existing.title = incoming.title
     existing.acceptance_criteria = list(incoming.acceptance_criteria)
+    existing.agent_role = incoming.agent_role
     existing.prompt = incoming.prompt
     existing.skills = list(incoming.skills)
     existing.dependencies = list(incoming.dependencies)

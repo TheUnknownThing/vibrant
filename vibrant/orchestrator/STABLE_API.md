@@ -143,7 +143,7 @@ Fields:
   - Stable agent identifiers.
   - `agent_id: str` — stable identifier for the agent attempt.
   - `task_id: str` — roadmap task currently or previously associated with the agent.
-  - `agent_type: str` — logical type such as `code`.
+  - `role: str` — logical role such as `code`.
 - `runtime: AgentSnapshotRuntime`
   - Live/runtime-oriented lifecycle state.
   - `status: str` — durable agent status value.
@@ -256,7 +256,7 @@ It is the intended long-term boundary for:
   - Returns the durable agent records currently visible through the facade.
 - `get_agent(agent_id) -> OrchestratorAgentSnapshot | None`
   - Returns one stable agent snapshot by id.
-- `list_agents(*, task_id=None, agent_type=None, include_completed=True, active_only=False) -> list[OrchestratorAgentSnapshot]`
+- `list_agents(*, task_id=None, role=None, include_completed=True, active_only=False) -> list[OrchestratorAgentSnapshot]`
   - Returns filtered stable agent snapshots.
 - `list_active_agents() -> list[OrchestratorAgentSnapshot]`
   - Convenience projection equivalent to `list_agents(active_only=True)`.

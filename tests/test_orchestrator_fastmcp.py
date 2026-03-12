@@ -222,8 +222,11 @@ async def test_create_orchestrator_fastmcp_accepts_consensus_context_updates(
         "context": "## Objectives\nShip MCP-driven orchestration.",
     })
 
-    assert consensus_result["context"] == "## Objectives\nShip MCP-driven orchestration."
-    assert alias_result["context"] == "## Objectives\nShip MCP-driven orchestration."
+    consensus_payload = getattr(consensus_result, "structured_content", consensus_result)
+    alias_payload = getattr(alias_result, "structured_content", alias_result)
+
+    assert consensus_payload["context"] == "## Objectives\nShip MCP-driven orchestration."
+    assert alias_payload["context"] == "## Objectives\nShip MCP-driven orchestration."
 
 
 def test_create_orchestrator_fastmcp_app_exposes_auth_and_resource_routes(

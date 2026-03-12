@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.providers.base import RuntimeMode
 from vibrant.prompts import build_merge_prompt as render_merge_prompt
 
@@ -18,8 +18,8 @@ class MergeAgent(AgentBase):
     branches and resolve conflicts across the repository.
     """
 
-    def get_agent_type(self) -> AgentType:
-        return AgentType.MERGE
+    def get_agent_role(self) -> str:
+        return "merge"
 
     def get_thread_runtime_mode(self) -> RuntimeMode:
         return RuntimeMode.FULL_ACCESS
@@ -61,7 +61,7 @@ class MergeAgent(AgentBase):
             identity={
                 "agent_id": agent_id,
                 "task_id": task_id,
-                "type": AgentType.MERGE,
+                "role": "merge",
             },
             lifecycle={"status": AgentStatus.SPAWNING},
             context={

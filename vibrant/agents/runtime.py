@@ -44,7 +44,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
+from vibrant.models.agent import AgentRecord, AgentStatus, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 
 logger = logging.getLogger(__name__)
@@ -506,7 +506,7 @@ class BaseAgentRuntime:
             if not future.done():
                 future.set_result(result)
 
-        asyncio.create_task(_run_and_resolve(), name=f"agent-runtime-{agent_record.identity.agent_id}")
+        asyncio.create_task(_run_and_resolve(), name=f"agent-runtime-{agent_record.identity.run_id}")
         # Yield control so the task has a chance to start.
         await asyncio.sleep(0)
         return handle

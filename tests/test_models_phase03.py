@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, ProviderResumeHandle
 from vibrant.models.consensus import (
     ConsensusDocument,
     ConsensusStatus,
@@ -27,7 +27,7 @@ class TestAgentRecord:
             identity={
                 "agent_id": "agent-task-001",
                 "task_id": "task-001",
-                "type": AgentType.CODE,
+                "role": "code",
             },
             lifecycle={
                 "status": AgentStatus.RUNNING,
@@ -54,6 +54,8 @@ class TestAgentRecord:
         dumped = record.model_dump(mode="json")
 
         assert restored == record
+        assert restored.identity.role == "code"
+        assert dumped["identity"]["role"] == "code"
         assert dumped["provider"]["resume_handle"] == ProviderResumeHandle(
             kind="codex",
             thread_id="thread_abc123",
@@ -64,7 +66,7 @@ class TestAgentRecord:
 
     def test_status_transitions_are_validated(self):
         record = AgentRecord(
-            identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE}
+            identity={"agent_id": "agent-1", "task_id": "task-1", "role": "code"}
         )
 
         record.transition_to(AgentStatus.CONNECTING)
@@ -86,7 +88,7 @@ class TestAgentRecord:
                 "identity": {
                     "agent_id": "agent-gatekeeper-user_discussion-001",
                     "task_id": "gatekeeper-user_discussion",
-                    "type": "gatekeeper",
+                    "role": "gatekeeper",
                 },
                 "lifecycle": {"status": "running"},
                 "context": {"worktree_path": "/tmp/project"},
@@ -105,7 +107,7 @@ class TestAgentRecord:
             }
         )
 
-        assert record.identity.type is AgentType.GATEKEEPER
+        assert record.identity.role == "gatekeeper"
         assert record.identity.task_id == "gatekeeper-user_discussion"
         assert record.provider.kind == "codex"
         assert record.provider.transport == "app-server-json-rpc"
@@ -128,6 +130,19 @@ class TestAgentRecord:
                     "lifecycle": {"status": "running"},
                 }
             )
+
+    def test_role_only_identity_round_trips(self):
+        record = AgentRecord.model_validate(
+            {
+                "identity": {
+                    "agent_id": "merge-task-001",
+                    "task_id": "task-001",
+                    "role": "merge",
+                }
+            }
+        )
+
+        assert record.identity.role == "merge"
 
 
 class TestOrchestratorState:

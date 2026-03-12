@@ -51,8 +51,9 @@ class AgentToolHandlers:
             raise KeyError(f"Unknown agent: {agent_id}")
         return {
             "agent_id": snapshot.identity.agent_id,
+            "run_id": snapshot.identity.run_id,
             "task_id": snapshot.identity.task_id,
-            "agent_type": snapshot.identity.agent_type,
+            "role": snapshot.identity.role,
             "status": snapshot.runtime.status,
             "done": snapshot.runtime.done,
             "awaiting_input": snapshot.runtime.awaiting_input,

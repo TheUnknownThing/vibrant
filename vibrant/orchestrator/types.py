@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
 from vibrant.agents.gatekeeper import GatekeeperRunResult
+from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator.execution.git_manager import GitMergeResult
@@ -91,8 +91,11 @@ class AgentSnapshotIdentity:
     """Stable identifiers for one orchestrator-facing agent snapshot."""
 
     agent_id: str
-    task_id: str
-    agent_type: str
+    task_id: str | None
+    role: str
+    run_id: str | None = None
+    scope_type: str | None = None
+    scope_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -141,7 +144,7 @@ class AgentSnapshotProvider:
 
 @dataclass(slots=True)
 class OrchestratorAgentSnapshot:
-    """Stable orchestrator-facing view of one agent run."""
+    """Stable orchestrator-facing view of one agent instance and its latest run."""
 
     identity: AgentSnapshotIdentity
     runtime: AgentSnapshotRuntime

@@ -12,7 +12,7 @@ import pytest
 from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
 from vibrant.agents.runtime import InputRequest, RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
@@ -323,7 +323,7 @@ class FakeGatekeeper:
             identity={
                 "agent_id": f"gatekeeper-{request.trigger.value}-test",
                 "task_id": f"gatekeeper-{request.trigger.value}",
-                "type": AgentType.GATEKEEPER,
+                "role": "gatekeeper",
             },
             lifecycle={
                 "status": AgentStatus.AWAITING_INPUT if questions else AgentStatus.COMPLETED,
@@ -367,11 +367,11 @@ def _agent_record(
     agent_id: str,
     *,
     task_id: str = "task-001",
-    agent_type: AgentType = AgentType.CODE,
+    role: str = "code",
     status: AgentStatus = AgentStatus.RUNNING,
 ) -> AgentRecord:
     return AgentRecord(
-        identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type},
+        identity={"agent_id": agent_id, "task_id": task_id, "role": role},
         lifecycle={"status": status},
     )
 
@@ -416,7 +416,36 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")
     assert roadmap.tasks[0].status is TaskStatus.ACCEPTED
 
-    agent_files = sorted((repo / ".vibrant" / "agents").glob("agent-task-001-*.json"))
+    agent_files = sorted((repo / ".vibrant" / "agent-runs").glob("run-agent-task-001-*.json"))
+    assert len(agent_files) == 1
+
+
+@pytest.mark.asyncio
+async def test_task_execution_uses_task_agent_role_for_run_creation(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    roadmap_path = repo / ".vibrant" / "roadmap.md"
+    roadmap = RoadmapParser().parse_file(roadmap_path)
+    roadmap.tasks[0].agent_role = "test"
+    RoadmapParser().write(roadmap_path, roadmap)
+
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature\n"]
+
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    assert result.agent_record is not None
+    assert result.agent_record.identity.role == "test"
+    assert result.agent_record.provider.runtime_mode == "read-only"
+    agent_files = sorted((repo / ".vibrant" / "agent-runs").glob("run-test-task-001-*.json"))
     assert len(agent_files) == 1
     record = AgentRecord.model_validate_json(agent_files[0].read_text(encoding="utf-8"))
     assert record.lifecycle.status is record.lifecycle.status.COMPLETED
@@ -426,7 +455,7 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     assert record.context.skills_loaded == ["testing-strategy"]
     assert record.lifecycle.pid is not None
     assert record.provider.provider_thread_id == "thread-task-001-1"
-    assert record.provider.runtime_mode == "workspace-write"
+    assert record.provider.runtime_mode == "read-only"
     assert record.provider.native_event_log is not None
     assert record.provider.canonical_event_log is not None
     assert lifecycle.state_backend.state.total_agent_spawns == 2
@@ -509,7 +538,7 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
     handle = await lifecycle.start_gatekeeper_message("Build an auth MVP for the app.")
 
     for _ in range(50):
-        active = lifecycle.agent_manager.list_agents(agent_type=AgentType.GATEKEEPER, include_completed=False)
+        active = lifecycle.agent_manager.list_agents(role="gatekeeper", include_completed=False)
         if active and active[0].runtime.awaiting_input:
             break
         await asyncio.sleep(0)
@@ -518,7 +547,7 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
 
     snapshot = lifecycle.agent_manager.get_agent(handle.agent_record.identity.agent_id)
     assert snapshot is not None
-    assert snapshot.identity.agent_type == AgentType.GATEKEEPER.value
+    assert snapshot.identity.role == "gatekeeper"
     assert snapshot.runtime.has_handle is True
     assert snapshot.runtime.awaiting_input is True
     assert snapshot.runtime.input_requests[0].request_id == "req-1"
@@ -675,7 +704,7 @@ async def test_task_execution_service_starts_with_handle_snapshot(tmp_path):
     assert len(snapshots) == 1
     assert snapshots[0].identity.agent_id == attempt.agent_record.identity.agent_id
     assert snapshots[0].identity.task_id == task.id
-    assert snapshots[0].identity.agent_type == "code"
+    assert snapshots[0].identity.role == "code"
 
     result = await lifecycle.agent_manager.wait_for_task(attempt)
 
@@ -705,7 +734,7 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
     assert len(active) == 1
     assert active[0].identity.agent_id == attempt.agent_record.identity.agent_id
     assert active[0].identity.task_id == task.id
-    assert active[0].identity.agent_type == "code"
+    assert active[0].identity.role == "code"
     assert active[0].runtime.has_handle is True
     assert active[0].runtime.active is True
     assert active[0].provider.thread_id == "thread-task-001-1"
@@ -755,6 +784,90 @@ def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(t
     assert active[0].runtime.awaiting_input is True
 
 
+@pytest.mark.asyncio
+async def test_agent_management_service_exposes_managed_agent_instance_lifecycle(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["instance-managed feature\n"]
+
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+    assert lifecycle.dispatcher is not None
+
+    lifecycle.workflow_service.begin_execution_if_needed()
+    task = lifecycle.dispatcher.dispatch_next_task()
+    assert task is not None
+
+    attempt = await lifecycle.agent_manager.start_task(task)
+    instance = lifecycle.agent_manager.get_instance(attempt.agent_record.identity.agent_id)
+
+    assert instance is not None
+    assert instance.agent_id == attempt.agent_record.identity.agent_id
+    assert instance.role == "code"
+    assert instance.scope_type == "task"
+    assert instance.scope_id == task.id
+    assert instance.record.latest_run_id == attempt.agent_record.identity.run_id
+    assert instance.latest_run() is not None
+    assert instance.latest_run().identity.run_id == attempt.agent_record.identity.run_id
+    assert instance.snapshot().identity.run_id == attempt.agent_record.identity.run_id
+
+    result = await lifecycle.agent_manager.wait_for_task(attempt)
+
+    assert result.outcome == "accepted"
+    assert instance.latest_run() is not None
+    assert instance.latest_run().identity.run_id == attempt.agent_record.identity.run_id
+    assert instance.active_run() is None
+    assert instance.snapshot().runtime.done is True
+
+
+def test_agent_management_service_tracks_multiple_runs_on_one_instance(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+
+    instance = lifecycle.agent_manager.resolve_instance(
+        role="code",
+        scope_type="task",
+        scope_id="task-001",
+    )
+    first_run = instance.create_run_record(
+        task_id="task-001",
+        branch="vibrant/task-001",
+        worktree_path=str(repo),
+        prompt="first run",
+    )
+    first_run.lifecycle.status = AgentStatus.FAILED
+    lifecycle.agent_registry.upsert(first_run, increment_spawn=True)
+
+    second_run = instance.create_run_record(
+        task_id="task-001",
+        branch="vibrant/task-001",
+        worktree_path=str(repo),
+        prompt="second run",
+    )
+    second_run.lifecycle.status = AgentStatus.COMPLETED
+    lifecycle.agent_registry.upsert(second_run, increment_spawn=True)
+
+    instances = lifecycle.agent_manager.list_instances(task_id="task-001")
+
+    assert len(instances) == 1
+    assert instances[0].agent_id == instance.agent_id
+    assert instances[0].record.latest_run_id == second_run.identity.run_id
+    assert instances[0].latest_run() is not None
+    assert instances[0].latest_run().identity.run_id == second_run.identity.run_id
+    assert instances[0].snapshot().identity.run_id == second_run.identity.run_id
+
+
 def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path):
     repo, engine = _prepare_project(tmp_path)
     lifecycle = create_orchestrator(
@@ -764,12 +877,12 @@ def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path)
         adapter_factory=FakeCodeAgentAdapter,
     )
 
-    code_record = _agent_record("agent-task-001-code", agent_type=AgentType.CODE)
-    merge_record = _agent_record("merge-task-001-merge", agent_type=AgentType.MERGE)
+    code_record = _agent_record("agent-task-001-code", role="code")
+    merge_record = _agent_record("merge-task-001-merge", role="merge")
     lifecycle.agent_registry.upsert(code_record, increment_spawn=True)
     lifecycle.agent_registry.upsert(merge_record, increment_spawn=True)
 
-    snapshots = lifecycle.agent_manager.list_agents(agent_type=" CODE ")
+    snapshots = lifecycle.agent_manager.list_agents(role=" CODE ")
 
     assert [snapshot.identity.agent_id for snapshot in snapshots] == [code_record.identity.agent_id]
 
@@ -783,5 +896,5 @@ def test_agent_management_service_rejects_invalid_string_agent_type_filters(tmp_
         adapter_factory=FakeCodeAgentAdapter,
     )
 
-    with pytest.raises(ValueError, match="Unsupported agent type filter"):
-        lifecycle.agent_manager.list_agents(agent_type="bogus")
+    with pytest.raises(ValueError, match="Unsupported agent role filter"):
+        lifecycle.agent_manager.list_agents(role="bogus")

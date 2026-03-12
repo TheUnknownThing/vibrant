@@ -5,6 +5,7 @@ from __future__ import annotations
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.state import GatekeeperStatus, OrchestratorState, OrchestratorStatus, reconcile_question_records
+from vibrant.orchestrator.agents.catalog import build_builtin_role_catalog
 from vibrant.providers.base import CanonicalEvent
 from .backend import OrchestratorStateBackend
 
@@ -13,6 +14,10 @@ from .projection import build_user_input_requested_event, rebuild_derived_state,
 
 if False:  # pragma: no cover
     from ..agents.store import AgentRecordStore
+
+
+_ROLE_CATALOG = build_builtin_role_catalog()
+_DEFAULT_QUESTION_SOURCE_ROLE = _ROLE_CATALOG.default_question_source_role()
 
 
 class StateStore:
@@ -101,7 +106,7 @@ class StateStore:
 
     def apply_gatekeeper_result(self, result: GatekeeperRunResult) -> list[CanonicalEvent]:
         if result.agent_record is not None:
-            increment_spawn = self._agent_store is None or result.agent_record.identity.agent_id not in self._agent_store
+            increment_spawn = self._agent_store is None or result.agent_record.identity.run_id not in self._agent_store
             if self._agent_store is not None:
                 self._agent_store.upsert(
                     result.agent_record,
@@ -122,12 +127,17 @@ class StateStore:
             for request in result.input_requests
         ]
         if pending_messages:
+            source_role = _DEFAULT_QUESTION_SOURCE_ROLE
+            if result.agent_record is not None:
+                role_spec = _ROLE_CATALOG.try_get(result.agent_record.identity.role)
+                if role_spec is not None and role_spec.question_source_role is not None:
+                    source_role = role_spec.question_source_role
             self.engine.state.replace_questions(
                 reconcile_question_records(
                     self.engine.state.questions,
                     pending_messages,
                     source_agent_id=result.agent_record.identity.agent_id if result.agent_record is not None else None,
-                    source_role="gatekeeper",
+                    source_role=source_role,
                 )
             )
             self.engine.state.gatekeeper_status = GatekeeperStatus.AWAITING_USER

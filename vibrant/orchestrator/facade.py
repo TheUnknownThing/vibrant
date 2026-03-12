@@ -10,7 +10,7 @@ from pathlib import Path
 from vibrant.agents.gatekeeper import GatekeeperRunResult
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus import RoadmapDocument
-from vibrant.models.agent import AgentRecord, AgentType
+from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus, QuestionPriority, QuestionRecord
 from vibrant.models.task import TaskInfo, TaskStatus
@@ -100,20 +100,41 @@ class OrchestratorFacade:
     def list_agent_records(self) -> list[AgentRecord]:
         return self.orchestrator.agent_manager.list_records()
 
+    def list_agent_run_records(self) -> list[AgentRecord]:
+        return self.orchestrator.agent_manager.list_run_records()
+
     def get_agent(self, agent_id: str) -> OrchestratorAgentSnapshot | None:
         return self.orchestrator.agent_manager.get_agent(agent_id)
+
+    def get_agent_instance(self, agent_id: str) -> OrchestratorAgentSnapshot | None:
+        return self.orchestrator.agent_manager.get_agent_instance(agent_id)
 
     def list_agents(
         self,
         *,
         task_id: str | None = None,
-        agent_type: AgentType | str | None = None,
+        role: str | None = None,
         include_completed: bool = True,
         active_only: bool = False,
     ) -> list[OrchestratorAgentSnapshot]:
         return self.orchestrator.agent_manager.list_agents(
             task_id=task_id,
-            agent_type=agent_type,
+            role=role,
+            include_completed=include_completed,
+            active_only=active_only,
+        )
+
+    def list_agent_instances(
+        self,
+        *,
+        task_id: str | None = None,
+        role: str | None = None,
+        include_completed: bool = True,
+        active_only: bool = False,
+    ) -> list[OrchestratorAgentSnapshot]:
+        return self.orchestrator.agent_manager.list_agent_instances(
+            task_id=task_id,
+            role=role,
             include_completed=include_completed,
             active_only=active_only,
         )
@@ -146,6 +167,7 @@ class OrchestratorFacade:
         title: str | None = None,
         acceptance_criteria: Sequence[str] | None = None,
         status: TaskStatus | str | None = None,
+        agent_role: str | None = None,
         branch: str | None = None,
         retry_count: int | None = None,
         max_retries: int | None = None,
@@ -160,6 +182,7 @@ class OrchestratorFacade:
             title=title,
             acceptance_criteria=acceptance_criteria,
             status=status,
+            agent_role=agent_role,
             branch=branch,
             retry_count=retry_count,
             max_retries=max_retries,
@@ -406,6 +429,9 @@ class OrchestratorFacade:
             raise ValueError(f"Invalid orchestrator state transition: {current.value} -> {next_status.value}")
 
         self._sync_consensus_status(next_status)
+        if self.orchestrator.state_store.status is next_status:
+            self.orchestrator.state_store.refresh()
+            return
         self.orchestrator.state_store.transition_to(next_status)
         self.orchestrator.state_store.refresh()
 

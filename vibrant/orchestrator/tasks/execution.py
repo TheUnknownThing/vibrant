@@ -8,6 +8,7 @@ from vibrant.agents.runtime import AgentHandle
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo
 
+from ..agents.instance import ManagedAgentInstance
 from ..agents.registry import AgentRegistry
 from ..agents.runtime import AgentRuntimeService
 from ..artifacts.roadmap import RoadmapService
@@ -113,18 +114,32 @@ class TaskExecutionService:
         self.roadmap_service.persist()
 
         prompt = self.prompt_service.build_task_prompt(task, worktree)
-        agent_record = self.agent_registry.create_code_agent_record(task=task, worktree=worktree, prompt=prompt)
+        agent_instance = ManagedAgentInstance.from_record(
+            self.agent_registry.resolve_instance(
+                role=task.agent_role,
+                scope_type="task",
+                scope_id=task.id,
+            ),
+            agent_registry=self.agent_registry,
+            runtime_service=self.runtime_service,
+        )
         run_record = self.task_store.record_run_started(
             task=task,
-            agent_id=agent_record.identity.agent_id,
+            agent_id=agent_instance.agent_id,
             worktree_path=str(worktree.path),
         )
         try:
-            handle = await self.runtime_service.start_task(
-                worktree=worktree,
+            started_run = await agent_instance.start_new_run(
+                task_id=task.id,
+                branch=task.branch,
+                worktree_path=str(worktree.path),
                 prompt=prompt,
-                agent_record=agent_record,
+                cwd=str(worktree.path),
+                skills=list(task.skills),
+                retry_count=task.retry_count,
+                max_retries=task.max_retries,
                 resume_thread_id=resume_thread_id,
+                increment_spawn=True,
             )
         except Exception as exc:
             self.task_store.record_run_finished(task.id, status=TaskRunStatus.FAILED, error=str(exc))
@@ -133,8 +148,8 @@ class TaskExecutionService:
             task=task,
             worktree=worktree,
             prompt=prompt,
-            agent_record=agent_record,
-            handle=handle,
+            agent_record=started_run.agent_record,
+            handle=started_run.handle,
             run_record=run_record,
         )
 

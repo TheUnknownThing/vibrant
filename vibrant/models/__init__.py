@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from .agent import AgentInstanceRecord, AgentProviderMetadata, AgentRecord, AgentRunRecord, AgentStatus
 from .consensus import (
     ConsensusDocument,
     ConsensusPool,
@@ -109,10 +109,11 @@ class ThreadInfo(BaseModel):
 
 
 __all__ = [
+    "AgentInstanceRecord",
     "AgentProviderMetadata",
     "AgentRecord",
+    "AgentRunRecord",
     "AgentStatus",
-    "AgentType",
     "AppSettings",
     "ApprovalMode",
     "ConsensusDocument",
