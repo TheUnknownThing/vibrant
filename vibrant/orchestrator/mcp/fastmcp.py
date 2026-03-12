@@ -81,65 +81,73 @@ def create_orchestrator_fastmcp(
         "vibrant://consensus/current",
         name="consensus.current",
         description=_resource_description(registry, "consensus.current"),
+        mime_type="application/json",
     )
-    async def consensus_current() -> dict[str, Any] | None:
-        return await registry.read_resource("consensus.current")
+    async def consensus_current() -> str:
+        return _resource_body(await registry.read_resource("consensus.current"))
 
     @server.resource(
         "vibrant://roadmap/current",
         name="roadmap.current",
         description=_resource_description(registry, "roadmap.current"),
+        mime_type="application/json",
     )
-    async def roadmap_current() -> dict[str, Any] | None:
-        return await registry.read_resource("roadmap.current")
+    async def roadmap_current() -> str:
+        return _resource_body(await registry.read_resource("roadmap.current"))
 
     @server.resource(
         "vibrant://workflow/status",
         name="workflow.status",
         description=_resource_description(registry, "workflow.status"),
+        mime_type="application/json",
     )
-    async def workflow_status() -> dict[str, Any]:
-        return await registry.read_resource("workflow.status")
+    async def workflow_status() -> str:
+        return _resource_body(await registry.read_resource("workflow.status"))
 
     @server.resource(
         "vibrant://questions/pending",
         name="questions.pending",
         description=_resource_description(registry, "questions.pending"),
+        mime_type="application/json",
     )
-    async def questions_pending() -> list[dict[str, Any]]:
-        return await registry.read_resource("questions.pending")
+    async def questions_pending() -> str:
+        return _resource_body(await registry.read_resource("questions.pending"))
 
     @server.resource(
         "vibrant://task/{task_id}",
         name="task.by_id",
         description=_resource_description(registry, "task.by_id"),
+        mime_type="application/json",
     )
-    async def task_by_id(task_id: str) -> dict[str, Any]:
-        return await registry.read_resource("task.by_id", task_id=task_id)
+    async def task_by_id(task_id: str) -> str:
+        return _resource_body(await registry.read_resource("task.by_id", task_id=task_id))
 
     @server.resource(
         "vibrant://task/{task_id}/assigned",
         name="task.assigned",
         description=_resource_description(registry, "task.assigned"),
+        mime_type="application/json",
     )
-    async def task_assigned(task_id: str) -> dict[str, Any]:
-        return await registry.read_resource("task.assigned", task_id=task_id)
+    async def task_assigned(task_id: str) -> str:
+        return _resource_body(await registry.read_resource("task.assigned", task_id=task_id))
 
     @server.resource(
         "vibrant://agent/{agent_id}/status",
         name="agent.status",
         description=_resource_description(registry, "agent.status"),
+        mime_type="application/json",
     )
-    async def agent_status(agent_id: str) -> dict[str, Any] | list[dict[str, Any]]:
-        return await registry.read_resource("agent.status", agent_id=agent_id)
+    async def agent_status(agent_id: str) -> str:
+        return _resource_body(await registry.read_resource("agent.status", agent_id=agent_id))
 
     @server.resource(
         "vibrant://events/recent/{task_id}{?limit}",
         name="events.recent",
         description=_resource_description(registry, "events.recent"),
+        mime_type="application/json",
     )
-    async def events_recent(task_id: str, limit: int = 20) -> list[dict[str, Any]]:
-        return await registry.read_resource("events.recent", task_id=task_id, limit=limit)
+    async def events_recent(task_id: str, limit: int = 20) -> str:
+        return _resource_body(await registry.read_resource("events.recent", task_id=task_id, limit=limit))
 
     @server.tool(
         name="agent_get",
@@ -471,6 +479,10 @@ def _tool_description(registry: OrchestratorMCPServer, name: str) -> str:
     if definition is None:
         raise KeyError(f"Unknown orchestrator MCP tool: {name}")
     return definition.description
+
+
+def _resource_body(payload: Any) -> str:
+    return json.dumps(payload)
 
 
 def _header_value(scope: dict[str, Any], header_name: str) -> str | None:

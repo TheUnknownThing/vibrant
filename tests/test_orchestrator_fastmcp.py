@@ -190,6 +190,18 @@ async def test_create_orchestrator_fastmcp_registers_tools_and_resources(tmp_pat
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _FASTMCP_AVAILABLE, reason="fastmcp is optional")
+async def test_create_orchestrator_fastmcp_serializes_resources_as_json(tmp_path: Path) -> None:
+    registry = OrchestratorMCPServer(_build_facade(tmp_path))
+    server = create_orchestrator_fastmcp(registry)
+    resource = await server._local_provider.get_resource("vibrant://workflow/status")
+
+    assert resource is not None
+    assert resource.mime_type == "application/json"
+    assert json.loads(await resource.read()) == {"status": "init"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _FASTMCP_AVAILABLE, reason="fastmcp is optional")
 async def test_create_orchestrator_fastmcp_binds_events_recent_limit_query_param(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
