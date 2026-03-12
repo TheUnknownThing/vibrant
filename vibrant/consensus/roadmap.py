@@ -138,10 +138,8 @@ class RoadmapParser:
             f"Consensus Status: {consensus.status.value}",
             f"Consensus Version: {consensus.version}",
         ]
-        if consensus.objectives:
-            context_parts.append(f"Objectives:\n{consensus.objectives}")
-        if consensus.getting_started:
-            context_parts.append(f"Getting Started:\n{consensus.getting_started}")
+        if consensus.context.strip():
+            context_parts.append(f"Consensus Context:\n{consensus.context.strip()}")
         if task.prompt:
             context_parts.append(f"Task Notes:\n{task.prompt}")
         if additional_context.strip():

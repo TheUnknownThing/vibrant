@@ -5,24 +5,15 @@ from __future__ import annotations
 import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
 from vibrant.consensus.parser import ConsensusParser
 from vibrant.consensus.writer import ConsensusLockError, ConsensusWriter
-from vibrant.models.consensus import ConsensusDecision, ConsensusDocument, ConsensusStatus, DecisionAuthor
+from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 
 
-SAMPLE_CONSENSUS = """# Consensus Pool — Project Vibrant
-<!-- META:START -->
-- **Project**: Vibrant
-- **Created**: 2026-03-07T22:00:00Z
-- **Last Updated**: 2026-03-08T01:15:00Z
-- **Version**: 7
-- **Status**: EXECUTING
-<!-- META:END -->
-## Objectives
+SAMPLE_CONTEXT = """## Objectives
 <!-- OBJECTIVES:START -->
 Ship the orchestrator core.
 
@@ -45,23 +36,28 @@ Keep the consensus concise.
 - **Impact**: TUI and engine both surface pause.
 <!-- DECISIONS:END -->
 ## Getting Started
-Read `docs/spec.md` first, then `.vibrant/roadmap.md`.
+Read `docs/spec.md` first, then `.vibrant/roadmap.md`."""
+
+SAMPLE_CONSENSUS = f"""# Consensus Pool — Project Vibrant
+<!-- META:START -->
+- **Project**: Vibrant
+- **Created**: 2026-03-07T22:00:00Z
+- **Last Updated**: 2026-03-08T01:15:00Z
+- **Version**: 7
+- **Status**: EXECUTING
+<!-- META:END -->
+{SAMPLE_CONTEXT}
 """
 
 
 class TestConsensusParserWriter:
-    def test_parse_sample_consensus_extracts_all_sections(self):
+    def test_parse_sample_consensus_extracts_meta_and_raw_context(self):
         document = ConsensusParser().parse(SAMPLE_CONSENSUS)
 
         assert document.project == "Vibrant"
         assert document.version == 7
         assert document.status is ConsensusStatus.EXECUTING
-        assert document.objectives == "Ship the orchestrator core.\n\nKeep the consensus concise."
-        assert len(document.decisions) == 2
-        assert document.decisions[0].title == "Use Markdown sections"
-        assert document.decisions[0].made_by is DecisionAuthor.GATEKEEPER
-        assert document.decisions[1].made_by is DecisionAuthor.USER
-        assert document.getting_started == "Read `docs/spec.md` first, then `.vibrant/roadmap.md`."
+        assert document.context == SAMPLE_CONTEXT
 
     def test_write_updates_increment_version_and_create_snapshot(self, tmp_path):
         consensus_path = tmp_path / ".vibrant" / "consensus.md"
@@ -71,7 +67,7 @@ class TestConsensusParserWriter:
         parser = ConsensusParser()
         writer = ConsensusWriter(parser=parser)
         document = parser.parse_file(consensus_path)
-        document.objectives += "\n\nTrack every write."
+        document.context += "\n\n## Questions\n- [blocking] Track every write."
 
         written = writer.write(consensus_path, document)
         reparsed = parser.parse_file(consensus_path)
@@ -79,7 +75,7 @@ class TestConsensusParserWriter:
 
         assert written.version == 8
         assert reparsed.version == 8
-        assert reparsed.objectives.endswith("Track every write.")
+        assert reparsed.context.endswith("Track every write.")
         assert len(snapshots) == 1
         assert "- **Version**: 7" in snapshots[0].read_text(encoding="utf-8")
 
@@ -130,7 +126,7 @@ with lock_path.open('a+', encoding='utf-8') as handle:
 
         assert process.returncode == 0
 
-    def test_round_trip_parse_modify_write_parse_preserves_data(self, tmp_path):
+    def test_round_trip_parse_modify_write_parse_preserves_context(self, tmp_path):
         consensus_path = tmp_path / ".vibrant" / "consensus.md"
         consensus_path.parent.mkdir(parents=True)
 
@@ -140,35 +136,28 @@ with lock_path.open('a+', encoding='utf-8') as handle:
             updated_at=datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc),
             version=0,
             status=ConsensusStatus.PLANNING,
-            objectives="Build the control plane.",
-            decisions=[
-                ConsensusDecision(
-                    title="Use atomic writes",
-                    date=datetime(2026, 3, 7, 22, 15, tzinfo=timezone.utc),
-                    made_by=DecisionAuthor.GATEKEEPER,
-                    context="Consensus is durable state.",
-                    resolution="Always write via temp file + rename.",
-                    impact="Prevents partial writes after crashes.",
-                )
-            ],
-            getting_started="Read the roadmap, then inspect the current task.",
+            context="""## Objectives
+<!-- OBJECTIVES:START -->
+Build the control plane.
+<!-- OBJECTIVES:END -->
+## Design Choices
+<!-- DECISIONS:START -->
+### Decision 1: Use atomic writes
+- **Date**: 2026-03-07T22:15:00Z
+- **Made By**: `gatekeeper`
+- **Context**: Consensus is durable state.
+- **Resolution**: Always write via temp file + rename.
+- **Impact**: Prevents partial writes after crashes.
+<!-- DECISIONS:END -->
+## Getting Started
+Read the roadmap, then inspect the current task.""",
         )
 
         writer = ConsensusWriter()
         writer.write(consensus_path, original)
 
         parsed = ConsensusParser().parse_file(consensus_path)
-        parsed.objectives += "\nSupport snapshots."
-        parsed.decisions.append(
-            ConsensusDecision(
-                title="Store history snapshots",
-                date=datetime(2026, 3, 8, 0, 0, tzinfo=timezone.utc),
-                made_by=DecisionAuthor.USER,
-                context="Operators need diffs over time.",
-                resolution="Write previous versions to consensus.history.",
-                impact="Enables auditing and recovery.",
-            )
-        )
+        parsed.context += "\n\n## Questions\n- [blocking] Should snapshots stay enabled?"
 
         updated = writer.write(consensus_path, parsed)
         reparsed = ConsensusParser().parse_file(consensus_path)
@@ -177,8 +166,5 @@ with lock_path.open('a+', encoding='utf-8') as handle:
         assert reparsed.version == 1
         assert reparsed.project == "Vibrant"
         assert reparsed.status is ConsensusStatus.PLANNING
-        assert reparsed.objectives.endswith("Support snapshots.")
-        assert len(reparsed.decisions) == 2
-        assert reparsed.decisions[0].title == "Use atomic writes"
-        assert reparsed.decisions[1].title == "Store history snapshots"
-        assert reparsed.getting_started == "Read the roadmap, then inspect the current task."
+        assert "### Decision 1: Use atomic writes" in reparsed.context
+        assert reparsed.context.endswith("Should snapshots stay enabled?")

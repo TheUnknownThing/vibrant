@@ -190,15 +190,11 @@ class OrchestratorFacade:
         self,
         *,
         status: ConsensusStatus | str | None = None,
-        objectives: str | None = None,
-        getting_started: str | None = None,
-        questions: Sequence[str] | None = None,
+        context: str | None = None,
     ) -> ConsensusDocument:
         return self.orchestrator.consensus_service.update(
             status=status,
-            objectives=objectives,
-            getting_started=getting_started,
-            questions=questions,
+            context=context,
         )
 
     def ask_question(

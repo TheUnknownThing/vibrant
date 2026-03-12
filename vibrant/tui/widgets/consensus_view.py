@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
-import re
 from typing import Any, Sequence
 
 from textual.app import ComposeResult
@@ -13,17 +12,17 @@ from textual.containers import Horizontal, Vertical, Center
 from textual.message import Message
 from textual.widgets import Button, Markdown, Static, TextArea
 
-from vibrant.orchestrator.facade import OrchestratorFacade
+from ...consensus import ConsensusWriter
+from ...models.consensus import ConsensusDocument, DEFAULT_CONSENSUS_CONTEXT
+from ...models.task import TaskInfo, TaskStatus
 
 from ...consensus import ConsensusParser, ConsensusWriter
 from ...models.consensus import ConsensusDocument, ConsensusStatus
 from ...models.task import TaskInfo
 
-_SECTION_PATTERN = re.compile(
-    r"^## (?P<name>Objectives|Design Choices|Getting Started|Questions)\s*$",
-    re.MULTILINE,
-)
-_DEFAULT_GETTING_STARTED = "Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."
+COMPLETED_TASK_STATUSES = {TaskStatus.COMPLETED, TaskStatus.ACCEPTED}
+FALLBACK_CONSENSUS_MARKDOWN = "# Consensus Pool\n\n_No consensus markdown available._\n"
+EMPTY_EDITABLE_MARKDOWN = DEFAULT_CONSENSUS_CONTEXT + "\n"
 
 
 class ConsensusView(Static):
@@ -393,80 +392,37 @@ class ConsensusView(Static):
 
 
 def _extract_editable_markdown(markdown_text: str) -> str:
-    """Remove the title/meta scaffolding and machine comments from rendered markdown."""
+    if not markdown_text.strip():
+        return EMPTY_EDITABLE_MARKDOWN
 
-    editable = re.sub(r"\A# .*?\n", "", markdown_text, count=1)
-    editable = re.sub(r"<!-- META:START -->\n.*?\n<!-- META:END -->\n?", "", editable, flags=re.DOTALL)
-    editable = re.sub(r"<!-- [A-Z:]+ -->\n?", "", editable)
-    return _normalize_markdown(editable)
+    meta_end_marker = "<!-- META:END -->"
+    text = markdown_text
+    if meta_end_marker in text:
+        text = text.split(meta_end_marker, maxsplit=1)[1].removeprefix("\n")
 
+    text = text.rstrip("\n")
+    if not text.strip():
+        return EMPTY_EDITABLE_MARKDOWN
+    return text + "\n"
 
-def _compose_consensus_markdown(
-    writer: ConsensusWriter,
-    document: ConsensusDocument,
-    editable_markdown: str,
+def _format_metadata(
+    document: ConsensusDocument | None,
+    tasks: Sequence[TaskInfo],
+    *,
+    empty_message: str,
 ) -> str:
-    sections = _split_editable_sections(editable_markdown)
-    title_and_meta = _extract_title_and_meta(writer.render(document))
+    if document is None:
+        return f"[dim]{empty_message}[/dim]"
 
-    lines = [
-        title_and_meta,
-        "## Objectives",
-        "<!-- OBJECTIVES:START -->",
-        sections.get("Objectives", ""),
-        "<!-- OBJECTIVES:END -->",
-        "## Design Choices",
-        "<!-- DECISIONS:START -->",
-        sections.get("Design Choices", ""),
-        "<!-- DECISIONS:END -->",
-        "## Getting Started",
-        sections.get("Getting Started", ""),
-        "",
-    ]
-
-    questions = sections.get("Questions", "")
-    if questions.strip():
-        lines.extend(["## Questions", questions, ""])
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _extract_title_and_meta(markdown_text: str) -> str:
-    before_objectives, _, _ = markdown_text.partition("## Objectives")
-    return before_objectives.rstrip()
-
-
-def _split_editable_sections(markdown_text: str) -> dict[str, str]:
-    normalized = _normalize_markdown(markdown_text)
-    matches = list(_SECTION_PATTERN.finditer(normalized))
-    if not matches:
-        raise ValueError("Consensus editor content is missing required section headings")
-
-    sections: dict[str, str] = {}
-    for index, match in enumerate(matches):
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
-        sections[match.group("name")] = normalized[start:end].strip("\n")
-
-    required = {"Objectives", "Design Choices", "Getting Started"}
-    missing = required.difference(sections)
-    if missing:
-        missing_names = ", ".join(sorted(missing))
-        raise ValueError(f"Consensus editor content is missing sections: {missing_names}")
-    return sections
-
-
-def _normalize_markdown(markdown_text: str) -> str:
-    stripped = markdown_text.strip()
-    if not stripped:
-        return ""
-    return stripped + "\n"
-
-
-def _infer_project_name(source_path: Path | None) -> str:
-    if source_path is None:
-        return "Vibrant"
-    resolved = source_path.expanduser()
-    if resolved.name == "consensus.md" and resolved.parent.name == ".vibrant":
-        return resolved.parent.parent.name or "Vibrant"
-    return resolved.stem or "Vibrant"
+    completed_count = _count_completed_tasks(tasks)
+    total_count = len(tasks)
+    updated_at = document.updated_at.isoformat() if document.updated_at is not None else "unknown"
+    return "\n".join(
+        [
+            f"[b]Project:[/b] {document.project}",
+            f"[b]Status:[/b] {document.status.value}",
+            f"[b]Version:[/b] {document.version}",
+            f"[b]Updated:[/b] {updated_at}",
+            f"[b]Tasks:[/b] {completed_count}/{total_count}",
+        ]
+    )

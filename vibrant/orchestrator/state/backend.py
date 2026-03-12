@@ -16,7 +16,6 @@ from vibrant.models.state import (
     OrchestratorState,
     OrchestratorStatus,
     ProviderRuntimeState,
-    reconcile_question_records,
 )
 from vibrant.providers.base import CanonicalEvent
 from vibrant.project_init import ensure_project_files
@@ -244,44 +243,14 @@ class OrchestratorStateBackend:
         self.state.failed_tasks = _dedupe_preserving_order(failed_tasks)
         self.state.provider_runtime = provider_runtime
 
-        awaiting_user_gatekeeper = any(
-            record.identity.type is AgentType.GATEKEEPER and record.lifecycle.status is AgentStatus.AWAITING_INPUT
-            for record in records
-        )
         if self.consensus is not None:
             self.state.last_consensus_version = self.consensus.version
-            consensus_questions = list(self.consensus.questions)
-            if consensus_questions:
-                self.state.replace_questions(
-                    reconcile_question_records(
-                        self.state.questions,
-                        consensus_questions,
-                        source_role="gatekeeper",
-                    )
-                )
-            elif awaiting_user_gatekeeper:
-                self.state.sync_pending_question_projection()
-            else:
-                self.state.replace_questions(
-                    reconcile_question_records(
-                        self.state.questions,
-                        [],
-                        source_role="gatekeeper",
-                    )
-                )
+            self.state.sync_pending_question_projection()
             if self.state.status is OrchestratorStatus.INIT:
                 inferred_status = _consensus_to_orchestrator_status(self.consensus.status)
                 self.state.status = inferred_status
-        elif awaiting_user_gatekeeper:
-            self.state.sync_pending_question_projection()
         else:
-            self.state.replace_questions(
-                reconcile_question_records(
-                    self.state.questions,
-                    [],
-                    source_role="gatekeeper",
-                )
-            )
+            self.state.sync_pending_question_projection()
 
         if self.state.pending_questions:
             self.state.gatekeeper_status = GatekeeperStatus.AWAITING_USER
