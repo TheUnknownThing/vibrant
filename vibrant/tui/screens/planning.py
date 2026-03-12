@@ -50,7 +50,6 @@ class PlanningScreen(Static):
 
     PlanningScreen #input-panel {
         height: auto;
-        max-height: 8;
         border-top: solid $primary-background;
         padding: 0 1;
         background: $surface;

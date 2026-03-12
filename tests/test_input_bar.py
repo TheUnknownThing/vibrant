@@ -8,7 +8,19 @@ from rich.style import Style
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
+from vibrant.tui.screens import PlanningScreen, VibingScreen
 from vibrant.tui.widgets.input_bar import InputBar, _ChatInput
+
+
+class ScreenInputBarHarness(App[None]):
+    orchestrator_facade = None
+
+    def __init__(self, screen_type: type[PlanningScreen] | type[VibingScreen]) -> None:
+        super().__init__()
+        self._screen_type = screen_type
+
+    def compose(self) -> ComposeResult:
+        yield self._screen_type()
 
 
 class InputBarHarness(App[None]):
@@ -66,6 +78,24 @@ async def test_slash_commands_autocomplete_with_tab() -> None:
 
 
 @pytest.mark.asyncio
+async def test_enter_applies_active_slash_command_suggestion() -> None:
+    app = InputBarHarness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        bar = app.query_one(InputBar)
+        field = app.query_one("#message-input", Input)
+        suggestions = app.query_one("#input-suggestions", OptionList)
+        bar.focus_input()
+
+        await pilot.press("/", "l", "o", "enter")
+        await pilot.pause()
+
+        assert field.value == "/logs "
+        assert suggestions.display is False
+
+
+@pytest.mark.asyncio
 async def test_at_paths_autocomplete_relative_to_base_path(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -88,6 +118,30 @@ async def test_at_paths_autocomplete_relative_to_base_path(tmp_path: Path) -> No
         assert [suggestions.get_option_at_index(index).prompt for index in range(suggestions.option_count)] == ["@docs/"]
 
         await pilot.press("tab")
+        await pilot.pause()
+
+        assert field.value == "check @docs/"
+        assert suggestions.display is True
+        assert [suggestions.get_option_at_index(index).prompt for index in range(suggestions.option_count)] == ["@docs/tui-todo.md", "@docs/tui.md"]
+
+
+@pytest.mark.asyncio
+async def test_enter_applies_active_file_suggestion(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "tui.md").write_text("hello", encoding="utf-8")
+    (docs_dir / "tui-todo.md").write_text("hello", encoding="utf-8")
+
+    app = InputBarHarness(base_path=tmp_path)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        bar = app.query_one(InputBar)
+        field = app.query_one("#message-input", Input)
+        suggestions = app.query_one("#input-suggestions", OptionList)
+        bar.focus_input()
+
+        await pilot.press(*"check @do", "enter")
         await pilot.pause()
 
         assert field.value == "check @docs/"
@@ -137,3 +191,82 @@ async def test_file_tokens_render_underlined_with_primary_background(tmp_path: P
         assert file_span.style.bgcolor is not None
         assert file_span.style.color.triplet == Color.parse(app.theme_variables["primary"]).triplet
         assert file_span.style.bgcolor.triplet == Color.parse(app.theme_variables["primary-background"]).triplet
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("screen_type", [PlanningScreen, VibingScreen], ids=["planning", "vibing"])
+async def test_autocomplete_dropdown_stays_within_input_panel(screen_type: type[PlanningScreen] | type[VibingScreen]) -> None:
+    app = ScreenInputBarHarness(screen_type)
+
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        bar = app.query_one(InputBar)
+        field = bar.query_one("#message-input", Input)
+        suggestions = bar.query_one("#input-suggestions", OptionList)
+        panel_bottom = bar.region.y + bar.region.height
+
+        bar.focus_input()
+        await pilot.press("/")
+        await pilot.pause()
+
+        assert suggestions.display is True
+        assert field.region.y >= bar.region.y
+        assert suggestions.region.y >= bar.region.y
+        assert suggestions.region.y + suggestions.region.height <= panel_bottom
+
+
+@pytest.mark.asyncio
+async def test_file_autocomplete_scrolls_without_wrapping(tmp_path: Path) -> None:
+    for index in range(12):
+        (tmp_path / f"file-{index:02}.py").write_text("x", encoding="utf-8")
+
+    app = InputBarHarness(base_path=tmp_path)
+
+    async with app.run_test(size=(100, 24)) as pilot:
+        await pilot.pause()
+        bar = app.query_one(InputBar)
+        suggestions = app.query_one("#input-suggestions", OptionList)
+        bar.focus_input()
+
+        await pilot.press("@")
+        await pilot.pause()
+
+        assert suggestions.option_count == 12
+        assert suggestions.highlighted == 0
+
+        for _ in range(8):
+            await pilot.press("down")
+            await pilot.pause()
+
+        assert suggestions.highlighted == 8
+        assert suggestions.scroll_offset.y > 0
+
+        for _ in range(10):
+            await pilot.press("down")
+            await pilot.pause()
+
+        assert suggestions.highlighted == 11
+        assert suggestions.get_option_at_index(suggestions.highlighted).prompt == "@file-11.py"
+
+
+@pytest.mark.asyncio
+async def test_slash_command_navigation_does_not_wrap() -> None:
+    app = InputBarHarness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        bar = app.query_one(InputBar)
+        suggestions = app.query_one("#input-suggestions", OptionList)
+        bar.focus_input()
+
+        await pilot.press("/")
+        await pilot.pause()
+
+        assert suggestions.option_count == len(InputBar.COMMAND_SUGGESTIONS)
+
+        for _ in range(suggestions.option_count + 3):
+            await pilot.press("down")
+            await pilot.pause()
+
+        assert suggestions.highlighted == suggestions.option_count - 1
+        assert suggestions.get_option_at_index(suggestions.highlighted).prompt == InputBar.COMMAND_SUGGESTIONS[-1]

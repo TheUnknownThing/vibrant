@@ -97,7 +97,7 @@ class _ChatInput(Input):
 
     @property
     def _file_style(self) -> Style:
-        primary = self.app.theme_variables.get("secondary", "#0178D4")
+        primary = self.app.theme_variables.get("primary", "#0178D4")
         primary_background = self.app.theme_variables.get("primary-background", "#33424E")
         return Style(color=primary, bgcolor=primary_background, underline=True)
 
@@ -187,6 +187,7 @@ class InputBar(Static):
         )
         yield self._input
         self._options = OptionList(id="input-suggestions", compact=True)
+        self._options.styles.max_height = self._max_suggestions
         self._options.display = False
         yield self._options
 
@@ -262,7 +263,7 @@ class InputBar(Static):
         if highlighted is None:
             highlighted = 0 if event.delta > 0 else option_count - 1
         else:
-            highlighted = (highlighted + event.delta) % option_count
+            highlighted = max(0, min(highlighted + event.delta, option_count - 1))
         self._options.highlighted = highlighted
 
     def on__chat_input_suggestion_apply(self, _: _ChatInput.SuggestionApply) -> None:
@@ -287,6 +288,11 @@ class InputBar(Static):
         """Handle Enter key in the input field."""
 
         if event.input is not self._input:
+            return
+
+        if self._options is not None and self._options.display and self._options.option_count > 0:
+            self._apply_highlighted_suggestion()
+            event.stop()
             return
 
         self._hide_suggestions()
@@ -421,7 +427,7 @@ class InputBar(Static):
                     end=target.end,
                 )
             )
-        return suggestions[: self._max_suggestions]
+        return suggestions
 
     def _collect_path_suggestions(self, target: _CompletionTarget) -> list[_CompletionSuggestion]:
         raw_path = target.token[1:]
@@ -440,7 +446,7 @@ class InputBar(Static):
         candidates.sort(key=lambda path: (not path.is_dir(), path.name.lower(), str(path)))
 
         suggestions: list[_CompletionSuggestion] = []
-        for path in candidates[: self._max_suggestions]:
+        for path in candidates:
             display = f"@{self._format_path_suggestion(path, raw_path)}"
             suggestions.append(
                 _CompletionSuggestion(
