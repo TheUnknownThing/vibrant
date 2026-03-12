@@ -14,6 +14,7 @@ from vibrant.config import (
     load_config,
     resolve_config_path,
 )
+from vibrant.providers.base import ProviderKind
 
 
 class TestLoadConfig:
@@ -26,6 +27,7 @@ class TestLoadConfig:
             textwrap.dedent(
                 """
                 [provider]
+                kind = "codex"
                 codex-binary = "/opt/codex/bin/codex"
                 launch-args = ["app-server", "--verbose"]
                 codex-home = "/tmp/codex-home"
@@ -55,6 +57,7 @@ class TestLoadConfig:
 
         config = load_config(start_path=project_root / "src")
 
+        assert config.provider_kind is ProviderKind.CODEX
         assert config.codex_binary == "/opt/codex/bin/codex"
         assert config.launch_args == ["app-server", "--verbose"]
         assert config.codex_home == "/tmp/codex-home"
@@ -81,6 +84,7 @@ class TestLoadConfig:
 
         config = load_config(start_path=project_root)
 
+        assert config.provider_kind is ProviderKind.CODEX
         assert config.codex_binary == "codex"
         assert config.model == "gpt-5.3-codex"
         assert config.model_provider is None
@@ -95,6 +99,44 @@ class TestLoadConfig:
         assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "conversations"
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
         assert config.test_commands == []
+
+    def test_parse_claude_provider_configuration(self, tmp_path):
+        project_root = tmp_path / "project"
+        config_dir = project_root / ".vibrant"
+        config_dir.mkdir(parents=True)
+        (project_root / ".git").mkdir()
+        (config_dir / "vibrant.toml").write_text(
+            textwrap.dedent(
+                """
+                [provider]
+                kind = "claude"
+                claude-cli-path = "/opt/claude/bin/claude"
+                claude-settings = "/tmp/claude-settings.json"
+                claude-add-dirs = ["../shared", "./fixtures"]
+                claude-allowed-tools = ["Read", "WebFetch"]
+                claude-disallowed-tools = ["WebSearch"]
+                claude-fallback-model = "claude-haiku-4-5"
+                claude-setting-sources = ["project", "local"]
+                model = "claude-sonnet-4-5"
+                approval-policy = "never"
+                sandbox-mode = "workspace-write"
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        config = load_config(start_path=project_root)
+
+        assert config.provider_kind is ProviderKind.CLAUDE
+        assert config.model == "claude-sonnet-4-5"
+        assert config.claude_cli_path == "/opt/claude/bin/claude"
+        assert config.claude_settings == "/tmp/claude-settings.json"
+        assert config.claude_add_dirs == ["../shared", "./fixtures"]
+        assert config.claude_allowed_tools == ["Read", "WebFetch"]
+        assert config.claude_disallowed_tools == ["WebSearch"]
+        assert config.claude_fallback_model == "claude-haiku-4-5"
+        assert config.claude_setting_sources == ["project", "local"]
 
     def test_invalid_toml_raises_clear_error(self, tmp_path):
         project_root = tmp_path / "project"

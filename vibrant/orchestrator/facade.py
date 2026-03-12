@@ -46,7 +46,6 @@ class OrchestratorSnapshot:
     user_input_banner: str
     notification_bell_enabled: bool
 
-
 class OrchestratorFacade:
     """Single entry point for orchestrator-backed app operations."""
 
@@ -388,6 +387,8 @@ class OrchestratorFacade:
         if current is next_status:
             return
 
+        if self.orchestrator.state_store.status is next_status:
+            return
         self.orchestrator.state_store.transition_to(next_status)
         self.orchestrator.state_store.refresh()
 

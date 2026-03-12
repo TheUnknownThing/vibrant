@@ -18,7 +18,7 @@ from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.orchestrator.state.backend import OrchestratorStateBackend
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
-from vibrant.providers.codex.adapter import CodexProviderAdapter
+from vibrant.providers.registry import resolve_provider_adapter
 
 from .agents.manager import AgentManagementService
 from .agents.output_projection import AgentOutputProjectionService
@@ -128,7 +128,7 @@ class Orchestrator:
             repo_root=root,
             worktree_root=scoped_worktree_root(root, config.worktree_directory),
         )
-        resolved_adapter_factory = adapter_factory or CodexProviderAdapter
+        resolved_adapter_factory = adapter_factory or resolve_provider_adapter(config.provider_kind)
 
         state_store = StateStore(backend)
         agent_store = AgentRecordStore(
@@ -361,7 +361,7 @@ def _build_default_agent_runtime_factory(
     project_root: Path,
     config_getter: Callable[[], VibrantConfig],
     gatekeeper: Gatekeeper | Any,
-    adapter_factory: Any,
+    adapter_factory: Any | None,
     on_canonical_event: CanonicalEventCallback | None,
     agent_registry: AgentRegistry,
 ):
@@ -381,7 +381,7 @@ def _build_default_agent_runtime_factory(
             agent = MergeAgent(
                 project_root,
                 config,
-                adapter_factory=adapter_factory,
+                adapter_factory=adapter_factory or resolve_provider_adapter(config.provider_kind),
                 on_canonical_event=on_canonical_event,
                 on_agent_record_updated=agent_registry.make_record_callback(),
             )
@@ -389,7 +389,7 @@ def _build_default_agent_runtime_factory(
             agent = CodeAgent(
                 project_root,
                 config,
-                adapter_factory=adapter_factory,
+                adapter_factory=adapter_factory or resolve_provider_adapter(config.provider_kind),
                 on_canonical_event=on_canonical_event,
                 on_agent_record_updated=agent_registry.make_record_callback(),
             )

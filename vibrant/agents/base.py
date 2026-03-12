@@ -233,6 +233,17 @@ class AgentBase(ABC):
                 cwd=working_dir,
                 codex_binary=self.config.codex_binary,
                 codex_home=self.config.codex_home,
+                resume_thread_id=resume_thread_id,
+                claude_cli_path=self.config.claude_cli_path,
+                claude_settings=self.config.claude_settings,
+                claude_add_dirs=self.config.claude_add_dirs,
+                claude_allowed_tools=self.config.claude_allowed_tools,
+                claude_disallowed_tools=self.config.claude_disallowed_tools,
+                claude_fallback_model=self.config.claude_fallback_model,
+                claude_setting_sources=self.config.claude_setting_sources,
+                claude_model=self.config.model,
+                claude_effort=self.config.reasoning_effort,
+                claude_extra_config=self.config.extra_config,
                 agent_record=agent_record,
                 on_canonical_event=handle_event,
             )
@@ -257,6 +268,8 @@ class AgentBase(ABC):
                 input_items=[{"type": "text", "text": prompt, "text_elements": []}],
                 runtime_mode=turn_runtime_mode,
                 approval_policy=self.config.approval_policy,
+                reasoning_effort=self.config.reasoning_effort,
+                reasoning_summary=self.config.reasoning_summary,
             )
             await asyncio.wait_for(
                 turn_finished.wait(), timeout=self.timeout_seconds

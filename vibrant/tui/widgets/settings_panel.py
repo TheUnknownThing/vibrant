@@ -6,17 +6,9 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Static, Select, Input, Button, Label
+from textual.widgets import Button, Input, Label, Select, Static
 
-from ...models import ApprovalMode, AppSettings
-
-
-MODEL_OPTIONS = [
-    ("gpt-5.3-codex", "gpt-5.3-codex"),
-    ("gpt-5.3-codex-spark", "gpt-5.3-codex-spark"),
-    ("o3", "o3"),
-    ("o4-mini", "o4-mini"),
-]
+from ...models import AppSettings, ApprovalMode
 
 APPROVAL_OPTIONS = [
     ("Suggest (ask for everything)", ApprovalMode.SUGGEST.value),
@@ -79,11 +71,10 @@ class SettingsPanel(ModalScreen[AppSettings | None]):
             yield Static("⚙ Settings", id="settings-title")
 
             yield Label("Model:", classes="setting-label")
-            yield Select(
-                MODEL_OPTIONS,
+            yield Input(
                 value=self._settings.default_model,
-                id="model-select",
-                allow_blank=False,
+                placeholder="e.g. gpt-5.3-codex or claude-sonnet-4-5",
+                id="model-input",
             )
 
             yield Label("Approval Mode:", classes="setting-label")
@@ -115,13 +106,13 @@ class SettingsPanel(ModalScreen[AppSettings | None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-btn":
-            model = self.query_one("#model-select", Select).value
+            model = self.query_one("#model-input", Input).value.strip()
             approval = self.query_one("#approval-select", Select).value
             effort = self.query_one("#effort-select", Select).value
             cwd = self.query_one("#cwd-input", Input).value.strip()
 
             new_settings = AppSettings(
-                default_model=str(model) if model else self._settings.default_model,
+                default_model=model or self._settings.default_model,
                 default_approval_mode=ApprovalMode(approval) if approval else self._settings.default_approval_mode,
                 default_effort=str(effort) if effort else self._settings.default_effort,
                 default_cwd=cwd or None,
