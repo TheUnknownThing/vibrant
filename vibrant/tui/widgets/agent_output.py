@@ -253,9 +253,27 @@ class AgentOutput(Static):
             stream.task_id = task_id
 
         event_type = str(event.get("type") or "event")
-        if event_type == "task.progress":
-            for line in _render_task_progress_lines(event):
-                self._append_canonical_line(stream, line)
+
+        if event_type == "reasoning.summary.delta":
+            delta = event.get("delta")
+            if isinstance(delta, str) and delta:
+                stream.thought_text = f"{stream.thought_text}{delta}"
+                item_id = event.get("item_id")
+                if isinstance(item_id, str) and item_id:
+                    stream.active_thought_item_id = item_id
+                stream.thought_timestamp = _timestamp_text(event.get("timestamp"))
+        elif event_type == "task.progress":
+            item = event.get("item") if isinstance(event.get("item"), dict) else {}
+            item_type = str(item.get("type") or event.get("item_type") or "").strip().lower()
+            if item_type == "reasoning":
+                final_text = _extract_reasoning_text(item, fallback=stream.thought_text)
+                if final_text:
+                    stream.thought_text = final_text
+                stream.active_thought_item_id = None
+                stream.thought_timestamp = _timestamp_text(event.get("timestamp"))
+            else:
+                for line in _render_task_progress_lines(event):
+                    self._append_canonical_line(stream, line)
         elif event_type != "content.delta":
             for line in _render_canonical_event_lines(event):
                 self._append_canonical_line(stream, line)
