@@ -659,10 +659,13 @@ class VibrantApp(App):
             workspace.chat_panel.restore_gatekeeper_thread(thread)
 
     def _apply_workspace_placeholder(self, placeholder: str) -> None:
-        if self._workspace_screen is None:
+        input_bar = self._input_bar()
+        if input_bar is None:
             return
         with suppress(Exception):
-            self._workspace_screen.set_input_placeholder(placeholder)
+            input_bar.set_placeholder(placeholder)
+        with suppress(Exception):
+            input_bar.set_completion_base_path(self._project_root)
 
     def _sync_workspace_screen(self, *, prefer_chat_history: bool = False) -> None:
         planning_mode = self.orchestrator is None or self._is_planning_mode()

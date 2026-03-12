@@ -20,8 +20,8 @@
 
 ### Input Box
 
-[ ] Implement `Ctrl + Backspace` to delete the last word in the input box.
-[ ] Implement autocompletion for commands (starting with `/`) and file paths (starting with `@`).
+[x] Implement `Ctrl + Backspace` to delete the last word in the input box.
+[x] Implement autocompletion for commands (starting with `/`) and file paths (starting with `@`).
 [ ] Implement a command history that can be navigated with the `Up` and `Down` arrow keys when the input box is focused. Query the history from the Orchestrator.
 
 ### Task Status
