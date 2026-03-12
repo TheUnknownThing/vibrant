@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
+from rich.style import Style
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.message import Message
@@ -35,6 +38,9 @@ class _CompletionTarget:
 
 class _ChatInput(Input):
     """Input that forwards autocomplete actions to the parent input bar."""
+
+    _COMMAND_PATTERN = re.compile(r"^/\S+")
+    _FILE_PATTERN = re.compile(r"(?<!\S)@\S+")
 
     BINDINGS = [
         Binding("ctrl+backspace", "delete_left_word", show=False),
@@ -68,6 +74,32 @@ class _ChatInput(Input):
 
     def action_suggestion_dismiss(self) -> None:
         self.post_message(self.SuggestionDismiss())
+
+    @property
+    def _value(self) -> Text:
+        text = super()._value
+        if self.password or not self.value:
+            return text
+
+        command_match = self._COMMAND_PATTERN.match(self.value)
+        if command_match is not None:
+            text.stylize(self._command_style, command_match.start(), command_match.end())
+
+        for file_match in self._FILE_PATTERN.finditer(self.value):
+            text.stylize(self._file_style, file_match.start(), file_match.end())
+
+        return text
+
+    @property
+    def _command_style(self) -> Style:
+        primary = self.app.theme_variables.get("primary", "#0178D4")
+        return Style(color=primary, bold=True)
+
+    @property
+    def _file_style(self) -> Style:
+        primary = self.app.theme_variables.get("secondary", "#0178D4")
+        primary_background = self.app.theme_variables.get("primary-background", "#33424E")
+        return Style(color=primary, bgcolor=primary_background, underline=True)
 
 
 class InputBar(Static):
