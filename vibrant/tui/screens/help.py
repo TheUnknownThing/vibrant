@@ -49,6 +49,7 @@ class HelpScreen(ModalScreen[None]):
 - `F10` quit
 
 ## Commands
+- `/vibe` enter the vibing phase from planning
 - `/run` execute the next roadmap task
 - `/refresh` reload project state
 - `/settings` open settings

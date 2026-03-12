@@ -383,6 +383,11 @@ class OrchestratorFacade:
             raise ValueError(f"Invalid orchestrator state transition: {current.value} -> {next_status.value}")
 
         self._sync_consensus_status(next_status)
+
+        current = self.orchestrator.state_store.status
+        if current is next_status:
+            return
+
         self.orchestrator.state_store.transition_to(next_status)
         self.orchestrator.state_store.refresh()
 

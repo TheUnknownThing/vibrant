@@ -446,6 +446,8 @@ class VibrantApp(App):
                 self.notify(f"Current model: {self._settings.default_model}")
         elif cmd == "settings":
             await self.action_open_settings()
+        elif cmd == "vibe":
+            self._transition_to_vibing(prefer_chat_history=True)
         elif cmd in {"run", "next", "task"}:
             await self.action_run_next_task()
         elif cmd == "refresh":
@@ -468,6 +470,7 @@ class VibrantApp(App):
         elif cmd == "help":
             self.notify(
                 "/model <name> - Set model\n"
+                "/vibe - Enter vibing phase\n"
                 "/run - Execute the next roadmap task\n"
                 "/refresh - Reload project state\n"
                 "/settings - Open settings\n"

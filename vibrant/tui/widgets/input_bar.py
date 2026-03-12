@@ -116,6 +116,7 @@ class InputBar(Static):
         "/run",
         "/settings",
         "/task",
+        "/vibe",
     )
 
     DEFAULT_CSS = """

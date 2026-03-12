@@ -78,6 +78,30 @@ async def test_slash_commands_autocomplete_with_tab() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vibe_command_autocomplete_with_tab() -> None:
+    app = InputBarHarness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        bar = app.query_one(InputBar)
+        field = app.query_one("#message-input", Input)
+        suggestions = app.query_one("#input-suggestions", OptionList)
+        bar.focus_input()
+
+        await pilot.press("/", "v", "i")
+        await pilot.pause()
+
+        assert suggestions.display is True
+        assert [suggestions.get_option_at_index(index).prompt for index in range(suggestions.option_count)] == ["/vibe"]
+
+        await pilot.press("tab")
+        await pilot.pause()
+
+        assert field.value == "/vibe "
+        assert suggestions.display is False
+
+
+@pytest.mark.asyncio
 async def test_enter_applies_active_slash_command_suggestion() -> None:
     app = InputBarHarness()
 
