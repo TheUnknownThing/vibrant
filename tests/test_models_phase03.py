@@ -9,10 +9,8 @@ from pydantic import ValidationError
 
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.models.consensus import (
-    ConsensusDecision,
     ConsensusDocument,
     ConsensusStatus,
-    DecisionAuthor,
 )
 from vibrant.models.state import (
     GatekeeperStatus,
@@ -245,18 +243,7 @@ class TestConsensusDocument:
             updated_at=datetime(2026, 3, 7, 23, 15, tzinfo=timezone.utc),
             version=14,
             status=ConsensusStatus.EXECUTING,
-            objectives="Build the orchestration control plane.",
-            decisions=[
-                ConsensusDecision(
-                    title="Use structured consensus sections",
-                    date=datetime(2026, 3, 7, 22, 30, tzinfo=timezone.utc),
-                    made_by=DecisionAuthor.GATEKEEPER,
-                    context="Agents need parseable shared state.",
-                    resolution="Use HTML comment delimiters.",
-                    impact="Consensus parsing and writing depend on it.",
-                )
-            ],
-            getting_started="Read docs/spec.md, then inspect .vibrant/consensus.md.",
+            context="## Objectives\nBuild the orchestration control plane.\n\n## Getting Started\nRead docs/spec.md, then inspect .vibrant/consensus.md.",
         )
 
         restored = ConsensusDocument.model_validate_json(document.model_dump_json())

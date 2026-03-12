@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
-from vibrant.agents.runtime import RunState
+from vibrant.agents.runtime import InputRequest, RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
@@ -84,8 +84,7 @@ def _prepare_project(tmp_path: Path) -> tuple[Path, OrchestratorStateBackend]:
             project="Vibrant",
             version=1,
             status=ConsensusStatus.EXECUTING,
-            objectives="Ship the lifecycle runner.",
-            getting_started="Review the roadmap and implement one task at a time.",
+            context="## Objectives\nShip the lifecycle runner.\n\n## Getting Started\nReview the roadmap and implement one task at a time.",
         ),
     )
     RoadmapParser().write(repo / ".vibrant" / "roadmap.md", RoadmapParser().parse(ROADMAP_TEXT))
@@ -308,12 +307,11 @@ class FakeGatekeeper:
             plan_modified = True
         elif request.trigger is GatekeeperTrigger.MAX_RETRIES_EXCEEDED:
             verdict = "escalate"
-            consensus.questions = [self.escalation_question]
-            questions = list(consensus.questions)
+            questions = [self.escalation_question]
         elif request.trigger in {GatekeeperTrigger.PROJECT_START, GatekeeperTrigger.USER_CONVERSATION}:
             verdict = "planned"
             consensus.status = ConsensusStatus.PLANNING
-            consensus.objectives = request.trigger_description
+            consensus.context = f"## Objectives\n{request.trigger_description}"
             roadmap = RoadmapParser().parse(ROADMAP_TEXT)
             plan_modified = True
 
@@ -328,7 +326,7 @@ class FakeGatekeeper:
                 "type": AgentType.GATEKEEPER,
             },
             lifecycle={
-                "status": AgentStatus.AWAITING_INPUT if (questions or consensus.questions) else AgentStatus.COMPLETED,
+                "status": AgentStatus.AWAITING_INPUT if questions else AgentStatus.COMPLETED,
             },
             outcome={"summary": transcript},
             provider=AgentProviderMetadata(
@@ -338,10 +336,18 @@ class FakeGatekeeper:
         )
         return GatekeeperRunResult(
             agent_record=gatekeeper_record,
-            state=RunState.AWAITING_INPUT if (questions or consensus.questions) else RunState.COMPLETED,
+            state=RunState.AWAITING_INPUT if questions else RunState.COMPLETED,
             transcript=transcript,
             summary=transcript,
             error=None,
+            input_requests=[
+                InputRequest(
+                    request_id="req-escalation",
+                    request_kind="user-input",
+                    message=question,
+                )
+                for question in questions
+            ],
             turn_result={"turn": {"id": "gatekeeper-turn-1"}},
         )
 
@@ -553,7 +559,7 @@ def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
     assert lifecycle.state_store.state.active_agents == ["agent-task-standalone"]
 
     facade = OrchestratorFacade(lifecycle)
-    assert [item.identity.agent_id for item in facade.agent_records()] == ["agent-task-standalone"]
+    assert [item.identity.agent_id for item in facade.list_agent_records()] == ["agent-task-standalone"]
 
 
 def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(tmp_path):

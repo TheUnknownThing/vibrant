@@ -15,7 +15,7 @@ from vibrant.mcp.authz import (
     orchestrator_agent_scopes,
     orchestrator_gatekeeper_scopes,
 )
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRecord, AgentStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionStatus
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator import OrchestratorStateBackend
@@ -25,6 +25,14 @@ from vibrant.orchestrator.artifacts import ConsensusService
 from vibrant.orchestrator.artifacts import QuestionService
 from vibrant.orchestrator.artifacts import RoadmapService
 from vibrant.orchestrator.state import StateStore
+from vibrant.orchestrator.types import (
+    AgentSnapshotIdentity,
+    AgentSnapshotOutcome,
+    AgentSnapshotProvider,
+    AgentSnapshotRuntime,
+    AgentSnapshotWorkspace,
+    OrchestratorAgentSnapshot,
+)
 from vibrant.project_init import initialize_project
 
 
@@ -34,6 +42,45 @@ class _StubGatekeeper:
 
 
 class _StubAgentManager:
+    def __init__(self, state_store: StateStore | None = None) -> None:
+        self.state_store = state_store
+
+    def list_records(self):
+        if self.state_store is None:
+            return []
+        return self.state_store.agent_records()
+
+    def get_agent(self, agent_id: str):
+        if self.state_store is None:
+            return None
+        for record in self.state_store.agent_records():
+            if record.identity.agent_id == agent_id:
+                return _snapshot_from_record(record)
+        return None
+
+    def list_agents(self, **kwargs):
+        if self.state_store is None:
+            return []
+        task_id = kwargs.get("task_id")
+        include_completed = kwargs.get("include_completed", True)
+        active_only = kwargs.get("active_only", False)
+        agent_type = kwargs.get("agent_type")
+        agent_type_value = getattr(agent_type, "value", agent_type)
+
+        snapshots = [_snapshot_from_record(record) for record in self.state_store.agent_records()]
+        if task_id is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.task_id == task_id]
+        if agent_type_value is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.agent_type == agent_type_value]
+        if active_only:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.runtime.active]
+        elif not include_completed:
+            snapshots = [snapshot for snapshot in snapshots if not snapshot.runtime.done or snapshot.runtime.awaiting_input]
+        return snapshots
+
+    def list_active_agents(self):
+        return self.list_agents(active_only=True)
+
     async def wait_for_agent(self, agent_id: str, *, release_terminal: bool = True):
         return {
             "agent_id": agent_id,
@@ -59,6 +106,45 @@ class _StubAgentManager:
         }
 
 
+def _snapshot_from_record(record: AgentRecord) -> OrchestratorAgentSnapshot:
+    status = record.lifecycle.status.value
+    done = record.lifecycle.status not in {AgentStatus.RUNNING, AgentStatus.AWAITING_INPUT}
+    awaiting_input = record.lifecycle.status is AgentStatus.AWAITING_INPUT
+    return OrchestratorAgentSnapshot(
+        identity=AgentSnapshotIdentity(
+            agent_id=record.identity.agent_id,
+            task_id=record.identity.task_id,
+            agent_type=record.identity.type.value,
+        ),
+        runtime=AgentSnapshotRuntime(
+            status=status,
+            state=status,
+            has_handle=False,
+            active=not done,
+            done=done,
+            awaiting_input=awaiting_input,
+            started_at=record.lifecycle.started_at,
+            finished_at=record.lifecycle.finished_at,
+        ),
+        workspace=AgentSnapshotWorkspace(
+            branch=record.context.branch,
+            worktree_path=record.context.worktree_path,
+        ),
+        outcome=AgentSnapshotOutcome(
+            summary=record.outcome.summary,
+            error=record.outcome.error,
+            output=None,
+        ),
+        provider=AgentSnapshotProvider(
+            thread_id=record.provider.provider_thread_id,
+            thread_path=record.provider.thread_path,
+            resume_cursor=record.provider.resume_cursor,
+            native_event_log=record.provider.native_event_log,
+            canonical_event_log=record.provider.canonical_event_log,
+        ),
+    )
+
+
 def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, QuestionService, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -77,6 +163,9 @@ def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, Quest
         roadmap_service=roadmap_service,
         consensus_service=consensus_service,
         question_service=question_service,
+        agent_manager=_StubAgentManager(state_store),
+        agent_output_service=SimpleNamespace(output_for_agent=lambda _agent_id: None),
+        workflow_service=SimpleNamespace(begin_execution_if_needed=lambda: state_store.transition_to(OrchestratorStatus.EXECUTING)),
         execution_mode=RoadmapExecutionMode.MANUAL,
     )
     return OrchestratorFacade(lifecycle), state_store, question_service, repo
@@ -186,9 +275,9 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
         "vibrant.update_consensus",
         principal=gatekeeper,
         status="planning",
-        objectives="Ship MCP-driven orchestration.",
+        context="## Objectives\nShip MCP-driven orchestration.",
     )
-    assert updated_consensus["objectives"] == "Ship MCP-driven orchestration."
+    assert updated_consensus["context"] == "## Objectives\nShip MCP-driven orchestration."
 
     updated_roadmap = await server.call_tool(
         "vibrant.update_roadmap",

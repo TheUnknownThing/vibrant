@@ -20,11 +20,11 @@ class ResourceHandlers:
         self.facade = facade
 
     def consensus_current(self) -> dict[str, Any] | None:
-        document = self.facade.consensus_document()
+        document = self.facade.get_consensus_document()
         return document.model_dump(mode="json") if document is not None else None
 
     def roadmap_current(self) -> dict[str, Any] | None:
-        roadmap = self.facade.roadmap()
+        roadmap = self.facade.get_roadmap()
         if roadmap is None:
             return None
         return {
@@ -33,14 +33,14 @@ class ResourceHandlers:
         }
 
     def task_by_id(self, task_id: str) -> dict[str, Any]:
-        task = self.facade.task(task_id)
+        task = self.facade.get_task(task_id)
         if task is None:
             raise KeyError(f"Unknown task: {task_id}")
         return _serialize_task(task)
 
     def task_assigned(self, *, task_id: str | None = None, agent_id: str | None = None) -> dict[str, Any]:
         resolved_task_id = _resolve_task_id(self.facade, task_id=task_id, agent_id=agent_id)
-        task = self.facade.task(resolved_task_id)
+        task = self.facade.get_task(resolved_task_id)
         if task is None:
             raise KeyError(f"Unknown task: {resolved_task_id}")
         agents = self.facade.list_agents(task_id=resolved_task_id, include_completed=True)
@@ -72,10 +72,10 @@ class ResourceHandlers:
         return [_serialize_value(snapshot) for snapshot in snapshots]
 
     def workflow_status(self) -> dict[str, Any]:
-        return {"status": self.facade.workflow_status().value}
+        return {"status": self.facade.get_workflow_status().value}
 
     def questions_pending(self) -> list[dict[str, Any]]:
-        return [_serialize_question(record) for record in self.facade.pending_question_records()]
+        return [_serialize_question(record) for record in self.facade.list_pending_question_records()]
 
     def events_recent(
         self,

@@ -11,12 +11,3 @@ def test_planning_completion_is_detected_from_tool_events_only():
     )
 
     assert _extract_planning_completion_request(result) == PLANNING_COMPLETE_MCP_TOOL
-
-
-def test_planning_completion_sentinel_text_no_longer_has_effect():
-    result = SimpleNamespace(
-        transcript=f"MCP: {PLANNING_COMPLETE_MCP_TOOL}",
-        events=[],
-    )
-
-    assert _extract_planning_completion_request(result) is None

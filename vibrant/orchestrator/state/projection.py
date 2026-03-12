@@ -12,7 +12,6 @@ from vibrant.models.state import (
     OrchestratorState,
     OrchestratorStatus,
     ProviderRuntimeState,
-    reconcile_question_records,
 )
 from vibrant.providers.base import CanonicalEvent
 
@@ -28,15 +27,12 @@ def rebuild_derived_state(
     failed_tasks: list[str] = []
     provider_runtime: dict[str, ProviderRuntimeState] = {}
     active_gatekeeper = False
-    awaiting_user_gatekeeper = False
 
     for record in agent_records:
         if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
             active_agents.append(record.identity.agent_id)
             if record.identity.type is AgentType.GATEKEEPER:
                 active_gatekeeper = True
-                if record.lifecycle.status is AgentStatus.AWAITING_INPUT:
-                    awaiting_user_gatekeeper = True
 
         if record.lifecycle.status is AgentStatus.COMPLETED:
             completed_tasks.append(record.identity.task_id)
@@ -57,38 +53,12 @@ def rebuild_derived_state(
 
     if consensus is not None:
         state.last_consensus_version = consensus.version
-        consensus_questions = list(consensus.questions)
-        if consensus_questions:
-            state.replace_questions(
-                reconcile_question_records(
-                    state.questions,
-                    consensus_questions,
-                    source_role="gatekeeper",
-                )
-            )
-        elif awaiting_user_gatekeeper:
-            state.sync_pending_question_projection()
-        else:
-            state.replace_questions(
-                reconcile_question_records(
-                    state.questions,
-                    [],
-                    source_role="gatekeeper",
-                )
-            )
+        state.sync_pending_question_projection()
         if state.status is OrchestratorStatus.INIT:
             inferred_status = _consensus_to_orchestrator_status(consensus.status)
             state.status = inferred_status
-    elif awaiting_user_gatekeeper:
-        state.sync_pending_question_projection()
     else:
-        state.replace_questions(
-            reconcile_question_records(
-                state.questions,
-                [],
-                source_role="gatekeeper",
-            )
-        )
+        state.sync_pending_question_projection()
 
     if state.pending_questions:
         state.gatekeeper_status = GatekeeperStatus.AWAITING_USER

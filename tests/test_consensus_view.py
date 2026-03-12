@@ -16,6 +16,20 @@ class ConsensusViewHarness(App[None]):
         yield ConsensusView()
 
 
+def _context(objectives: str) -> str:
+    return (
+        "## Objectives\n"
+        "<!-- OBJECTIVES:START -->\n"
+        f"{objectives}\n"
+        "<!-- OBJECTIVES:END -->\n"
+        "## Design Choices\n"
+        "<!-- DECISIONS:START -->\n"
+        "<!-- DECISIONS:END -->\n"
+        "## Getting Started\n"
+        "Read `docs/tui.md`."
+    )
+
+
 def _document(*, version: int = 1, objectives: str = "Ship the first plan.") -> ConsensusDocument:
     return ConsensusDocument(
         project="Vibrant",
@@ -23,18 +37,18 @@ def _document(*, version: int = 1, objectives: str = "Ship the first plan.") -> 
         updated_at=datetime(2026, 3, 11, 10, 0, tzinfo=timezone.utc),
         version=version,
         status=ConsensusStatus.PLANNING,
-        objectives=objectives,
-        getting_started="Read `docs/tui.md`.",
+        context=_context(objectives),
     )
 
 
-def test_extract_editable_markdown_strips_meta_block():
+def test_extract_editable_markdown_strips_only_meta_block():
     markdown = ConsensusWriter().render(_document())
 
     editable = _extract_editable_markdown(markdown)
 
     assert "<!-- META:START -->" not in editable
     assert editable.startswith("## Objectives")
+    assert "<!-- OBJECTIVES:START -->" in editable
     assert "Read `docs/tui.md`." in editable
 
 
@@ -50,7 +64,15 @@ async def test_consensus_view_tracks_unsaved_and_external_updates():
 
         editor = app.query_one(TextArea)
         editor.load_text(
-            "## Objectives\n\nRefine the plan.\n\n## Design Choices\n\n## Getting Started\nRead `docs/tui.md`.\n"
+            "## Objectives\n"
+            "<!-- OBJECTIVES:START -->\n"
+            "Refine the plan.\n"
+            "<!-- OBJECTIVES:END -->\n"
+            "## Design Choices\n"
+            "<!-- DECISIONS:START -->\n"
+            "<!-- DECISIONS:END -->\n"
+            "## Getting Started\n"
+            "Read `docs/tui.md`.\n"
         )
         await pilot.pause()
 

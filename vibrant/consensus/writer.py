@@ -47,41 +47,10 @@ class ConsensusWriter:
             f"- **Version**: {document.version}",
             f"- **Status**: {document.status.value}",
             "<!-- META:END -->",
-            "## Objectives",
-            "<!-- OBJECTIVES:START -->",
-            document.objectives,
-            "<!-- OBJECTIVES:END -->",
-            "## Design Choices",
-            "<!-- DECISIONS:START -->",
         ]
-
-        for index, decision in enumerate(document.decisions, start=1):
-            decision_date = _format_timestamp(decision.date)
-            lines.extend(
-                [
-                    f"### Decision {index}: {decision.title}",
-                    f"- **Date**: {decision_date}",
-                    f"- **Made By**: `{decision.made_by.value}`",
-                    f"- **Context**: {decision.context}",
-                    f"- **Resolution**: {decision.resolution}",
-                    f"- **Impact**: {decision.impact}",
-                    "",
-                ]
-            )
-
-        lines.extend(
-            [
-                "<!-- DECISIONS:END -->",
-                "## Getting Started",
-                document.getting_started,
-                "",
-            ]
-        )
-
-        if document.questions:
-            lines.append("## Questions")
-            lines.extend(f"- [blocking] {question}" for question in document.questions)
-            lines.append("")
+        context = document.context.removeprefix("\n").removesuffix("\n")
+        if context:
+            lines.append(context)
 
         return "\n".join(lines).rstrip() + "\n"
 
@@ -137,10 +106,7 @@ class ConsensusWriter:
             updated_at=now,
             version=next_version,
             status=document.status,
-            objectives=document.objectives,
-            decisions=[decision.model_copy(deep=True) for decision in document.decisions],
-            getting_started=document.getting_started,
-            questions=list(document.questions),
+            context=document.context,
         )
 
     def _snapshot_previous(self, destination: Path, previous_text: str) -> Path:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 from typing import Any, Sequence
 
 from textual.app import ComposeResult
@@ -12,19 +11,13 @@ from textual.message import Message
 from textual.widgets import Button, Markdown, Static, TextArea
 
 from ...consensus import ConsensusWriter
-from ...models.consensus import ConsensusDocument
+from ...models.consensus import ConsensusDocument, DEFAULT_CONSENSUS_CONTEXT
 from ...models.task import TaskInfo, TaskStatus
 
 
 COMPLETED_TASK_STATUSES = {TaskStatus.COMPLETED, TaskStatus.ACCEPTED}
 FALLBACK_CONSENSUS_MARKDOWN = "# Consensus Pool\n\n_No consensus markdown available._\n"
-EMPTY_EDITABLE_MARKDOWN = "## Objectives\n\n## Design Choices\n\n## Getting Started\n"
-
-
-EDITOR_OBJECTIVES_PATTERN = re.compile(r"^## Objectives\n(?P<body>.*?)(?=^## Design Choices\n|\Z)", re.DOTALL | re.MULTILINE)
-EDITOR_DECISIONS_PATTERN = re.compile(r"^## Design Choices\n(?P<body>.*?)(?=^## Getting Started\n|\Z)", re.DOTALL | re.MULTILINE)
-EDITOR_GETTING_STARTED_PATTERN = re.compile(r"^## Getting Started\n(?P<body>.*?)(?=^## Questions\n|\Z)", re.DOTALL | re.MULTILINE)
-EDITOR_QUESTIONS_PATTERN = re.compile(r"^## Questions\n(?P<body>.*)\Z", re.DOTALL | re.MULTILINE)
+EMPTY_EDITABLE_MARKDOWN = DEFAULT_CONSENSUS_CONTEXT + "\n"
 
 
 class ConsensusView(Static):
@@ -362,20 +355,16 @@ def _preview_markdown(markdown_text: str) -> str:
 
 
 def _extract_editable_markdown(markdown_text: str) -> str:
-    text = markdown_text.strip()
-    if not text:
+    if not markdown_text.strip():
         return EMPTY_EDITABLE_MARKDOWN
 
     meta_end_marker = "<!-- META:END -->"
+    text = markdown_text
     if meta_end_marker in text:
-        text = text.split(meta_end_marker, maxsplit=1)[1].lstrip("\n")
+        text = text.split(meta_end_marker, maxsplit=1)[1].removeprefix("\n")
 
-    for marker in ("<!-- OBJECTIVES:START -->", "<!-- OBJECTIVES:END -->", "<!-- DECISIONS:START -->", "<!-- DECISIONS:END -->"):
-        text = text.replace(marker + "\n", "")
-        text = text.replace(marker, "")
-
-    text = text.strip("\n")
-    if not text:
+    text = text.rstrip("\n")
+    if not text.strip():
         return EMPTY_EDITABLE_MARKDOWN
     return text + "\n"
 
@@ -384,41 +373,8 @@ def _extract_editable_markdown(markdown_text: str) -> str:
 def _merge_document_with_editable_markdown(document: ConsensusDocument, editable_markdown: str) -> str:
     rendered = ConsensusWriter().render(document)
     prefix = rendered.split("<!-- META:END -->", maxsplit=1)[0] + "<!-- META:END -->\n"
-    editable = _extract_editable_markdown(editable_markdown)
-
-    objectives = _editor_section_body(EDITOR_OBJECTIVES_PATTERN, editable)
-    decisions = _editor_section_body(EDITOR_DECISIONS_PATTERN, editable)
-    getting_started = _editor_section_body(EDITOR_GETTING_STARTED_PATTERN, editable)
-    questions = _editor_section_body(EDITOR_QUESTIONS_PATTERN, editable)
-
-    lines = [
-        prefix.rstrip(),
-        "",
-        "## Objectives",
-        "<!-- OBJECTIVES:START -->",
-        objectives,
-        "<!-- OBJECTIVES:END -->",
-        "## Design Choices",
-        "<!-- DECISIONS:START -->",
-        decisions,
-        "<!-- DECISIONS:END -->",
-        "## Getting Started",
-        getting_started,
-        "",
-    ]
-
-    if questions.strip():
-        lines.extend(["## Questions", questions, ""])
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-
-def _editor_section_body(pattern: re.Pattern[str], editable_markdown: str) -> str:
-    match = pattern.search(editable_markdown)
-    if match is None:
-        return ""
-    return match.group("body").strip("\n")
+    body = _extract_editable_markdown(editable_markdown).rstrip("\n")
+    return f"{prefix}{body}\n"
 
 
 
@@ -441,6 +397,5 @@ def _format_metadata(
             f"[b]Version:[/b] {document.version}",
             f"[b]Updated:[/b] {updated_at}",
             f"[b]Tasks:[/b] {completed_count}/{total_count}",
-            f"[b]Pending Questions:[/b] {len(document.questions)}",
         ]
     )

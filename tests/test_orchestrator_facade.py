@@ -6,8 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from vibrant.config import RoadmapExecutionMode
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
-from vibrant.models.state import OrchestratorState
+from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionRecord
 from vibrant.orchestrator import Orchestrator, OrchestratorAgentSnapshot, OrchestratorFacade
 from vibrant.orchestrator.types import (
     AgentOutput,
@@ -67,14 +68,52 @@ class _FakeAgentManager:
     def list_records(self):
         return []
 
+    def list_active_agents(self):
+        return self.list_agents(active_only=True)
 
-def _state_store(state: object, *, records: list[AgentRecord] | None = None) -> SimpleNamespace:
+
+class _FakeQuestionService:
+    def __init__(self, records: list[QuestionRecord] | None = None) -> None:
+        self._records = list(records or [])
+
+    def records(self) -> list[QuestionRecord]:
+        return list(self._records)
+
+    def pending_records(self) -> list[QuestionRecord]:
+        return [record for record in self._records if record.is_pending()]
+
+    def pending_questions(self) -> list[str]:
+        return [record.text for record in self.pending_records()]
+
+    def current_question(self) -> str | None:
+        pending = self.pending_questions()
+        return pending[0] if pending else None
+
+
+def _state_store(status: OrchestratorStatus, *, records: list[AgentRecord] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
-        state=state,
-        pending_questions=lambda: [],
-        agent_records=lambda: list(records or []),
+        status=status,
         user_input_banner=lambda: "banner",
         notification_bell_enabled=lambda: False,
+    )
+
+
+def _facade_lifecycle(
+    *,
+    agent_manager: _FakeAgentManager,
+    status: OrchestratorStatus = OrchestratorStatus.PLANNING,
+    execution_mode: RoadmapExecutionMode = RoadmapExecutionMode.MANUAL,
+    question_records: list[QuestionRecord] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        agent_manager=agent_manager,
+        agent_output_service=SimpleNamespace(output_for_agent=lambda _agent_id: None),
+        state_store=_state_store(status),
+        execution_mode=execution_mode,
+        question_service=_FakeQuestionService(question_records),
+        roadmap_document=None,
+        consensus_service=SimpleNamespace(current=lambda: None),
+        consensus_path=Path("/tmp/project/.vibrant/consensus.md"),
     )
 
 
@@ -103,9 +142,7 @@ def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
         ),
     )
     lifecycle = SimpleNamespace(
-        agent_manager=_FakeAgentManager([managed]),
-        state_store=_state_store(OrchestratorState(session_id="session-1")),
-        execution_mode="manual",
+        **_facade_lifecycle(agent_manager=_FakeAgentManager([managed])).__dict__,
     )
 
     facade = OrchestratorFacade(lifecycle)
@@ -122,102 +159,8 @@ def test_facade_exposes_stable_agent_snapshot_from_agent_manager() -> None:
     assert [item.identity.agent_id for item in listed] == ["agent-1"]
 
 
-def test_facade_falls_back_to_agent_records_when_agent_manager_is_absent() -> None:
-    running = _record("agent-1", task_id="task-1", status=AgentStatus.RUNNING, summary="Still working")
-    completed = _record("agent-2", task_id="task-2", status=AgentStatus.COMPLETED, summary="Done")
-    lifecycle = SimpleNamespace(
-        state_store=_state_store(OrchestratorState(session_id="session-2"), records=[running, completed]),
-        execution_mode="manual",
-    )
-
-    facade = OrchestratorFacade(lifecycle)
-
-    snapshots = facade.list_agents(include_completed=False)
-    assert [item.identity.agent_id for item in snapshots] == ["agent-1"]
-    assert snapshots[0].runtime.has_handle is False
-    assert snapshots[0].runtime.active is True
-
-    by_type = facade.list_agents(agent_type=AgentType.CODE)
-    assert [item.identity.agent_id for item in by_type] == ["agent-1", "agent-2"]
-
-    completed_snapshot = facade.get_agent("agent-2")
-    assert completed_snapshot is not None
-    assert completed_snapshot.runtime.done is True
-    assert completed_snapshot.runtime.active is False
-    assert completed_snapshot.outcome.summary == "Done"
-
-
-def test_facade_raises_for_invalid_workflow_status() -> None:
-    lifecycle = SimpleNamespace(
-        state_store=_state_store(SimpleNamespace(status="mystery")),
-        execution_mode="manual",
-    )
-
-    facade = OrchestratorFacade(lifecycle)
-
-    with pytest.raises(ValueError, match="Unsupported orchestrator status"):
-        facade.workflow_status()
-
-
-def test_facade_raises_for_invalid_execution_mode() -> None:
-    lifecycle = SimpleNamespace(
-        state_store=_state_store(OrchestratorState(session_id="session-3")),
-        execution_mode="surprise",
-    )
-
-    facade = OrchestratorFacade(lifecycle)
-
-    with pytest.raises(ValueError, match="Unsupported roadmap execution mode"):
-        _ = facade.execution_mode
-
-
-def test_facade_raises_for_invalid_managed_agent_snapshot() -> None:
-    managed = OrchestratorAgentSnapshot(
-        identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", agent_type="code"),
-        runtime=AgentSnapshotRuntime(
-            status="mystery",
-            state="running",
-            has_handle=True,
-            active=True,
-            done=False,
-            awaiting_input=False,
-        ),
-    )
-    lifecycle = SimpleNamespace(
-        agent_manager=_FakeAgentManager([managed]),
-        state_store=_state_store(OrchestratorState(session_id="session-4")),
-        execution_mode="manual",
-    )
-
-    facade = OrchestratorFacade(lifecycle)
-
-    with pytest.raises(ValueError, match="Unsupported agent status"):
-        facade.get_agent("agent-1")
-
-
-class _FakeSubscribedOrchestrator:
-    def __init__(self, snapshots: list[object]) -> None:
-        self.agent_manager = _FakeAgentManager(snapshots)
-        self.engine = SimpleNamespace(state=OrchestratorState(session_id="session-subscribe"))
-        self.execution_mode = "manual"
-        self._subscriptions: list[tuple[object, str | None, str | None, object]] = []
-
-    def subscribe_raw_events(self, handler, *, agent_id=None, task_id=None, event_types=None):
-        entry = (handler, agent_id, task_id, event_types)
-        self._subscriptions.append(entry)
-
-        def unsubscribe() -> None:
-            try:
-                self._subscriptions.remove(entry)
-            except ValueError:
-                return
-
-        return unsubscribe
-
-
-@pytest.mark.asyncio
-async def test_facade_subscribe_agent_updates_emits_snapshots() -> None:
-    managed = OrchestratorAgentSnapshot(
+def test_facade_lists_agents_from_agent_manager() -> None:
+    running = OrchestratorAgentSnapshot(
         identity=AgentSnapshotIdentity(agent_id="agent-1", task_id="task-1", agent_type="code"),
         runtime=AgentSnapshotRuntime(
             status="running",
@@ -228,23 +171,47 @@ async def test_facade_subscribe_agent_updates_emits_snapshots() -> None:
             awaiting_input=False,
         ),
     )
-    lifecycle = _FakeSubscribedOrchestrator([managed])
-    facade = OrchestratorFacade(lifecycle)
-    seen: list[OrchestratorAgentSnapshot] = []
+    completed = OrchestratorAgentSnapshot(
+        identity=AgentSnapshotIdentity(agent_id="agent-2", task_id="task-2", agent_type="code"),
+        runtime=AgentSnapshotRuntime(
+            status="completed",
+            state="completed",
+            has_handle=False,
+            active=False,
+            done=True,
+            awaiting_input=False,
+        ),
+        outcome=AgentSnapshotOutcome(summary="Done"),
+    )
 
-    unsubscribe = facade.subscribe_agent_updates(seen.append, agent_id="agent-1")
-    handler, agent_id, task_id, event_types = lifecycle._subscriptions[0]
+    facade = OrchestratorFacade(_facade_lifecycle(agent_manager=_FakeAgentManager([running, completed])))
 
-    assert agent_id == "agent-1"
-    assert task_id is None
-    assert event_types is None
+    snapshots = facade.list_agents(include_completed=False)
+    assert [item.identity.agent_id for item in snapshots] == ["agent-1"]
 
-    await handler({"agent_id": "agent-1", "task_id": "task-1", "type": "turn.started"})
+    by_type = facade.list_agents(agent_type=AgentType.CODE)
+    assert [item.identity.agent_id for item in by_type] == ["agent-1", "agent-2"]
 
-    assert [item.identity.agent_id for item in seen] == ["agent-1"]
+    completed_snapshot = facade.get_agent("agent-2")
+    assert completed_snapshot is not None
+    assert completed_snapshot.runtime.done is True
+    assert completed_snapshot.outcome.summary == "Done"
 
-    unsubscribe()
-    assert lifecycle._subscriptions == []
+
+def test_facade_exposes_workflow_and_question_state() -> None:
+    question = QuestionRecord(question_id="question-1", text="Need approval?")
+    facade = OrchestratorFacade(
+        _facade_lifecycle(
+            agent_manager=_FakeAgentManager([]),
+            status=OrchestratorStatus.PLANNING,
+            question_records=[question],
+        )
+    )
+
+    assert facade.get_workflow_status() is OrchestratorStatus.PLANNING
+    assert facade.list_question_records() == [question]
+    assert facade.list_pending_question_records() == [question]
+    assert facade.get_current_pending_question() == "Need approval?"
 
 
 def _make_test_orchestrator() -> Orchestrator:
