@@ -16,7 +16,7 @@
 [ ] Ensure all interactions are done with facade methods with the Orchestrator, see [Orchestrator API documentation](../vibrant/orchestrator/STABLE_API.md) for details on the stable API contract. Direct access to engine internals are forbidden and must be substituted. This includes:
     [ ] Differentiating between chat messages and agent thoughts. Display agent thoughts as a collapsible section with a spinner while going, see [textual blog](https://textual.textualize.io/blog/2022/11/24/spinners-and-progress-bars-in-textual/) for implementation.
     [ ] Ensure that the chat history is loaded each time the application is started, and the messages are rendered in the `Chat History` tab.
-[ ] The second chat request gets no output in the screen. This needs to be fixed.
+[ ] The second chat request does not render until the entire chat finishes.
 
 ### Input Box
 
