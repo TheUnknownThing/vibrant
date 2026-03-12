@@ -4,7 +4,6 @@ from __future__ import annotations
 
 __all__ = [
     "TaskResult",
-    "EmbeddedOAuthProvider",
     "GitManager",
     "AgentOutputProjectionService",
     "Orchestrator",
@@ -37,11 +36,10 @@ def __getattr__(name: str):
         from .facade import OrchestratorFacade, OrchestratorSnapshot
 
         return {"OrchestratorFacade": OrchestratorFacade, "OrchestratorSnapshot": OrchestratorSnapshot}[name]
-    if name in {"EmbeddedOAuthProvider", "OrchestratorMCPServer", "create_orchestrator_fastmcp", "create_orchestrator_fastmcp_app"}:
-        from .mcp import EmbeddedOAuthProvider, OrchestratorMCPServer, create_orchestrator_fastmcp, create_orchestrator_fastmcp_app
+    if name in {"OrchestratorMCPServer", "create_orchestrator_fastmcp", "create_orchestrator_fastmcp_app"}:
+        from .mcp import OrchestratorMCPServer, create_orchestrator_fastmcp, create_orchestrator_fastmcp_app
 
         return {
-            "EmbeddedOAuthProvider": EmbeddedOAuthProvider,
             "OrchestratorMCPServer": OrchestratorMCPServer,
             "create_orchestrator_fastmcp": create_orchestrator_fastmcp,
             "create_orchestrator_fastmcp_app": create_orchestrator_fastmcp_app,

@@ -1,33 +1,23 @@
 from __future__ import annotations
 
-import base64
+import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-pytest.importorskip("fastmcp")
-pytest.importorskip("starlette")
-
-from starlette.testclient import TestClient
-
 from vibrant.config import RoadmapExecutionMode
-from vibrant.mcp.auth import (
-    AuthUser,
-    AuthorizationRequest,
-    AuthorizationServerService,
-    HMACTokenSigner,
-    InMemoryAuthStore,
-    OAuthClient,
-)
-from vibrant.mcp.config import OAuthServerSettings
-from vibrant.orchestrator.state.backend import OrchestratorStateBackend
-from vibrant.orchestrator.facade import OrchestratorFacade
-from vibrant.orchestrator.mcp import EmbeddedOAuthProvider, OrchestratorMCPServer, create_orchestrator_fastmcp, create_orchestrator_fastmcp_app
+from vibrant.mcp import MCPServerSettings
 from vibrant.orchestrator.artifacts import ConsensusService, QuestionService, RoadmapService
+from vibrant.orchestrator.facade import OrchestratorFacade
+from vibrant.orchestrator.mcp import OrchestratorMCPServer, create_orchestrator_fastmcp
+from vibrant.orchestrator.mcp.fastmcp import _BearerTokenProtectedASGIApp
 from vibrant.orchestrator.state import StateStore
+from vibrant.orchestrator.state.backend import OrchestratorStateBackend
 from vibrant.project_init import initialize_project
+
+_FASTMCP_AVAILABLE = importlib.util.find_spec("fastmcp") is not None
 
 
 class _StubGatekeeper:
@@ -60,80 +50,138 @@ def _build_facade(tmp_path: Path) -> OrchestratorFacade:
     return OrchestratorFacade(lifecycle)
 
 
-@pytest.fixture
-def auth_service() -> AuthorizationServerService:
-    service = AuthorizationServerService(
-        settings=OAuthServerSettings(issuer_url="https://auth.example.com"),
-        store=InMemoryAuthStore(),
-        signer=HMACTokenSigner("development-secret"),
-    )
-    service.register_user(
-        AuthUser(
-            user_id="gatekeeper-1",
-            username="gatekeeper",
-            roles=["gatekeeper"],
-        )
-    )
-    service.register_client(
-        OAuthClient(
-            client_id="vibrant-mcp-server",
-            redirect_uris=["https://mcp.example.com/callback"],
-            allowed_scopes=[
-                "mcp:access",
-                "tasks:read",
-                "tasks:write",
-                "tasks:run",
-                "orchestrator:consensus:read",
-                "orchestrator:consensus:write",
-                "orchestrator:questions:read",
-                "orchestrator:questions:write",
-                "orchestrator:workflow:read",
-                "orchestrator:workflow:write",
-            ],
-            is_public=True,
-        )
-    )
-    return service
+async def _exercise_http_app(
+    app: object,
+    *,
+    authorization: str | None = None,
+) -> tuple[int, dict[str, str], str]:
+    response: dict[str, object] = {"headers": {}}
+    body_parts: list[bytes] = []
+    request_sent = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal request_sent
+        if request_sent:
+            return {"type": "http.disconnect"}
+        request_sent = True
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        if message["type"] == "http.response.start":
+            response["status"] = int(message["status"])
+            response["headers"] = {
+                bytes(name).decode("latin-1"): bytes(value).decode("latin-1")
+                for name, value in message.get("headers", [])
+            }
+            return
+        if message["type"] == "http.response.body":
+            body_parts.append(bytes(message.get("body", b"")))
+
+    headers: list[tuple[bytes, bytes]] = []
+    if authorization is not None:
+        headers.append((b"authorization", authorization.encode("latin-1")))
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/mcp",
+        "raw_path": b"/mcp",
+        "query_string": b"",
+        "headers": headers,
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 9000),
+    }
+
+    await app(scope, receive, send)  # type: ignore[misc]
+    return int(response["status"]), dict(response["headers"]), b"".join(body_parts).decode("utf-8")
 
 
 @pytest.mark.asyncio
-async def test_embedded_oauth_provider_verifies_service_tokens(auth_service: AuthorizationServerService) -> None:
-    token_bundle = auth_service.mint_token_for_subject(
-        subject_id="gatekeeper-1",
-        client_id="vibrant-mcp-server",
-        requested_scopes=["tasks:write", "orchestrator:consensus:write"],
-    )
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
+async def test_bearer_token_wrapper_returns_500_when_server_token_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VIBRANT_MCP_TOKEN", raising=False)
+    settings = MCPServerSettings(
+        url="http://127.0.0.1:9000/mcp",
+        bearer_token_env_var="VIBRANT_MCP_TOKEN",
     )
 
-    token = await provider.verify_token(token_bundle.access_token)
+    async def downstream(_scope, _receive, send) -> None:
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
 
-    assert token is not None
-    assert token.client_id == "vibrant-mcp-server"
-    assert token.claims["sub"] == "gatekeeper-1"
-    assert "mcp:access" in token.scopes
-    assert "tasks:write" in token.scopes
-    assert "orchestrator:consensus:write" in token.scopes
+    app = _BearerTokenProtectedASGIApp(downstream, settings=settings)
+    status, _headers, body = await _exercise_http_app(app, authorization="Bearer secret-token")
+
+    assert status == 500
+    assert json.loads(body) == {
+        "error": "server_error",
+        "error_description": "Missing MCP bearer token in environment variable 'VIBRANT_MCP_TOKEN'",
+    }
 
 
 @pytest.mark.asyncio
-async def test_create_orchestrator_fastmcp_registers_tools_and_resources(
-    tmp_path: Path,
-    auth_service: AuthorizationServerService,
-) -> None:
+async def test_bearer_token_wrapper_rejects_missing_or_invalid_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VIBRANT_MCP_TOKEN", "secret-token")
+    settings = MCPServerSettings(
+        url="http://127.0.0.1:9000/mcp",
+        bearer_token_env_var="VIBRANT_MCP_TOKEN",
+    )
+
+    async def downstream(_scope, _receive, send) -> None:
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    app = _BearerTokenProtectedASGIApp(downstream, settings=settings)
+
+    missing_status, missing_headers, missing_body = await _exercise_http_app(app)
+    invalid_status, invalid_headers, invalid_body = await _exercise_http_app(
+        app,
+        authorization="Bearer wrong-token",
+    )
+
+    assert missing_status == 401
+    assert missing_headers["www-authenticate"] == "Bearer"
+    assert json.loads(missing_body)["error"] == "unauthorized"
+
+    assert invalid_status == 401
+    assert invalid_headers["www-authenticate"] == "Bearer"
+    assert json.loads(invalid_body) == {
+        "error": "unauthorized",
+        "error_description": "Invalid MCP bearer token",
+    }
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_wrapper_allows_valid_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VIBRANT_MCP_TOKEN", "secret-token")
+    settings = MCPServerSettings(
+        url="http://127.0.0.1:9000/mcp",
+        bearer_token_env_var="VIBRANT_MCP_TOKEN",
+    )
+    called: list[str] = []
+
+    async def downstream(_scope, _receive, send) -> None:
+        called.append("downstream")
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    app = _BearerTokenProtectedASGIApp(downstream, settings=settings)
+    status, _headers, body = await _exercise_http_app(app, authorization="Bearer secret-token")
+
+    assert status == 204
+    assert body == ""
+    assert called == ["downstream"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _FASTMCP_AVAILABLE, reason="fastmcp is optional")
+async def test_create_orchestrator_fastmcp_registers_tools_and_resources(tmp_path: Path) -> None:
     registry = OrchestratorMCPServer(_build_facade(tmp_path))
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
-    )
 
-    server = create_orchestrator_fastmcp(registry, auth=provider)
+    server = create_orchestrator_fastmcp(registry)
 
-    assert server.auth is provider
     assert await server._local_provider.get_tool("roadmap_add_task") is not None
     assert await server._local_provider.get_tool("vibrant.update_roadmap") is not None
     assert await server._local_provider.get_resource("vibrant://consensus/current") is not None
@@ -141,28 +189,34 @@ async def test_create_orchestrator_fastmcp_registers_tools_and_resources(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(not _FASTMCP_AVAILABLE, reason="fastmcp is optional")
+async def test_create_orchestrator_fastmcp_serializes_resources_as_json(tmp_path: Path) -> None:
+    registry = OrchestratorMCPServer(_build_facade(tmp_path))
+    server = create_orchestrator_fastmcp(registry)
+    resource = await server._local_provider.get_resource("vibrant://workflow/status")
+
+    assert resource is not None
+    assert resource.mime_type == "application/json"
+    assert json.loads(await resource.read()) == {"status": "init"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _FASTMCP_AVAILABLE, reason="fastmcp is optional")
 async def test_create_orchestrator_fastmcp_binds_events_recent_limit_query_param(
     tmp_path: Path,
-    auth_service: AuthorizationServerService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = OrchestratorMCPServer(_build_facade(tmp_path))
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
-    )
     captured: dict[str, object] = {}
 
-    async def fake_read_resource(resource_name: str, *, principal, **params):
+    async def fake_read_resource(resource_name: str, **params):
         captured["resource_name"] = resource_name
-        captured["principal"] = principal
         captured["params"] = params
         return []
 
     monkeypatch.setattr(registry, "read_resource", fake_read_resource)
 
-    server = create_orchestrator_fastmcp(registry, auth=provider)
+    server = create_orchestrator_fastmcp(registry)
     template = await server._local_provider.get_resource_template(
         "vibrant://events/recent/task-1?limit=5"
     )
@@ -178,175 +232,30 @@ async def test_create_orchestrator_fastmcp_binds_events_recent_limit_query_param
 
 
 @pytest.mark.asyncio
-async def test_create_orchestrator_fastmcp_uses_local_principal_without_http_auth_context(
-    tmp_path: Path,
-    auth_service: AuthorizationServerService,
-) -> None:
+@pytest.mark.skipif(not _FASTMCP_AVAILABLE, reason="fastmcp is optional")
+async def test_create_orchestrator_fastmcp_uses_explicit_roadmap_update_fields(tmp_path: Path) -> None:
     registry = OrchestratorMCPServer(_build_facade(tmp_path))
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
+    server = create_orchestrator_fastmcp(registry)
+    add_tool = await server._local_provider.get_tool("roadmap_add_task")
+    update_tool = await server._local_provider.get_tool("roadmap_update_task")
+
+    await add_tool.run(
+        {
+            "task": {
+                "id": "task-1",
+                "title": "Initial title",
+                "acceptance_criteria": ["One criterion"],
+            }
+        }
     )
-
-    server = create_orchestrator_fastmcp(registry, auth=provider)
-    tool = await server._local_provider.get_tool("roadmap_get")
-
-    result = await tool.run({})
-
-    assert result is not None
-
-
-@pytest.mark.asyncio
-async def test_create_orchestrator_fastmcp_accepts_consensus_context_updates(
-    tmp_path: Path,
-    auth_service: AuthorizationServerService,
-) -> None:
-    registry = OrchestratorMCPServer(_build_facade(tmp_path))
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
+    updated = await update_tool.run(
+        {
+            "task_id": "task-1",
+            "title": "Updated title",
+            "priority": 7,
+        }
     )
+    payload = getattr(updated, "structured_content", updated)
 
-    server = create_orchestrator_fastmcp(registry, auth=provider)
-    consensus_tool = await server._local_provider.get_tool("consensus_update")
-    alias_tool = await server._local_provider.get_tool("vibrant.update_consensus")
-
-    consensus_result = await consensus_tool.run({
-        "status": "planning",
-        "context": "## Objectives\nShip MCP-driven orchestration.",
-    })
-    alias_result = await alias_tool.run({
-        "status": "planning",
-        "context": "## Objectives\nShip MCP-driven orchestration.",
-    })
-
-    consensus_payload = getattr(consensus_result, "structured_content", consensus_result)
-    alias_payload = getattr(alias_result, "structured_content", alias_result)
-
-    assert consensus_payload["context"] == "## Objectives\nShip MCP-driven orchestration."
-    assert alias_payload["context"] == "## Objectives\nShip MCP-driven orchestration."
-
-
-def test_create_orchestrator_fastmcp_app_exposes_auth_and_resource_routes(
-    tmp_path: Path,
-    auth_service: AuthorizationServerService,
-) -> None:
-    registry = OrchestratorMCPServer(_build_facade(tmp_path))
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
-    )
-    app = create_orchestrator_fastmcp_app(registry, auth=provider, mcp_path="/mcp")
-
-    route_paths = {getattr(route, "path", None) for route in app.routes}
-    assert auth_service.settings.metadata_endpoint in route_paths
-    assert auth_service.settings.jwks_endpoint in route_paths
-    assert auth_service.settings.authorization_endpoint in route_paths
-    assert auth_service.settings.token_endpoint in route_paths
-    assert "/mcp" in route_paths
-    assert any(path and "oauth-protected-resource" in path for path in route_paths)
-
-    with TestClient(app) as client:
-        metadata = client.get(auth_service.settings.metadata_endpoint)
-
-    assert metadata.status_code == 200
-    assert metadata.json()["issuer"] == "https://auth.example.com"
-
-
-def test_authorize_preserves_existing_redirect_query_params(
-    tmp_path: Path,
-    auth_service: AuthorizationServerService,
-) -> None:
-    redirect_uri = "https://client.example.com/callback?foo=bar"
-    auth_service.register_client(
-        OAuthClient(
-            client_id="query-client",
-            redirect_uris=[redirect_uri],
-            allowed_scopes=["mcp:access", "tasks:read"],
-            is_public=True,
-            require_pkce=False,
-        )
-    )
-    registry = OrchestratorMCPServer(_build_facade(tmp_path))
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
-    )
-    app = create_orchestrator_fastmcp_app(registry, auth=provider, mcp_path="/mcp")
-
-    with TestClient(app) as client:
-        response = client.get(
-            auth_service.settings.authorization_endpoint,
-            params={
-                "client_id": "query-client",
-                "redirect_uri": redirect_uri,
-                "scope": "tasks:read",
-                "state": "opaque-state",
-            },
-            follow_redirects=False,
-        )
-
-    assert response.status_code in {302, 307}
-    location = response.headers["location"]
-    parsed = urlparse(location)
-    query = parse_qs(parsed.query)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://client.example.com/callback"
-    assert query == {
-        "foo": ["bar"],
-        "code": [query["code"][0]],
-        "state": ["opaque-state"],
-    }
-
-
-def test_token_accepts_client_secret_basic(
-    tmp_path: Path,
-    auth_service: AuthorizationServerService,
-) -> None:
-    redirect_uri = "https://client.example.com/callback"
-    auth_service.register_client(
-        OAuthClient(
-            client_id="confidential-client",
-            client_secret="top-secret",
-            redirect_uris=[redirect_uri],
-            allowed_scopes=["mcp:access", "tasks:read"],
-            is_public=False,
-            require_pkce=False,
-            token_endpoint_auth_method="client_secret_basic",
-        )
-    )
-    decision = auth_service.authorize(
-        AuthorizationRequest(
-            client_id="confidential-client",
-            redirect_uri=redirect_uri,
-            requested_scopes="tasks:read",
-        ),
-        user_id="gatekeeper-1",
-    )
-    registry = OrchestratorMCPServer(_build_facade(tmp_path))
-    provider = EmbeddedOAuthProvider(
-        service=auth_service,
-        base_url="https://mcp.example.com",
-        resolve_current_user=lambda _request: "gatekeeper-1",
-    )
-    app = create_orchestrator_fastmcp_app(registry, auth=provider, mcp_path="/mcp")
-    basic = base64.b64encode(b"confidential-client:top-secret").decode("ascii")
-
-    with TestClient(app) as client:
-        response = client.post(
-            auth_service.settings.token_endpoint,
-            data={
-                "grant_type": "authorization_code",
-                "code": decision.code,
-                "redirect_uri": redirect_uri,
-            },
-            headers={"Authorization": f"Basic {basic}"},
-        )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["token_type"] == "Bearer"
-    assert body["access_token"]
+    assert payload["title"] == "Updated title"
+    assert payload["priority"] == 7

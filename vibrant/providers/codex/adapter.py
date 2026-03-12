@@ -299,11 +299,6 @@ class CodexProviderAdapter(ProviderAdapter):
             params["limit"] = int(limit)
         return await self.send_request("mcpServerStatus/list", params or None)
 
-    async def start_mcp_oauth_login(self, *, name: str) -> Any:
-        """Start an MCP OAuth login via ``mcpServer/oauth/login``."""
-
-        return await self.send_request("mcpServer/oauth/login", {"name": name})
-
     async def detect_external_agent_config(
         self,
         *,

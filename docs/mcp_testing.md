@@ -1,29 +1,28 @@
 # Testing the MCP Server
 
-> **Status**: developer guide  
+> **Status**: developer guide
 > **Date**: 2026-03-12
 
-This guide explains how to run Vibrant's MCP server locally, connect the official MCP Inspector, and understand the current state of permission testing.
+This guide explains how to run Vibrant's MCP server locally and verify the
+current bearer-token transport behavior.
 
 ## Prerequisites
 
 - Python dependencies installed with `uv`
-- Node.js available for the official MCP Inspector
 - optional MCP dependencies installed:
 
 ```bash
 uv sync --extra mcp --dev
 ```
 
-## Quick start
+## Start the server over stdio
 
 The repo includes a small dev launcher at `scripts/mcp_dev_server.py`.
 
 For a clean local test project, use a temporary project root instead of the repository root. This avoids loading old `.vibrant/agent-runs/*.json` records that may not match the current schema.
 
-### Start the server over stdio
-
-This is the easiest way to test with the official MCP Inspector.
+This is the simplest way to explore the MCP surface locally because no HTTP
+auth is involved.
 
 ```bash
 uv run python scripts/mcp_dev_server.py \
@@ -31,175 +30,126 @@ uv run python scripts/mcp_dev_server.py \
   --transport stdio
 ```
 
-### Start the server over HTTP
+## Start the server over HTTP
+
+HTTP transport now requires a bearer token stored in an environment variable.
 
 ```bash
+export VIBRANT_MCP_BEARER_TOKEN=development-secret
+
 uv run python scripts/mcp_dev_server.py \
   --project-root /tmp/vibrant-mcp-demo \
   --host 127.0.0.1 \
-  --port 8000
+  --port 9000
 ```
 
 The MCP endpoint will be:
 
 ```text
-http://127.0.0.1:8000/mcp
+http://127.0.0.1:9000/mcp
 ```
 
-If port `8000` is already in use, pick another port such as `8001`.
-
-## Using the official MCP Inspector
-
-The official Inspector is the easiest human-facing tool for exploring resources and tools.
-
-### Inspector with stdio
-
-This is the most convenient path because Inspector launches the server directly.
+If you want a different environment variable name, pass it explicitly:
 
 ```bash
-npx -y @modelcontextprotocol/inspector \
-  uv run python scripts/mcp_dev_server.py \
-  --project-root /tmp/vibrant-mcp-demo \
-  --transport stdio
-```
+export CUSTOM_MCP_TOKEN=development-secret
 
-### Inspector with HTTP
-
-First start the server in a separate terminal:
-
-```bash
 uv run python scripts/mcp_dev_server.py \
   --project-root /tmp/vibrant-mcp-demo \
   --host 127.0.0.1 \
-  --port 8000
+  --port 9000 \
+  --bearer-token-env-var CUSTOM_MCP_TOKEN
 ```
 
-Then start Inspector:
+## Quick HTTP verification
+
+Without the header, the server should reject the request:
 
 ```bash
-npx -y @modelcontextprotocol/inspector
+curl -i http://127.0.0.1:9000/mcp
 ```
 
-In Inspector:
+With the correct header, the request should reach the MCP app:
 
-- choose `Streamable HTTP` or `HTTP`
-- set the server URL to `http://127.0.0.1:8000/mcp`
-- connect
+```bash
+curl -i \
+  -H 'Authorization: Bearer development-secret' \
+  http://127.0.0.1:9000/mcp
+```
 
-## What to test in Inspector
+The MCP app may still return a protocol-level error for an incomplete request,
+but it should no longer fail with `401`.
 
-After connecting, use Inspector to verify that the MCP surface is wired correctly.
+## What to test manually
 
-### Read-only checks
+For stdio or authenticated HTTP sessions, verify:
 
-- open **Resources** and inspect:
-  - `vibrant://consensus/current`
-  - `vibrant://roadmap/current`
-  - `vibrant://workflow/status`
-- open **Tools** and call:
-  - `consensus_get`
-  - `roadmap_get`
+- resources such as `vibrant://consensus/current`, `vibrant://roadmap/current`, and `vibrant://workflow/status`
+- safe reads such as `consensus_get`, `roadmap_get`, `task_get`, and `agent_list`
+- safe mutations in a disposable project such as `workflow_pause`, `workflow_resume`, `vibrant.update_consensus`, and `vibrant.update_roadmap`
 
-### Safe write checks
-
-You can also try a few state-changing tools in a disposable test project:
-
-- `workflow_pause`
-- `workflow_resume`
-- `vibrant.update_consensus`
-- `vibrant.update_roadmap`
-
-After calling a write tool, re-read the related resource to confirm the change.
-
-## Current permissions caveat
-
-The current dev launcher in `scripts/mcp_dev_server.py` starts the MCP server **without** an auth provider.
-
-That means:
-
-- it is useful for transport and surface testing
-- it is useful for basic tool/resource exploration
-- it does **not** exercise bearer-token authorization
-- it does **not** validate role-based permission boundaries
-
-When auth is omitted, the server falls back to a trusted local principal with all required scopes.
-
-## How to test permissions today
-
-For now, permission behavior is best validated through the existing automated tests rather than Inspector.
+## Automated tests
 
 Relevant tests include:
 
+- `tests/test_mcp_bearer_auth.py`
 - `tests/test_orchestrator_mcp.py`
 - `tests/test_orchestrator_fastmcp.py`
-- `tests/test_mcp_auth_service.py`
 
-Example targeted test runs:
+Example targeted runs:
 
 ```bash
+uv run pytest -q tests/test_mcp_bearer_auth.py
 uv run pytest -q tests/test_orchestrator_mcp.py
-uv run pytest -q tests/test_mcp_auth_service.py
-uv run pytest -q tests/test_orchestrator_fastmcp.py -k 'embedded_oauth_provider_verifies_service_tokens or app_exposes_auth_and_resource_routes'
+uv run pytest -q tests/test_orchestrator_fastmcp.py
 ```
 
-These cover:
+## Current permission model
 
-- scope enforcement in the MCP registry
-- token minting and verification
-- HTTP exposure of the auth-enabled FastMCP app
+The server does not perform per-tool authorization after transport auth.
 
-## When you want auth-enabled manual testing
+Current behavior is:
 
-For real manual permission testing in Inspector, the server needs to be started with `EmbeddedOAuthProvider` and an `AuthorizationServerService`.
-
-That setup should provide:
-
-- an HTTP MCP endpoint protected by bearer tokens
-- token minting for test identities such as `agent` and `gatekeeper`
-- a simple way to launch Inspector with the correct URL and test token
-
-At the time of writing, the repo does not yet include a dedicated auth-enabled dev launcher.
+- HTTP requests must present the configured bearer token
+- stdio transport is trusted locally
+- once connected, the full MCP surface is available
+- Codex is responsible for constraining which tools a particular agent may call
 
 ## Troubleshooting
 
+### `401 unauthorized`
+
+The request did not include the expected bearer token.
+
+Check:
+
+- the header format is exactly `Authorization: Bearer <token>`
+- the token value matches the server environment variable
+- the server was started with the expected `--bearer-token-env-var`
+
+### `500 server_error`
+
+The configured environment variable is missing in the server process.
+
+Set it before starting the HTTP server, for example:
+
+```bash
+export VIBRANT_MCP_BEARER_TOKEN=development-secret
+```
+
 ### `address already in use`
 
-Another process is already listening on the chosen port.
-
-Use a different port:
+Another process is already listening on the chosen port. Pick a different port:
 
 ```bash
 uv run python scripts/mcp_dev_server.py \
   --project-root /tmp/vibrant-mcp-demo \
   --host 127.0.0.1 \
-  --port 8001
-```
-
-### `command not found: --port`
-
-Your shell treated the next line as a separate command.
-
-Either keep the command on one line:
-
-```bash
-uv run python scripts/mcp_dev_server.py --project-root /tmp/vibrant-mcp-demo --host 127.0.0.1 --port 8000
-```
-
-or use line continuations with trailing `\` characters.
-
-### Inspector asks for manual connection details
-
-Use the stdio form so Inspector launches the server command directly:
-
-```bash
-npx -y @modelcontextprotocol/inspector \
-  uv run python scripts/mcp_dev_server.py \
-  --project-root /tmp/vibrant-mcp-demo \
-  --transport stdio
+  --port 9001
 ```
 
 ## Related docs
 
-- `vibrant/orchestrator/mcp/MCP.md`
 - `docs/embedded_auth.md`
+- `vibrant/orchestrator/mcp/MCP.md`
 - `scripts/mcp_dev_server.py`

@@ -66,8 +66,8 @@ The intended integration pattern for **stable external consumers** is:
 2. Wrap it in `OrchestratorFacade`.
 3. Read state through `snapshot()` or small projection helpers.
 4. Mutate state through semantic facade methods.
-5. Expose the same facade through `OrchestratorMCPServer` when a scope-gated
-   MCP control plane is needed.
+5. Expose the same facade through `OrchestratorMCPServer` when an MCP control
+   plane is needed.
 
 The stable consumer contract begins at the facade and the public read models.
 The exact shape of the orchestrator root consumed by
@@ -393,9 +393,8 @@ orchestrator control plane.
 
 It is responsible for:
 
-- listing scope-filtered MCP resources
-- listing scope-filtered MCP tools
-- enforcing shared authorization scopes from `vibrant.mcp.authz`
+- listing MCP resources
+- listing MCP tools
 - dispatching MCP calls into orchestrator-backed handlers
 
 Current implementations may back those handlers with `OrchestratorFacade`,
@@ -447,8 +446,10 @@ Current stable tool names are:
 - `vibrant.update_consensus`
 - `vibrant.update_roadmap`
 
-These names are scope-gated through the shared authz model in
-`vibrant/mcp/authz.py` rather than an orchestrator-specific authorization layer.
+These names are exposed through the registry without local scope filtering.
+Transport authentication is handled separately by the HTTP bearer-token wrapper,
+and Codex is responsible for deciding which tools a given client or agent may
+use.
 
 ## Not Stable
 
