@@ -55,6 +55,11 @@ Optional convenience alias:
 
 - `facade.gatekeeper.submit(text)`
 
+Additional UI-facing convenience helpers on the root facade:
+
+- `list_command_history(*, limit=None) -> list[str]`
+- `record_command_history_entry(text, *, limit=None) -> list[str]`
+
 The Gatekeeper alias exists only to start a new conversational Gatekeeper turn.
 Gatekeeper state and history are exposed through the generic `instances` and
 `runs` namespaces.

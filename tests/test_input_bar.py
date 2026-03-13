@@ -274,6 +274,41 @@ async def test_file_autocomplete_scrolls_without_wrapping(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_up_and_down_navigate_submitted_history_and_restore_draft() -> None:
+    app = InputBarHarness()
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        bar = app.query_one(InputBar)
+        field = app.query_one("#message-input", Input)
+        bar.set_history_provider(lambda: ["first prompt", "second prompt"])
+        bar.focus_input()
+
+        await pilot.press(*"draft idea")
+        await pilot.pause()
+
+        await pilot.press("up")
+        await pilot.pause()
+        assert field.value == "second prompt"
+
+        await pilot.press("up")
+        await pilot.pause()
+        assert field.value == "first prompt"
+
+        await pilot.press("up")
+        await pilot.pause()
+        assert field.value == "first prompt"
+
+        await pilot.press("down")
+        await pilot.pause()
+        assert field.value == "second prompt"
+
+        await pilot.press("down")
+        await pilot.pause()
+        assert field.value == "draft idea"
+
+
+@pytest.mark.asyncio
 async def test_slash_command_navigation_does_not_wrap() -> None:
     app = InputBarHarness()
 

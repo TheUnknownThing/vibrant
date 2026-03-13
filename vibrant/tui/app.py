@@ -420,6 +420,7 @@ class VibrantApp(App):
             self.notify("Gatekeeper is already running.", severity="warning")
             return
 
+        self._record_command_history_entry(event.text)
         input_bar.set_enabled(False)
         input_bar.set_context("gatekeeper", "sending…")
         self._set_status("Sending message to Gatekeeper…")
@@ -428,6 +429,7 @@ class VibrantApp(App):
         self._refresh_gatekeeper_state()
 
     async def on_input_bar_slash_command(self, event: InputBar.SlashCommand) -> None:
+        self._record_command_history_entry(event.text)
         cmd = event.command.lower()
         if cmd == "model":
             if event.args:
@@ -633,6 +635,8 @@ class VibrantApp(App):
             input_bar.set_placeholder(placeholder)
         with suppress(Exception):
             input_bar.set_completion_base_path(self._project_root)
+        with suppress(Exception):
+            input_bar.set_history_provider(self._command_history_entries)
 
     def _sync_workspace_screen(self, *, prefer_chat_history: bool = False) -> None:
         planning_mode = self.orchestrator is None or self._is_planning_mode()
@@ -774,6 +778,30 @@ class VibrantApp(App):
         if self.orchestrator_facade is None:
             return {}
         return self.orchestrator_facade.get_task_summaries()
+
+    def _command_history_entries(self) -> list[str]:
+        orchestrator = self.orchestrator_facade
+        if orchestrator is None:
+            return []
+
+        list_history = getattr(orchestrator, "list_command_history", None)
+        if not callable(list_history):
+            return []
+
+        with suppress(Exception):
+            return list(list_history())
+        return []
+
+    def _record_command_history_entry(self, text: str) -> None:
+        normalized = text.strip()
+        orchestrator = self.orchestrator_facade
+        if not normalized or orchestrator is None:
+            return
+
+        record_entry = getattr(orchestrator, "record_command_history_entry", None)
+        if callable(record_entry):
+            with suppress(Exception):
+                record_entry(normalized)
 
     def _handle_task_result(self, result: TaskResult | None) -> None:
         orchestrator = self.orchestrator_facade

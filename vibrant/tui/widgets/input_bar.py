@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,21 +38,21 @@ class _CompletionTarget:
 
 
 class _ChatInput(Input):
-    """Input that forwards autocomplete actions to the parent input bar."""
+    """Input that forwards autocomplete and history navigation to the parent input bar."""
 
     _COMMAND_PATTERN = re.compile(r"^/\S+")
     _FILE_PATTERN = re.compile(r"(?<!\S)@\S+")
 
     BINDINGS = [
         Binding("ctrl+backspace", "delete_left_word", show=False),
-        Binding("down", "suggestion_next", show=False),
-        Binding("up", "suggestion_previous", show=False),
+        Binding("down", "navigate_next", show=False),
+        Binding("up", "navigate_previous", show=False),
         Binding("tab", "suggestion_apply", show=False),
         Binding("escape", "suggestion_dismiss", show=False),
     ]
 
-    class SuggestionNavigate(Message):
-        """Move the highlighted autocomplete suggestion."""
+    class Navigate(Message):
+        """Move through autocomplete suggestions or submitted history."""
 
         def __init__(self, delta: int) -> None:
             super().__init__()
@@ -63,11 +64,11 @@ class _ChatInput(Input):
     class SuggestionDismiss(Message):
         """Hide the autocomplete dropdown."""
 
-    def action_suggestion_next(self) -> None:
-        self.post_message(self.SuggestionNavigate(1))
+    def action_navigate_next(self) -> None:
+        self.post_message(self.Navigate(1))
 
-    def action_suggestion_previous(self) -> None:
-        self.post_message(self.SuggestionNavigate(-1))
+    def action_navigate_previous(self) -> None:
+        self.post_message(self.Navigate(-1))
 
     def action_suggestion_apply(self) -> None:
         self.post_message(self.SuggestionApply())
@@ -152,10 +153,11 @@ class InputBar(Static):
     class SlashCommand(Message):
         """Emitted when the user types a /command."""
 
-        def __init__(self, command: str, args: str) -> None:
+        def __init__(self, command: str, args: str, text: str) -> None:
             super().__init__()
             self.command = command
             self.args = args
+            self.text = text
 
     def __init__(
         self,
@@ -174,6 +176,10 @@ class InputBar(Static):
         self._max_suggestions = max_suggestions
         self._suggestions: list[_CompletionSuggestion] = []
         self._applying_suggestion = False
+        self._applying_history = False
+        self._history_provider: Callable[[], Sequence[str]] | None = None
+        self._history_index: int | None = None
+        self._history_draft = ""
 
     def compose(self) -> ComposeResult:
         self._context_label = Static(
@@ -212,6 +218,7 @@ class InputBar(Static):
             self._input.disabled = not enabled
         if not enabled:
             self._hide_suggestions()
+            self._reset_history_navigation()
 
     def set_placeholder(self, text: str) -> None:
         """Update the placeholder shown when the input is empty."""
@@ -227,6 +234,12 @@ class InputBar(Static):
         if self._input is not None and self._input.has_focus:
             self._refresh_suggestions(show=True)
 
+    def set_history_provider(self, provider: Callable[[], Sequence[str]] | None) -> None:
+        """Set the callable used to fetch submitted-input history."""
+
+        self._history_provider = provider
+        self._reset_history_navigation()
+
     @property
     def placeholder(self) -> str:
         """Return the currently configured input placeholder."""
@@ -238,6 +251,10 @@ class InputBar(Static):
 
         if event.input is not self._input or self._applying_suggestion:
             return
+        if self._applying_history:
+            self._applying_history = False
+            return
+        self._reset_history_navigation()
         self._refresh_suggestions(show=True)
 
     def on_input_blurred(self, event: Input.Blurred) -> None:
@@ -245,27 +262,15 @@ class InputBar(Static):
 
         if event.input is self._input:
             self._hide_suggestions()
+            self._reset_history_navigation()
 
-    def on__chat_input_suggestion_navigate(self, event: _ChatInput.SuggestionNavigate) -> None:
-        """Move the highlighted suggestion up or down."""
+    def on__chat_input_navigate(self, event: _ChatInput.Navigate) -> None:
+        """Move within autocomplete suggestions or previously submitted input."""
 
-        if self._options is None:
+        if self._options is not None and self._options.display and self._options.option_count > 0:
+            self._move_highlighted_suggestion(event.delta)
             return
-
-        if not self._options.display:
-            self._refresh_suggestions(show=True)
-            return
-
-        option_count = self._options.option_count
-        if option_count == 0:
-            return
-
-        highlighted = self._options.highlighted
-        if highlighted is None:
-            highlighted = 0 if event.delta > 0 else option_count - 1
-        else:
-            highlighted = max(0, min(highlighted + event.delta, option_count - 1))
-        self._options.highlighted = highlighted
+        self._navigate_history(event.delta)
 
     def on__chat_input_suggestion_apply(self, _: _ChatInput.SuggestionApply) -> None:
         """Apply the highlighted suggestion to the chat input."""
@@ -307,9 +312,10 @@ class InputBar(Static):
             parts = text[1:].split(None, 1)
             command = parts[0] if parts else ""
             args = parts[1] if len(parts) > 1 else ""
-            self.post_message(self.SlashCommand(command, args))
+            self.post_message(self.SlashCommand(command, args, text))
         else:
             self.post_message(self.MessageSubmitted(text))
+        self._reset_history_navigation()
 
     def focus_input(self) -> None:
         """Focus the text input."""
@@ -319,6 +325,85 @@ class InputBar(Static):
     def _hide_suggestions(self) -> None:
         if self._options is not None:
             self._options.display = False
+
+    def _move_highlighted_suggestion(self, delta: int) -> None:
+        if self._options is None:
+            return
+
+        option_count = self._options.option_count
+        if option_count == 0:
+            return
+
+        highlighted = self._options.highlighted
+        if highlighted is None:
+            highlighted = 0 if delta > 0 else option_count - 1
+        else:
+            highlighted = max(0, min(highlighted + delta, option_count - 1))
+        self._options.highlighted = highlighted
+
+    def _navigate_history(self, delta: int) -> None:
+        if self._input is None or delta == 0:
+            return
+
+        history = self._submitted_history()
+        if not history:
+            return
+
+        if self._history_index is not None and self._history_index >= len(history):
+            self._history_index = len(history) - 1
+
+        if delta < 0:
+            if self._history_index is None:
+                self._history_draft = self._input.value
+                self._history_index = len(history) - 1
+            else:
+                self._history_index = max(0, self._history_index - 1)
+            self._set_history_value(history[self._history_index])
+            return
+
+        if self._history_index is None:
+            return
+        if self._history_index >= len(history) - 1:
+            draft = self._history_draft
+            self._reset_history_navigation()
+            self._set_history_value(draft)
+            return
+
+        self._history_index += 1
+        self._set_history_value(history[self._history_index])
+
+    def _submitted_history(self) -> list[str]:
+        if self._history_provider is None:
+            return []
+
+        history: Sequence[str] = ()
+        with suppress(Exception):
+            history = self._history_provider() or ()
+
+        normalized: list[str] = []
+        for entry in history:
+            if not isinstance(entry, str):
+                continue
+            text = entry.strip()
+            if text:
+                normalized.append(text)
+        return normalized
+
+    def _set_history_value(self, value: str) -> None:
+        if self._input is None:
+            return
+
+        if self._input.value != value:
+            self._applying_history = True
+            self._input.value = value
+        self._input.cursor_position = len(value)
+
+        self._input.focus()
+        self._hide_suggestions()
+
+    def _reset_history_navigation(self) -> None:
+        self._history_index = None
+        self._history_draft = ""
 
     def _refresh_suggestions(self, *, show: bool) -> None:
         if self._options is None or self._input is None or not self._enabled:

@@ -885,6 +885,12 @@ class OrchestratorFacade:
     def list_pending_question_records(self) -> list[QuestionRecord]:
         return self.questions.pending()
 
+    def list_command_history(self, *, limit: int | None = None) -> list[str]:
+        return self.orchestrator.state_store.command_history(limit=limit)
+
+    def record_command_history_entry(self, text: str, *, limit: int | None = None) -> list[str]:
+        return self.orchestrator.state_store.record_command_history_entry(text, limit=limit)
+
     def get_task(self, task_id: str) -> TaskInfo | None:
         return self.tasks.get(task_id)
 

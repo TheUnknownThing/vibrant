@@ -288,3 +288,18 @@ class TestOrchestratorEnginePersistence:
         persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
         assert "provider_threads" not in persisted_state
         assert "pending_requests" not in persisted_state
+
+    def test_command_history_persists_through_state_store(self, tmp_path):
+        initialize_project(tmp_path)
+        backend = OrchestratorStateBackend.load(tmp_path)
+        state_store = StateStore(backend)
+
+        state_store.record_command_history_entry("  /help  ", limit=2)
+        state_store.record_command_history_entry("ship the dashboard", limit=2)
+        state_store.record_command_history_entry("review the roadmap", limit=2)
+
+        reloaded = OrchestratorState.model_validate_json(
+            (tmp_path / ".vibrant" / "state.json").read_text(encoding="utf-8")
+        )
+
+        assert reloaded.command_history == ["ship the dashboard", "review the roadmap"]
