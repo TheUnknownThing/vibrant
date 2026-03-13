@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from vibrant.orchestrator.types import AgentOutput, AgentOutputSegment, AgentThinkingState
-from vibrant.tui.widgets.chat_panel import _block_from_run, _overlay_output
+from vibrant.tui.utility.gatekeeper import GatekeeperSnapshot
+from vibrant.tui.widgets.chat_panel import _assistant_messages, _block_from_run, _overlay_output
 from vibrant.tui.widgets.conversation_renderer import MessageBlock, ReasoningPart, TextPart, ToolCallPart
 from vibrant.orchestrator.types import (
     AgentRunSnapshot,
@@ -79,3 +81,63 @@ def test_block_from_run_keeps_precise_lifecycle_timestamp_over_coarse_event_time
 
     assert block is not None
     assert block.timestamp == started_at
+
+
+def test_assistant_messages_reuses_existing_stream_block_for_delta_events() -> None:
+    run = AgentRunSnapshot(
+        run_id="run-live",
+        agent_id="gatekeeper-project",
+        task_id="gatekeeper-user_conversation",
+        role="gatekeeper",
+        lifecycle=RunLifecycleSnapshot(status="running"),
+        runtime=RunRuntimeSnapshot(state="running", active=True, done=False, awaiting_input=False),
+        workspace=RunWorkspaceSnapshot(),
+        provider=RunProviderSnapshot(),
+        envelope=RunEnvelope(state="running"),
+        payload=None,
+        identity=AgentSnapshotIdentity(agent_id="gatekeeper-project", task_id="gatekeeper-user_conversation", role="gatekeeper"),
+        context=AgentRunContextSnapshot(),
+        outcome=AgentRunOutcomeSnapshot(summary=None),
+        retry=AgentRunRetrySnapshot(),
+        state="running",
+        summary=None,
+        error=None,
+    )
+    snapshot = GatekeeperSnapshot(
+        workflow_status=None,
+        questions=(),
+        pending_questions=(),
+        instance=SimpleNamespace(active_run_id="run-live", latest_run_id="run-live"),
+        runs=(run,),
+        output=AgentOutput(
+            agent_id="gatekeeper-project",
+            task_id="gatekeeper-user_conversation",
+            status="running",
+            partial_text="Streaming right now",
+        ),
+        provider_thread_id=None,
+    )
+    existing_block = MessageBlock(
+        message_id="run-live",
+        role="assistant",
+        parts=[
+            ToolCallPart(tool_name="functions.exec_command", status="executing"),
+            TextPart("Old text"),
+        ],
+    )
+    facade = SimpleNamespace(
+        runs=SimpleNamespace(events=lambda _run_id: (_ for _ in ()).throw(AssertionError("streamed run log should not be reread"))),
+    )
+
+    messages = _assistant_messages(
+        snapshot,
+        facade,
+        existing_messages=[existing_block],
+        stream_run_id="run-live",
+    )
+
+    assert len(messages) == 1
+    assert messages[0].message_id == "run-live"
+    assert any(isinstance(part, ToolCallPart) for part in messages[0].parts)
+    text_parts = [part.text for part in messages[0].parts if isinstance(part, TextPart)]
+    assert text_parts == ["Streaming right now"]

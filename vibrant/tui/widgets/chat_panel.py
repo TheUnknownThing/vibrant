@@ -110,7 +110,7 @@ class ChatPanel(Static):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._facade: OrchestratorFacade | None = None
-        self._subtitle_text = "Gatekeeper conversation"
+        # self._subtitle_text = "Gatekeeper conversation"
         self._question_summary_text = ""
         self._has_pending_questions = False
         self._notification_token = 0
@@ -119,8 +119,8 @@ class ChatPanel(Static):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-panel-layout"):
-            yield Static("[b]Gatekeeper[/b]", id="chat-panel-header", markup=True)
-            yield Static(self._subtitle_text, id="chat-panel-subtitle")
+            yield Static("[b]Agent: Gatekeeper[/b]", id="chat-panel-header", markup=True)
+            # yield Static(self._subtitle_text, id="chat-panel-subtitle")
             yield Static(self._question_summary_text, id="chat-panel-notice", markup=False)
             with VerticalScroll(id="chat-panel-scroll"):
                 self._conversation = Static("", id="chat-panel-conversation", markup=False)
@@ -134,19 +134,28 @@ class ChatPanel(Static):
 
         self._facade = facade
 
-    def sync(self, *, flash: bool = False) -> None:
+    def sync(self, *, flash: bool = False, event_type: str | None = None) -> None:
         """Sync the panel from the current facade state."""
 
         snapshot = get_gatekeeper_snapshot(self._facade)
         if snapshot.provider_thread_id:
             self._state.provider_thread_id = snapshot.provider_thread_id
 
-        assistant_messages = _assistant_messages(snapshot, self._facade)
-        self._state.messages = _merge_messages(self._state.messages, assistant_messages)
-        self._subtitle_text = _format_subtitle(
-            snapshot.workflow_status,
-            has_pending_questions=bool(snapshot.pending_questions),
+        stream_run_id = None
+        if event_type in {"content.delta", "reasoning.summary.delta"} and snapshot.instance is not None:
+            stream_run_id = snapshot.instance.active_run_id
+
+        assistant_messages = _assistant_messages(
+            snapshot,
+            self._facade,
+            existing_messages=self._state.messages,
+            stream_run_id=stream_run_id,
         )
+        self._state.messages = _merge_messages(self._state.messages, assistant_messages)
+        # self._subtitle_text = _format_subtitle(
+        #     snapshot.workflow_status,
+        #     has_pending_questions=bool(snapshot.pending_questions),
+        # )
         self._question_summary_text = _render_question_summary(snapshot.questions)
         self._has_pending_questions = bool(snapshot.pending_questions)
 
@@ -265,7 +274,7 @@ class ChatPanel(Static):
         if not self.is_mounted:
             return
 
-        self.query_one("#chat-panel-subtitle", Static).update(self._subtitle_text)
+        # self.query_one("#chat-panel-subtitle", Static).update(self._subtitle_text)
         notice = self.query_one("#chat-panel-notice", Static)
         if self._question_summary_text:
             notice.update(self._question_summary_text)
@@ -290,27 +299,46 @@ class ChatPanel(Static):
 def _assistant_messages(
     snapshot: GatekeeperSnapshot,
     facade: OrchestratorFacade | None,
+    *,
+    existing_messages: list[MessageBlock] | None = None,
+    stream_run_id: str | None = None,
 ) -> list[MessageBlock]:
     if facade is None:
         return []
 
+    existing_by_id = {
+        block.message_id: block
+        for block in (existing_messages or ())
+        if block.role == "assistant"
+    }
+
     assistant_by_id: dict[str, MessageBlock] = {}
     for run in snapshot.runs:
+        if stream_run_id and run.run_id == stream_run_id:
+            existing = existing_by_id.get(run.run_id)
+            if existing is not None:
+                assistant_by_id[run.run_id] = _clone_block(existing)
+                continue
         block = _block_from_run(run, facade.runs.events(run.run_id))
         if block is not None:
             assistant_by_id[block.message_id] = block
 
-    active_run_id = None
+    overlay_run_id = None
     if snapshot.instance is not None:
-        active_run_id = snapshot.instance.active_run_id or snapshot.instance.latest_run_id
-    if snapshot.output is not None and active_run_id is not None:
+        overlay_run_id = snapshot.instance.active_run_id or snapshot.instance.latest_run_id
+    if snapshot.output is not None and overlay_run_id is not None:
+        base_block = assistant_by_id.get(overlay_run_id)
+        if base_block is None:
+            existing = existing_by_id.get(overlay_run_id)
+            if existing is not None:
+                base_block = _clone_block(existing)
         enriched = _overlay_output(
-            assistant_by_id.get(active_run_id),
+            base_block,
             output=snapshot.output,
-            message_id=active_run_id,
+            message_id=overlay_run_id,
         )
         if enriched is not None:
-            assistant_by_id[active_run_id] = enriched
+            assistant_by_id[overlay_run_id] = enriched
 
     messages = list(assistant_by_id.values())
     messages.sort(key=_message_sort_key)

@@ -556,11 +556,11 @@ class VibrantApp(App):
         if chat_panel is None:
             return
 
+        event_type = str(event.get("type") or "")
         with suppress(Exception):
             chat_panel.bind(self.orchestrator_facade)
-            chat_panel.sync()
+            chat_panel.sync(event_type=event_type)
 
-        event_type = str(event.get("type") or "")
         if event_type == "content.delta":
             self._set_status("Gatekeeper is responding…")
         if event_type in {"turn.completed", "runtime.error"}:
