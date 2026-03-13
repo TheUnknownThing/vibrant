@@ -13,6 +13,63 @@ The redesign is based on six non-negotiable rules.
 
 This changes the architecture from a result-parsing model to a command-driven control-plane model.
 
+### 1.1 Identifier Taxonomy
+
+Every `*_id` in this design must belong to exactly one namespace.
+
+General rules:
+
+- If a field is named `foo_id`, its meaning is "a reference into the `foo` namespace" unless this document explicitly marks it as provider-native or as an alias.
+- Repeating the same `*_id` across stores is normally intentional foreign-key reuse, not namespace overlap.
+- Provider-native ids are not orchestrator-generated primary keys and must not be treated as globally unique unless the provider contract says so.
+- Prefixes such as `attempt-`, `review-`, `question-`, `submission-`, or `gatekeeper-` are debugging aids and collision guards. The semantic namespace is defined by the field, not by the string prefix alone.
+
+Primary identifier spaces:
+
+| Identifier | Canonical meaning | Allocated by | Uniqueness and lifetime | Overlap rule |
+|---|---|---|---|---|
+| `session_id` | one durable orchestrator workflow session in `state.json` | `WorkflowStateStore` | unique per workflow-state lineage; survives restart until state is replaced | never interchangeable with provider session/thread ids |
+| `submission_id` | one host-originated Gatekeeper submission receipt | `OrchestratorControlPlane` | unique per user message / user-answer submission | many submissions may target the same `conversation_id` |
+| `task_id` | one roadmap task definition id | roadmap authoring / `RoadmapStore` | stable across the life of the task definition | may be referenced by attempts, agents, tickets, and questions; do not treat references as a new id space |
+| `lease_id` | one dispatch decision token for a selected task | `WorkflowPolicyService` | unique per dispatch lease; short-lived orchestration token | never durable task identity |
+| `attempt_id` | one execution attempt for one `task_id` | `AttemptStore` | unique per attempt; survives restart and review | multiple `attempt_id` values may exist over the life of one `task_id` |
+| `workspace_id` | one workspace handle used by execution / review / merge mechanics | `WorkspaceService` | must identify the workspace object used by one attempt lineage | may alias `task_id` if the system guarantees one live workspace per task; otherwise it must diverge |
+| `agent_id` | one durable agent record / one concrete agent run | agent factory (`Gatekeeper`, worker builders, merge agent builder) | unique per spawned agent | many `agent_id` values may belong to one `conversation_id` or one `task_id` |
+| `conversation_id` | one durable orchestrator conversation stream | `GatekeeperLifecycleService` for Gatekeeper, `ExecutionCoordinator` for worker attempts | stable across replay/rebuild; Gatekeeper keeps the same id across provider-thread resume | many `entry_id` values and often many `agent_id` values belong to one `conversation_id` |
+| `question_id` | one durable user-decision request | `QuestionStore` | unique per question record | may be referenced by host messages and workflow blocking state |
+| `ticket_id` | one durable review ticket | `ReviewTicketStore` | unique per review ticket; attempt-scoped, not task-singleton | `follow_up_ticket_id` is a reference into the same namespace |
+| `event_id` | one canonical orchestrator runtime event on the event bus | orchestrator event publisher | unique per canonical event emission | `source_event_id` is a foreign key into this namespace |
+| `entry_id` | one stored processed conversation frame | `ConversationStreamService` / `ConversationStore` | unique per stored `AgentStreamEvent`; immutable after append | never a provider id; never reused as `source_event_id` |
+
+Provider-native and scoped identifiers:
+
+| Identifier | Canonical meaning | Allocated by | Unique where? | Overlap rule |
+|---|---|---|---|---|
+| `provider_thread_id` | provider-native session/thread handle used to resume a conversation | provider runtime | only within the provider's own namespace | may outlive a single `agent_id`; resumed Gatekeeper runs may reuse the same `provider_thread_id` across multiple `agent_id` values |
+| `turn_id` | provider-native turn within a provider thread/session | provider runtime | at most provider-thread scoped unless provider guarantees more | must be interpreted together with `provider_thread_id` or canonical event lineage |
+| `item_id` | provider-native content/tool/reasoning item inside a turn | provider runtime | at most turn-scoped unless provider guarantees more | must not be used as a store primary key outside conversation/event processing |
+| `source_event_id` | foreign key from a stored conversation frame back to the canonical runtime event that produced it | canonical runtime event bus | unique if and only if canonical `event_id` is unique | `None` for host-originated entries; not a replacement for `entry_id` |
+| `active_turn_id` | reference to the currently live `turn_id` for a Gatekeeper session or conversation | session/conversation state projection | not a new namespace; just a pointer to `turn_id` | must always be interpreted as "the current `turn_id`", never as an independent id type |
+
+Reference fields that are not new namespaces:
+
+- `code_agent_id`, `merge_agent_id`, `validation_agent_ids`, and `source_agent_id` all point into the `agent_id` namespace.
+- `source_conversation_id` points into the `conversation_id` namespace.
+- `source_turn_id` points into the `turn_id` namespace.
+- `related_question_id` points into the `question_id` namespace.
+- `follow_up_ticket_id` points into the `ticket_id` namespace.
+- `active_attempt_id` points into the `attempt_id` namespace.
+- `task_ids`, `agent_ids`, `pending_question_ids`, `active_attempt_ids`, and `active_agent_ids` are plural collections of those existing id types, not separate namespaces.
+
+Overlap audit:
+
+- There should be no semantic overlap between orchestrator-generated primary ids such as `attempt_id`, `ticket_id`, `question_id`, `submission_id`, `conversation_id`, `agent_id`, and `session_id`. They name different entity classes.
+- Reuse of `task_id`, `attempt_id`, `conversation_id`, `agent_id`, or `ticket_id` across stores is intentional foreign-key reuse and should be documented as such wherever those records appear.
+- `provider_thread_id`, `turn_id`, and `item_id` intentionally overlap with provider-internal namespaces and are therefore only safe as trace or resume handles, not as orchestrator primary keys.
+- `entry_id` and `source_event_id` must stay distinct. `entry_id` identifies the stored projection frame; `source_event_id` identifies the upstream canonical event, if any.
+- The current implementation has one real ambiguity that the design must keep explicit: Gatekeeper agent records currently use synthetic `task_id` values such as `gatekeeper-user_conversation`. That means the `task_id` field is shared by two semantic namespaces: real roadmap tasks and reserved Gatekeeper pseudo-tasks. The reserved `gatekeeper-*` prefix must remain disjoint from roadmap task ids, and callers must not join Gatekeeper records against roadmap tasks by `task_id` alone.
+- The current implementation also aliases `workspace_id` to `task_id`. That is only safe while the system guarantees one live workspace per task. If parallel attempts, retained failed workspaces, or attempt-local merge sandboxes are introduced, `workspace_id` must become independently unique.
+
 ## 2. Authority Model
 
 ### Orchestrator authority
