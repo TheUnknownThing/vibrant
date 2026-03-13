@@ -63,12 +63,14 @@ class QuestionService:
         *,
         source_agent_id: str | None = None,
         source_role: str = "gatekeeper",
+        source_run_id: str | None = None,
     ) -> list[QuestionRecord]:
         reconciled = reconcile_question_records(
             self.state_store.state.questions,
             list(questions),
             source_agent_id=source_agent_id,
             source_role=source_role,
+            source_run_id=source_run_id,
         )
         self.state_store.state.replace_questions(reconciled)
         self._persist_question_state(emit_request_event=bool(self.state_store.state.pending_questions))
@@ -80,6 +82,7 @@ class QuestionService:
         *,
         source_agent_id: str | None = None,
         source_role: str = "gatekeeper",
+        source_run_id: str | None = None,
         priority: QuestionPriority = QuestionPriority.BLOCKING,
     ) -> QuestionRecord:
         question_text = text.strip()
@@ -90,6 +93,7 @@ class QuestionService:
             question_id=f"question-{uuid4()}",
             source_agent_id=source_agent_id,
             source_role=source_role,
+            source_run_id=source_run_id,
             text=question_text,
             priority=priority,
         )
@@ -98,15 +102,25 @@ class QuestionService:
         self._persist_question_state(emit_request_event=True)
         return record.model_copy(deep=True)
 
-    def resolve(self, question_id: str, *, answer: str | None = None) -> QuestionRecord:
+    def resolve(
+        self,
+        question_id: str,
+        *,
+        answer: str | None = None,
+        resolved_by_run_id: str | None = None,
+    ) -> QuestionRecord:
         needle = question_id.strip()
         if not needle:
             raise ValueError("Question id cannot be empty")
 
         for record in self.state_store.state.questions:
             if record.question_id == needle:
-                if record.status is QuestionStatus.PENDING:
-                    record.resolve(answer=answer)
+                if (
+                    record.status is QuestionStatus.PENDING
+                    or answer is not None
+                    or resolved_by_run_id is not None
+                ):
+                    record.resolve(answer=answer, resolved_by_run_id=resolved_by_run_id)
                     self.state_store.state.sync_pending_question_projection()
                     self._persist_question_state(emit_request_event=False)
                 return record.model_copy(deep=True)

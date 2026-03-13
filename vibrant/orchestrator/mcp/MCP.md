@@ -27,37 +27,42 @@ The current transport model is intentionally simple:
 
 Current stable resource names are:
 
-- `agent.status`
 - `consensus.current`
 - `events.recent`
+- `instance.by_id`
 - `questions.pending`
+- `role.list`
 - `roadmap.current`
-- `task.assigned`
+- `task.instances`
 - `task.by_id`
 - `workflow.status`
 
 Resource URI templates exposed through FastMCP are:
 
-- `vibrant://agent/{agent_id}/status`
 - `vibrant://consensus/current`
 - `vibrant://events/recent/{task_id}{?limit}`
+- `vibrant://instance/{agent_id}`
 - `vibrant://questions/pending`
+- `vibrant://roles`
 - `vibrant://roadmap/current`
 - `vibrant://task/{task_id}`
-- `vibrant://task/{task_id}/assigned`
+- `vibrant://task/{task_id}/instances`
 - `vibrant://workflow/status`
 
 ## Implemented tools
 
 Agent and execution tools:
 
-- `agent_get`
-- `agent_list`
-- `agent_result_get`
-- `agent_respond_to_request`
-- `agent_wait`
 - `consensus_get`
+- `instance_get`
+- `instance_list`
+- `instance_respond_to_request`
+- `instance_wait`
 - `roadmap_get`
+- `role_get`
+- `role_list`
+- `run_get`
+- `run_list`
 - `task_get`
 - `workflow_execute_next_task`
 

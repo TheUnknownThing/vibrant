@@ -14,7 +14,7 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Collapsible, ContentSwitcher, LoadingIndicator, Static
 
 from ...models.agent import AgentRunRecord, AgentStatus
-from ...orchestrator.types import OrchestratorAgentSnapshot
+from ...orchestrator.types import AgentInstanceSnapshot
 
 MAX_BUFFER_LINES = 10_000
 
@@ -184,7 +184,7 @@ class AgentOutput(Static):
 
         return self._debug_view_enabled
 
-    def sync_agents(self, agents: Iterable[AgentRunRecord | OrchestratorAgentSnapshot]) -> None:
+    def sync_agents(self, agents: Iterable[AgentRunRecord | AgentInstanceSnapshot]) -> None:
         """Refresh known agents and hydrate log-backed state from disk."""
 
         ordered_agents = sorted(list(agents), key=self._agent_sort_key)
@@ -225,33 +225,33 @@ class AgentOutput(Static):
         self._poll_native_logs()
         self._refresh_view()
 
-    def _agent_sort_key(self, agent: AgentRunRecord | OrchestratorAgentSnapshot) -> tuple[float, str]:
+    def _agent_sort_key(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> tuple[float, str]:
         started_at = self._started_at(agent)
         return (started_at.timestamp() if started_at is not None else 0.0, self._agent_id(agent))
 
-    def _agent_id(self, agent: AgentRunRecord | OrchestratorAgentSnapshot) -> str:
+    def _agent_id(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str:
         return agent.identity.agent_id
 
-    def _task_id(self, agent: AgentRunRecord | OrchestratorAgentSnapshot) -> str | None:
+    def _task_id(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
         return agent.identity.task_id
 
-    def _status(self, agent: AgentRunRecord | OrchestratorAgentSnapshot) -> str:
+    def _status(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str:
         if isinstance(agent, AgentRunRecord):
             return agent.lifecycle.status.value
         return agent.runtime.status
 
-    def _provider_thread_id(self, agent: AgentRunRecord | OrchestratorAgentSnapshot) -> str | None:
+    def _provider_thread_id(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
         if isinstance(agent, AgentRunRecord):
             return agent.provider.provider_thread_id
         return agent.provider.thread_id
 
-    def _canonical_event_log(self, agent: AgentRunRecord | OrchestratorAgentSnapshot) -> str | None:
+    def _canonical_event_log(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
         return agent.provider.canonical_event_log
 
-    def _native_event_log(self, agent: AgentRunRecord | OrchestratorAgentSnapshot) -> str | None:
+    def _native_event_log(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
         return agent.provider.native_event_log
 
-    def _started_at(self, agent: AgentRunRecord | OrchestratorAgentSnapshot):
+    def _started_at(self, agent: AgentRunRecord | AgentInstanceSnapshot):
         if isinstance(agent, AgentRunRecord):
             return agent.lifecycle.started_at
         return agent.runtime.started_at

@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 __all__ = [
+    "AgentRunSnapshot",
     "TaskResult",
+    "TaskExecutionResult",
     "GitManager",
     "AgentOutputProjectionService",
+    "DocumentSnapshot",
+    "AgentInstanceSnapshot",
+    "AgentRoleSnapshot",
+    "QuestionAnswerResult",
+    "RoleSnapshot",
     "Orchestrator",
     "OrchestratorFacade",
-    "OrchestratorAgentSnapshot",
     "OrchestratorMCPServer",
     "OrchestratorSnapshot",
     "OrchestratorStateBackend",
     "TaskDispatcher",
+    "WorkflowSnapshot",
     "create_orchestrator",
     "create_orchestrator_fastmcp",
     "create_orchestrator_fastmcp_app",
@@ -52,8 +59,38 @@ def __getattr__(name: str):
         from .state.backend import OrchestratorStateBackend
 
         return OrchestratorStateBackend
-    if name in {"TaskResult", "OrchestratorAgentSnapshot"}:
-        from .types import OrchestratorAgentSnapshot, TaskResult
+    if name in {
+        "AgentInstanceSnapshot",
+        "AgentRoleSnapshot",
+        "AgentRunSnapshot",
+        "DocumentSnapshot",
+        "QuestionAnswerResult",
+        "RoleSnapshot",
+        "TaskExecutionResult",
+        "TaskResult",
+        "WorkflowSnapshot",
+    }:
+        from .types import (
+            AgentInstanceSnapshot,
+            AgentRoleSnapshot,
+            AgentRunSnapshot,
+            DocumentSnapshot,
+            QuestionAnswerResult,
+            RoleSnapshot,
+            TaskExecutionResult,
+            TaskResult,
+            WorkflowSnapshot,
+        )
 
-        return {"TaskResult": TaskResult, "OrchestratorAgentSnapshot": OrchestratorAgentSnapshot}[name]
+        return {
+            "AgentInstanceSnapshot": AgentInstanceSnapshot,
+            "AgentRoleSnapshot": AgentRoleSnapshot,
+            "AgentRunSnapshot": AgentRunSnapshot,
+            "DocumentSnapshot": DocumentSnapshot,
+            "QuestionAnswerResult": QuestionAnswerResult,
+            "RoleSnapshot": RoleSnapshot,
+            "TaskExecutionResult": TaskExecutionResult,
+            "TaskResult": TaskResult,
+            "WorkflowSnapshot": WorkflowSnapshot,
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

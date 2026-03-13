@@ -564,21 +564,21 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
     handle = await lifecycle.start_gatekeeper_message("Build an auth MVP for the app.")
 
     for _ in range(50):
-        active = lifecycle.agent_manager.list_agents(role="gatekeeper", include_completed=False)
+        active = lifecycle.agent_manager.list_instance_snapshots(role="gatekeeper", include_completed=False)
         if active and active[0].runtime.awaiting_input:
             break
         await asyncio.sleep(0)
     else:
         raise AssertionError("Managed Gatekeeper run never surfaced through agent_manager")
 
-    snapshot = lifecycle.agent_manager.get_agent(handle.agent_record.identity.agent_id)
+    snapshot = lifecycle.agent_manager.get_instance_snapshot(handle.agent_record.identity.agent_id)
     assert snapshot is not None
     assert snapshot.identity.role == "gatekeeper"
     assert snapshot.runtime.has_handle is True
     assert snapshot.runtime.awaiting_input is True
     assert snapshot.runtime.input_requests[0].request_id == "req-1"
 
-    updated = await lifecycle.agent_manager.respond_to_request(
+    updated = await lifecycle.agent_manager.respond_to_instance_request(
         handle.agent_record.identity.agent_id,
         "req-1",
         result={"answer": "Use OAuth first."},
@@ -590,7 +590,7 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
 
     assert result.state is RunState.COMPLETED
     assert lifecycle.agent_manager.get_handle(handle.agent_record.identity.agent_id) is None
-    completed = lifecycle.agent_manager.get_agent(handle.agent_record.identity.agent_id)
+    completed = lifecycle.agent_manager.get_instance_snapshot(handle.agent_record.identity.agent_id)
     assert completed is not None
     assert completed.runtime.has_handle is False
     assert completed.runtime.done is True
@@ -614,7 +614,7 @@ def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
     assert lifecycle.state_store.state.active_agents == ["agent-task-standalone"]
 
     facade = OrchestratorFacade(lifecycle)
-    assert [item.identity.agent_id for item in facade.list_agent_records()] == ["agent-task-standalone"]
+    assert [item.identity.agent_id for item in facade.runs.list()] == ["agent-task-standalone"]
 
 
 def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(tmp_path):
@@ -819,7 +819,7 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
 
     attempt = await lifecycle.agent_manager.start_task(task)
 
-    active = lifecycle.agent_manager.list_active_agents()
+    active = lifecycle.agent_manager.list_active_instance_snapshots()
     assert len(active) == 1
     assert active[0].identity.agent_id == attempt.agent_record.identity.agent_id
     assert active[0].identity.task_id == task.id
@@ -832,7 +832,7 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
 
     assert result.outcome == "accepted"
 
-    snapshot = lifecycle.agent_manager.get_agent(attempt.agent_record.identity.agent_id)
+    snapshot = lifecycle.agent_manager.get_instance_snapshot(attempt.agent_record.identity.agent_id)
     assert snapshot is not None
     assert snapshot.identity.agent_id == attempt.agent_record.identity.agent_id
     assert snapshot.runtime.has_handle is False
@@ -843,7 +843,7 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
     assert snapshot.outcome.summary == "Implemented task-001."
     assert snapshot.provider.thread_id == "thread-task-001-1"
 
-    latest = lifecycle.agent_manager.latest_for_task(task.id)
+    latest = lifecycle.agent_manager.latest_instance_snapshot_for_task(task.id)
     assert latest is not None
     assert latest.identity.agent_id == attempt.agent_record.identity.agent_id
 
@@ -865,7 +865,7 @@ def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(t
     record.provider.resume_cursor = {"threadId": "thread-task-001-persisted"}
     lifecycle.agent_registry.upsert(record, increment_spawn=True)
 
-    active = lifecycle.agent_manager.list_active_agents()
+    active = lifecycle.agent_manager.list_active_instance_snapshots()
 
     assert [snapshot.identity.agent_id for snapshot in active] == [record.identity.agent_id]
     assert active[0].runtime.has_handle is False
@@ -982,9 +982,9 @@ def test_facade_exposes_explicit_instance_and_run_aliases(tmp_path):
     run.lifecycle.status = AgentStatus.COMPLETED
     lifecycle.agent_registry.upsert(run, increment_spawn=True)
 
-    agent_snapshot = facade.get_agent_instance(instance.agent_id)
-    instances = facade.list_agent_instances(task_id="task-001")
-    run_records = facade.list_agent_run_records()
+    agent_snapshot = facade.instances.get(instance.agent_id)
+    instances = facade.instances.list(task_id="task-001")
+    run_records = facade.runs.list()
 
     assert agent_snapshot is not None
     assert agent_snapshot.identity.agent_id == instance.agent_id
@@ -1007,7 +1007,7 @@ def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path)
     lifecycle.agent_registry.upsert(code_record, increment_spawn=True)
     lifecycle.agent_registry.upsert(merge_record, increment_spawn=True)
 
-    snapshots = lifecycle.agent_manager.list_agents(role=" CODE ")
+    snapshots = lifecycle.agent_manager.list_instance_snapshots(role=" CODE ")
 
     assert [snapshot.identity.agent_id for snapshot in snapshots] == [code_record.identity.agent_id]
 
@@ -1022,4 +1022,4 @@ def test_agent_management_service_rejects_invalid_string_agent_type_filters(tmp_
     )
 
     with pytest.raises(ValueError, match="Unsupported agent role filter"):
-        lifecycle.agent_manager.list_agents(role="bogus")
+        lifecycle.agent_manager.list_instance_snapshots(role="bogus")

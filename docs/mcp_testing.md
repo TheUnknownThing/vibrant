@@ -85,7 +85,7 @@ but it should no longer fail with `401`.
 For stdio or authenticated HTTP sessions, verify:
 
 - resources such as `vibrant://consensus/current`, `vibrant://roadmap/current`, and `vibrant://workflow/status`
-- safe reads such as `consensus_get`, `roadmap_get`, `task_get`, and `agent_list`
+- safe reads such as `consensus_get`, `roadmap_get`, `task_get`, and `instance_list`
 - safe mutations in a disposable project such as `workflow_pause`, `workflow_resume`, `vibrant.update_consensus`, and `vibrant.update_roadmap`
 
 ## Automated tests

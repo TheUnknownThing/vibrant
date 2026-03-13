@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +50,7 @@ from .tasks.workflow import TaskWorkflowService
 from .types import TaskResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -56,6 +58,7 @@ class _RawEventSubscription:
     handler: Any
     agent_id: str | None = None
     task_id: str | None = None
+    run_id: str | None = None
     event_types: frozenset[str] | None = None
 
 
@@ -335,6 +338,7 @@ class Orchestrator:
         *,
         agent_id: str | None = None,
         task_id: str | None = None,
+        run_id: str | None = None,
         event_types: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> Callable[[], None]:
         normalized_event_types = None
@@ -348,6 +352,7 @@ class Orchestrator:
             handler=handler,
             agent_id=agent_id,
             task_id=task_id,
+            run_id=run_id,
             event_types=normalized_event_types,
         )
         self._raw_event_subscribers.append(subscription)
@@ -419,13 +424,18 @@ async def _dispatch_raw_event_subscribers(
     for subscription in tuple(subscribers):
         if not _raw_event_matches(subscription, event):
             continue
-        await maybe_forward_event(subscription.handler, event)
+        try:
+            await maybe_forward_event(subscription.handler, event)
+        except Exception:
+            logger.exception("Raw event subscriber failed for run %s", event.get("run_id"))
 
 
 def _raw_event_matches(subscription: _RawEventSubscription, event: CanonicalEvent) -> bool:
     if subscription.agent_id is not None and event.get("agent_id") != subscription.agent_id:
         return False
     if subscription.task_id is not None and event.get("task_id") != subscription.task_id:
+        return False
+    if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
         return False
     if subscription.event_types is not None and str(event.get("type") or "") not in subscription.event_types:
         return False

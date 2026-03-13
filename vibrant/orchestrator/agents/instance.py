@@ -10,12 +10,14 @@ from vibrant.agents.runtime import AgentHandle, ProviderThreadHandle
 from vibrant.models.agent import AgentInstanceRecord, AgentRunRecord, ProviderResumeHandle
 
 from ..types import (
+    AgentInstanceSnapshot,
+    AgentRunRef,
     AgentSnapshotIdentity,
     AgentSnapshotOutcome,
     AgentSnapshotProvider,
     AgentSnapshotRuntime,
     AgentSnapshotWorkspace,
-    OrchestratorAgentSnapshot,
+    ProviderDefaultsSnapshot,
     RuntimeExecutionResult,
 )
 from .output_projection import AgentOutputProjectionService
@@ -65,7 +67,7 @@ class AgentInstance(Protocol):
 
     def get_handle(self) -> AgentHandle | None: ...
 
-    def snapshot(self, *, record: AgentRunRecord | None = None) -> OrchestratorAgentSnapshot: ...
+    def snapshot(self, *, record: AgentRunRecord | None = None) -> AgentInstanceSnapshot: ...
 
     def create_run_record(
         self,
@@ -106,11 +108,11 @@ class AgentInstance(Protocol):
         *,
         result: object | None = None,
         error: dict[str, object] | None = None,
-    ) -> OrchestratorAgentSnapshot: ...
+    ) -> AgentInstanceSnapshot: ...
 
-    async def interrupt(self) -> OrchestratorAgentSnapshot: ...
+    async def interrupt(self) -> AgentInstanceSnapshot: ...
 
-    async def kill(self) -> OrchestratorAgentSnapshot: ...
+    async def kill(self) -> AgentInstanceSnapshot: ...
 
 
 class ManagedAgentInstance:
@@ -209,13 +211,15 @@ class ManagedAgentInstance:
     def get_handle(self) -> AgentHandle | None:
         return self._runtime_service.get_handle(self._agent_id)
 
-    def snapshot(self, *, record: AgentRunRecord | None = None) -> OrchestratorAgentSnapshot:
+    def snapshot(self, *, record: AgentRunRecord | None = None) -> AgentInstanceSnapshot:
         return build_agent_snapshot(
             agent_id=self._agent_id,
             instance=self.record,
             record=record or self.latest_run(),
             runtime_service=self._runtime_service,
             output_service=self._output_service,
+            supports_interactive_requests=self.supports_interactive_requests,
+            persistent_thread=self.persistent_thread,
         )
 
     def create_run_record(
@@ -319,7 +323,7 @@ class ManagedAgentInstance:
         *,
         result: object | None = None,
         error: dict[str, object] | None = None,
-    ) -> OrchestratorAgentSnapshot:
+    ) -> AgentInstanceSnapshot:
         await self._runtime_service.respond_to_request(
             agent_id=self._agent_id,
             request_id=request_id,
@@ -328,11 +332,11 @@ class ManagedAgentInstance:
         )
         return self.snapshot()
 
-    async def interrupt(self) -> OrchestratorAgentSnapshot:
+    async def interrupt(self) -> AgentInstanceSnapshot:
         await self._runtime_service.interrupt_run(agent_id=self._agent_id)
         return self.snapshot()
 
-    async def kill(self) -> OrchestratorAgentSnapshot:
+    async def kill(self) -> AgentInstanceSnapshot:
         await self._runtime_service.kill_run(agent_id=self._agent_id)
         return self.snapshot()
 
@@ -344,7 +348,9 @@ def build_agent_snapshot(
     record: AgentRunRecord | None,
     runtime_service: AgentRuntimeService,
     output_service: AgentOutputProjectionService | None = None,
-) -> OrchestratorAgentSnapshot:
+    supports_interactive_requests: bool,
+    persistent_thread: bool,
+) -> AgentInstanceSnapshot:
     """Build the orchestrator-facing snapshot for one stable agent instance."""
 
     handle = runtime_service.get_handle(agent_id)
@@ -413,8 +419,21 @@ def build_agent_snapshot(
     error = record.outcome.error if record is not None else None
     role_result = parse_role_result(record.outcome.role_result) if record is not None else None
     run_id = record.identity.run_id if record is not None else None
+    latest_run = None
+    if run_id is not None:
+        latest_run = AgentRunRef(
+            run_id=run_id,
+            task_id=task_id,
+            lifecycle_status=runtime.status,
+            runtime_state=runtime.state,
+            summary=summary,
+            error=error,
+            awaiting_input=runtime.awaiting_input,
+            started_at=runtime.started_at,
+            finished_at=runtime.finished_at,
+        )
 
-    return OrchestratorAgentSnapshot(
+    return AgentInstanceSnapshot(
         identity=AgentSnapshotIdentity(
             agent_id=agent_id,
             run_id=run_id,
@@ -435,4 +454,20 @@ def build_agent_snapshot(
             role_result=role_result,
         ),
         provider=provider,
+        agent_id=agent_id,
+        role=role,
+        scope_type=instance.scope.scope_type,
+        scope_id=instance.scope.scope_id,
+        provider_defaults=ProviderDefaultsSnapshot(
+            kind=instance.provider.kind,
+            transport=instance.provider.transport,
+            runtime_mode=instance.provider.runtime_mode,
+        ),
+        supports_interactive_requests=supports_interactive_requests,
+        persistent_thread=persistent_thread,
+        latest_run_id=instance.latest_run_id,
+        active_run_id=instance.active_run_id,
+        active=runtime.active,
+        awaiting_input=runtime.awaiting_input,
+        latest_run=latest_run,
     )

@@ -138,6 +138,7 @@ class StateStore:
                     pending_messages,
                     source_agent_id=result.agent_record.identity.agent_id if result.agent_record is not None else None,
                     source_role=source_role,
+                    source_run_id=result.agent_record.identity.run_id if result.agent_record is not None else None,
                 )
             )
             self.engine.state.gatekeeper_status = GatekeeperStatus.AWAITING_USER

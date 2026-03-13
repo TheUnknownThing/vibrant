@@ -19,12 +19,13 @@ from vibrant.orchestrator.state import StateStore
 from vibrant.orchestrator.tasks.store import TaskStore
 from vibrant.orchestrator.tasks.workflow import TaskWorkflowService
 from vibrant.orchestrator.types import (
+    AgentInstanceSnapshot,
+    AgentRoleSnapshot,
     AgentSnapshotIdentity,
     AgentSnapshotOutcome,
     AgentSnapshotProvider,
     AgentSnapshotRuntime,
     AgentSnapshotWorkspace,
-    OrchestratorAgentSnapshot,
 )
 from vibrant.project_init import initialize_project
 
@@ -37,13 +38,64 @@ class _StubGatekeeper:
 class _StubAgentManager:
     def __init__(self, state_store: StateStore | None = None) -> None:
         self.state_store = state_store
+        self._roles = [
+            AgentRoleSnapshot(
+                role="code",
+                display_name="Code",
+                workflow_class="execution",
+                default_provider_kind="codex",
+                default_runtime_mode="workspace-write",
+                supports_interactive_requests=False,
+                persistent_thread=False,
+            ),
+            AgentRoleSnapshot(
+                role="gatekeeper",
+                display_name="Gatekeeper",
+                workflow_class="planning-control",
+                default_provider_kind="codex",
+                default_runtime_mode="read-only",
+                supports_interactive_requests=True,
+                persistent_thread=True,
+                question_source_role="gatekeeper",
+                contributes_control_plane_status=True,
+                ui_model_name="gatekeeper",
+            ),
+        ]
 
-    def list_records(self):
+    def get_role(self, role: str):
+        normalized = role.strip().lower()
+        for snapshot in self._roles:
+            if snapshot.role == normalized:
+                return snapshot
+        return None
+
+    def list_roles(self):
+        return list(self._roles)
+
+    def list_run_records(self, **kwargs):
         if self.state_store is None:
             return []
-        return self.state_store.agent_records()
+        task_id = kwargs.get("task_id")
+        agent_id = kwargs.get("agent_id")
+        role = kwargs.get("role")
+        records = self.state_store.agent_records()
+        if task_id is not None:
+            records = [record for record in records if record.identity.task_id == task_id]
+        if agent_id is not None:
+            records = [record for record in records if record.identity.agent_id == agent_id]
+        if role is not None:
+            records = [record for record in records if record.identity.role == role.strip().lower()]
+        return records
 
-    def get_agent(self, agent_id: str):
+    def get_run_record(self, run_id: str):
+        if self.state_store is None:
+            return None
+        for record in self.state_store.agent_records():
+            if record.identity.run_id == run_id:
+                return record
+        return None
+
+    def get_instance_snapshot(self, agent_id: str):
         if self.state_store is None:
             return None
         for record in self.state_store.agent_records():
@@ -51,7 +103,7 @@ class _StubAgentManager:
                 return _snapshot_from_record(record)
         return None
 
-    def list_agents(self, **kwargs):
+    def list_instance_snapshots(self, **kwargs):
         if self.state_store is None:
             return []
         task_id = kwargs.get("task_id")
@@ -70,17 +122,17 @@ class _StubAgentManager:
             snapshots = [snapshot for snapshot in snapshots if not snapshot.runtime.done or snapshot.runtime.awaiting_input]
         return snapshots
 
-    def list_active_agents(self):
-        return self.list_agents(active_only=True)
+    def list_active_instance_snapshots(self):
+        return self.list_instance_snapshots(active_only=True)
 
-    async def wait_for_agent(self, agent_id: str, *, release_terminal: bool = True):
+    async def wait_for_instance(self, agent_id: str, *, release_terminal: bool = True):
         return {
             "agent_id": agent_id,
             "state": "completed",
             "release_terminal": release_terminal,
         }
 
-    async def respond_to_request(
+    async def respond_to_instance_request(
         self,
         agent_id: str,
         request_id: int | str,
@@ -98,15 +150,16 @@ class _StubAgentManager:
         }
 
 
-def _snapshot_from_record(record: AgentRunRecord) -> OrchestratorAgentSnapshot:
+def _snapshot_from_record(record: AgentRunRecord) -> AgentInstanceSnapshot:
     status = record.lifecycle.status.value
     done = record.lifecycle.status not in {AgentStatus.RUNNING, AgentStatus.AWAITING_INPUT}
     awaiting_input = record.lifecycle.status is AgentStatus.AWAITING_INPUT
-    return OrchestratorAgentSnapshot(
+    return AgentInstanceSnapshot(
         identity=AgentSnapshotIdentity(
             agent_id=record.identity.agent_id,
             task_id=record.identity.task_id,
             role=record.identity.role,
+            run_id=record.identity.run_id,
         ),
         runtime=AgentSnapshotRuntime(
             status=status,
@@ -365,7 +418,7 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_mcp_server_exposes_agent_and_event_reads(tmp_path: Path) -> None:
+async def test_orchestrator_mcp_server_exposes_instance_and_event_reads(tmp_path: Path) -> None:
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
     server = OrchestratorMCPServer(facade)
@@ -389,11 +442,11 @@ async def test_orchestrator_mcp_server_exposes_agent_and_event_reads(tmp_path: P
         }
     )
 
-    assigned = await server.read_resource("task.assigned", task_id="task-1")
+    assigned = await server.read_resource("task.instances", task_id="task-1")
     assert assigned["task"]["id"] == "task-1"
-    assert assigned["latest_agent"]["identity"]["agent_id"] == "agent-task-1"
+    assert assigned["latest_instance"]["identity"]["agent_id"] == "agent-task-1"
 
-    status = await server.read_resource("agent.status", agent_id="agent-task-1")
+    status = await server.read_resource("instance.by_id", agent_id="agent-task-1")
     assert status["identity"]["task_id"] == "task-1"
     assert status["runtime"]["done"] is True
 
@@ -418,14 +471,24 @@ async def test_orchestrator_mcp_server_supports_safe_agent_tools(tmp_path: Path)
     )
     _persist_agent_record(state_store, agent_id="agent-task-1", task_id="task-1")
 
-    agent_snapshot = await server.call_tool("agent_get", agent_id="agent-task-1")
-    assert agent_snapshot["identity"]["agent_id"] == "agent-task-1"
+    role_snapshot = await server.call_tool("role_get", role="code")
+    assert role_snapshot["role"] == "code"
 
-    agent_list = await server.call_tool("agent_list", task_id="task-1")
-    assert [item["identity"]["agent_id"] for item in agent_list] == ["agent-task-1"]
+    roles = await server.call_tool("role_list")
+    assert [item["role"] for item in roles] == ["code", "gatekeeper"]
 
-    agent_result = await server.call_tool("agent_result_get", agent_id="agent-task-1")
-    assert agent_result["summary"] == "Implemented successfully."
+    instance_snapshot = await server.call_tool("instance_get", agent_id="agent-task-1")
+    assert instance_snapshot["identity"]["agent_id"] == "agent-task-1"
+
+    instance_list = await server.call_tool("instance_list", task_id="task-1")
+    assert [item["identity"]["agent_id"] for item in instance_list] == ["agent-task-1"]
+
+    run_list = await server.call_tool("run_list", task_id="task-1")
+    assert len(run_list) == 1
+
+    run_id = run_list[0]["identity"]["run_id"]
+    run_record = await server.call_tool("run_get", run_id=run_id)
+    assert run_record["outcome"]["summary"] == "Implemented successfully."
 
     async def _run_next_task():
         return {"task_id": "task-1", "outcome": "accepted", "task_status": TaskStatus.ACCEPTED.value}
@@ -435,11 +498,11 @@ async def test_orchestrator_mcp_server_supports_safe_agent_tools(tmp_path: Path)
     assert executed == {"task_id": "task-1", "outcome": "accepted", "task_status": "accepted"}
 
     facade.orchestrator.agent_manager = _StubAgentManager()
-    waited = await server.call_tool("agent_wait", agent_id="agent-task-1")
+    waited = await server.call_tool("instance_wait", agent_id="agent-task-1")
     assert waited["state"] == "completed"
 
     responded = await server.call_tool(
-        "agent_respond_to_request",
+        "instance_respond_to_request",
         agent_id="agent-task-1",
         request_id="req-1",
         result={"approved": True},

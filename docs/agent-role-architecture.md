@@ -251,28 +251,39 @@ This means recovery is no longer based on one overloaded record pretending to be
 
 ## Public API Shape Today
 
-The current public API is intentionally mixed while the refactor settles.
+The public agent-facing orchestrator API now uses layered namespaces that match
+the implemented model.
 
-Stable-agent reads:
+Role-layer reads:
 
-- `get_agent(agent_id)`
-- `get_agent_instance(agent_id)`
-- `list_agents(...)`
-- `list_agent_instances(...)`
+- `facade.roles.get(role)`
+- `facade.roles.list()`
 
-Run-centric reads:
+Instance-layer reads and control:
 
-- `get_run(run_id)`
-- `list_agent_records()`
-- `list_agent_run_records()`
-- `records_for_task(task_id)`
+- `facade.instances.get(agent_id)`
+- `facade.instances.list(...)`
+- `facade.instances.active()`
+- `facade.instances.wait(agent_id, ...)`
+- `facade.instances.respond_to_request(agent_id, request_id, ...)`
 
-Instance-aware default surface at the top level:
+Run-layer reads:
+
+- `facade.runs.get(run_id)`
+- `facade.runs.list(...)`
+- `facade.runs.for_task(task_id, ...)`
+- `facade.runs.for_instance(agent_id)`
+- `facade.runs.latest_for_task(task_id, ...)`
+
+Top-level snapshot defaults:
 
 - `OrchestratorFacade.snapshot()` returns `OrchestratorSnapshot`
-- `OrchestratorSnapshot.agents` is a tuple of stable agent snapshots
+- `OrchestratorSnapshot.roles` is a tuple of stable role snapshots
+- `OrchestratorSnapshot.instances` is a tuple of stable agent-instance snapshots
 
-So the durable architecture is instance-aware by default, even though some explicit run-history APIs still remain.
+So the public surface now uses the same role / instance / run nouns as the
+durable architecture, while run history still remains backed by
+`AgentRunRecord`.
 
 ## Coordination Boundaries Today
 
@@ -310,25 +321,28 @@ This is why the architecture is now structurally correct even though some policy
 
 ## Terminology Crosswalk
 
-Some names still reflect the transition from the old run-centric model to the current instance-aware model.
+The internal storage/runtime terms and the public facade nouns are now aligned.
 
+- **Role terminology**
+  - `AgentRoleSpec`
+  - `AgentRoleCatalog`
+  - `AgentRoleSnapshot`
+  - `facade.roles`
 - **Stable instance terminology**
   - `AgentInstanceRecord`
   - `AgentInstanceStore`
   - `AgentInstance`
   - `ManagedAgentInstance`
-  - `get_agent_instance(...)`
-  - `list_agent_instances(...)`
-- **Run terminology still present for explicit history access**
+  - `AgentInstanceSnapshot`
+  - `facade.instances`
+- **Run terminology**
   - `AgentRunRecord`
-  - `list_agent_records()`
-  - `list_agent_run_records()`
-  - `records_for_task(...)`
+  - `facade.runs`
 
 When reading current APIs, the practical rule is:
 
-> If you need durable history for individual executions, use the run-centric surface.
-> If you need the stable logical actor, use the instance-aware surface.
+> If you need durable history for individual executions, use `facade.runs`.
+> If you need the stable logical actor, use `facade.instances`.
 
 ## What This Refactor Already Fixed
 

@@ -10,14 +10,14 @@ from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.execution.git_manager import GitWorktreeInfo
 
 from ..tasks.execution import TaskExecutionAttempt, TaskExecutionService
-from ..types import OrchestratorAgentSnapshot, RuntimeExecutionResult, TaskResult
+from ..types import AgentInstanceSnapshot, AgentRoleSnapshot, RuntimeExecutionResult, TaskResult
 from .catalog import build_builtin_role_catalog
 from .instance import AgentInstance, ManagedAgentInstance, StartedAgentRun
 from .output_projection import AgentOutputProjectionService
 from .registry import AgentRegistry
 from .runtime import AgentRuntimeService, RuntimeHandleSnapshot
 
-ManagedAgentSnapshot = OrchestratorAgentSnapshot
+ManagedAgentSnapshot = AgentInstanceSnapshot
 
 
 class AgentManagementService:
@@ -65,33 +65,50 @@ class AgentManagementService:
             output_service=self._output_service,
         )
 
+    def _role_snapshot(self, role: str) -> AgentRoleSnapshot:
+        spec = self._role_catalog.get(role)
+        return AgentRoleSnapshot(
+            role=spec.role,
+            display_name=spec.display_name,
+            workflow_class=spec.workflow_class,
+            default_provider_kind=spec.default_provider_kind,
+            default_runtime_mode=spec.default_runtime_mode,
+            supports_interactive_requests=spec.supports_interactive_requests,
+            persistent_thread=spec.persistent_thread,
+            question_source_role=spec.question_source_role,
+            contributes_control_plane_status=spec.contributes_control_plane_status,
+            ui_model_name=spec.ui_model_name,
+        )
+
     # ------------------------------------------------------------------
     # Durable record / instance / snapshot access
     # ------------------------------------------------------------------
 
-    def get_record(self, agent_id: str) -> AgentRunRecord | None:
-        """Return the latest persisted run record for one stable agent."""
+    def latest_run_record(self, agent_id: str) -> AgentRunRecord | None:
+        """Return the latest persisted run record for one stable agent instance."""
         return self._agent_registry.get(agent_id)
 
-    def get_run(self, run_id: str) -> AgentRunRecord | None:
+    def get_run_record(self, run_id: str) -> AgentRunRecord | None:
         """Return one persisted run record by run id."""
         return self._agent_registry.get_run(run_id)
 
-    def list_records(self) -> list[AgentRunRecord]:
-        """Return all persisted run records."""
-        return self._agent_registry.list_records()
-
-    def list_run_records(self) -> list[AgentRunRecord]:
-        """Return all persisted run records."""
-        return self.list_records()
-
-    def records_for_task(self, task_id: str) -> list[AgentRunRecord]:
-        """Return persisted run records for one task."""
-        return self._agent_registry.records_for_task(task_id)
-
-    def run_records_for_task(self, task_id: str) -> list[AgentRunRecord]:
-        """Return persisted run records for one task."""
-        return self.records_for_task(task_id)
+    def list_run_records(
+        self,
+        *,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        role: str | None = None,
+    ) -> list[AgentRunRecord]:
+        """Return persisted run records with optional task/instance/role filters."""
+        resolved_role = self._normalize_role(role)
+        records = self._agent_registry.list_records()
+        if task_id is not None:
+            records = [record for record in records if record.identity.task_id == task_id]
+        if agent_id is not None:
+            records = [record for record in records if record.identity.agent_id == agent_id]
+        if resolved_role is not None:
+            records = [record for record in records if record.identity.role == resolved_role]
+        return records
 
     def provider_thread_handle(self, agent_id: str) -> ProviderThreadHandle | None:
         """Return the durable provider-thread handle for a stable agent."""
@@ -154,18 +171,14 @@ class AgentManagementService:
             raise KeyError(f"Unknown agent instance: {record.identity.agent_id}")
         return instance.snapshot(record=record)
 
-    def get_agent(self, agent_id: str) -> ManagedAgentSnapshot | None:
-        """Return the unified snapshot for one stable agent, if known."""
+    def get_instance_snapshot(self, agent_id: str) -> ManagedAgentSnapshot | None:
+        """Return the unified snapshot for one stable agent instance, if known."""
         instance = self.get_instance(agent_id)
         if instance is None:
             return None
         return instance.snapshot()
 
-    def get_agent_instance(self, agent_id: str) -> ManagedAgentSnapshot | None:
-        """Return the stable-agent snapshot for one instance."""
-        return self.get_agent(agent_id)
-
-    def list_agents(
+    def list_instance_snapshots(
         self,
         *,
         task_id: str | None = None,
@@ -173,7 +186,7 @@ class AgentManagementService:
         include_completed: bool = True,
         active_only: bool = False,
     ) -> list[ManagedAgentSnapshot]:
-        """List stable agents with optional task/role/activity filters."""
+        """List stable agent-instance snapshots with task/role/activity filters."""
         snapshots = [instance.snapshot() for instance in self.list_instances(task_id=task_id, role=role)]
         if active_only:
             return [snapshot for snapshot in snapshots if snapshot.runtime.active]
@@ -181,26 +194,10 @@ class AgentManagementService:
             return [snapshot for snapshot in snapshots if not snapshot.runtime.done or snapshot.runtime.awaiting_input]
         return snapshots
 
-    def list_agent_instances(
-        self,
-        *,
-        task_id: str | None = None,
-        role: str | None = None,
-        include_completed: bool = True,
-        active_only: bool = False,
-    ) -> list[ManagedAgentSnapshot]:
-        """Return stable-agent snapshots using explicit instance terminology."""
-        return self.list_agents(
-            task_id=task_id,
-            role=role,
-            include_completed=include_completed,
-            active_only=active_only,
-        )
+    def list_active_instance_snapshots(self) -> list[ManagedAgentSnapshot]:
+        return self.list_instance_snapshots(active_only=True)
 
-    def list_active_agents(self) -> list[ManagedAgentSnapshot]:
-        return self.list_agents(active_only=True)
-
-    def latest_for_task(
+    def latest_instance_snapshot_for_task(
         self,
         task_id: str,
         *,
@@ -214,6 +211,15 @@ class AgentManagementService:
         if record is None:
             return None
         return self.snapshot_for_record(record)
+
+    def get_role(self, role: str) -> AgentRoleSnapshot | None:
+        spec = self._role_catalog.try_get(role)
+        if spec is None:
+            return None
+        return self._role_snapshot(spec.role)
+
+    def list_roles(self) -> list[AgentRoleSnapshot]:
+        return [self._role_snapshot(spec.role) for spec in self._role_catalog.all()]
 
     # ------------------------------------------------------------------
     # Record construction helpers
@@ -367,7 +373,7 @@ class AgentManagementService:
             provider_thread=provider_thread,
         )
 
-    async def wait_for_agent(
+    async def wait_for_instance(
         self,
         agent_id: str,
         *,
@@ -378,7 +384,7 @@ class AgentManagementService:
             raise KeyError(f"Unknown agent instance: {agent_id}")
         return await instance.wait_for_run(release_terminal=release_terminal)
 
-    async def respond_to_request(
+    async def respond_to_instance_request(
         self,
         agent_id: str,
         request_id: int | str,
@@ -391,13 +397,13 @@ class AgentManagementService:
             raise KeyError(f"Unknown agent instance: {agent_id}")
         return await instance.respond_to_request(request_id, result=result, error=error)
 
-    async def interrupt_agent(self, agent_id: str) -> ManagedAgentSnapshot:
+    async def interrupt_instance(self, agent_id: str) -> ManagedAgentSnapshot:
         instance = self.get_instance(agent_id)
         if instance is None:
             raise KeyError(f"Unknown agent instance: {agent_id}")
         return await instance.interrupt()
 
-    async def kill_agent(self, agent_id: str) -> ManagedAgentSnapshot:
+    async def kill_instance(self, agent_id: str) -> ManagedAgentSnapshot:
         instance = self.get_instance(agent_id)
         if instance is None:
             raise KeyError(f"Unknown agent instance: {agent_id}")

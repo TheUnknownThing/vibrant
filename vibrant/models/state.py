@@ -55,10 +55,12 @@ class QuestionRecord(BaseModel):
     question_id: str
     source_agent_id: str | None = None
     source_role: str = "gatekeeper"
+    source_run_id: str | None = None
     text: str
     priority: QuestionPriority = QuestionPriority.BLOCKING
     status: QuestionStatus = QuestionStatus.PENDING
     answer: str | None = None
+    resolved_by_run_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     resolved_at: datetime | None = None
 
@@ -84,10 +86,17 @@ class QuestionRecord(BaseModel):
     def is_pending(self) -> bool:
         return self.status is QuestionStatus.PENDING
 
-    def resolve(self, *, answer: str | None = None) -> None:
+    def resolve(
+        self,
+        *,
+        answer: str | None = None,
+        resolved_by_run_id: str | None = None,
+    ) -> None:
         cleaned_answer = answer.strip() if isinstance(answer, str) else None
-        self.answer = cleaned_answer or None
+        if answer is not None:
+            self.answer = cleaned_answer or None
         self.status = QuestionStatus.ANSWERED if self.answer else QuestionStatus.RESOLVED
+        self.resolved_by_run_id = resolved_by_run_id or self.resolved_by_run_id
         self.resolved_at = datetime.now(timezone.utc)
 
 
@@ -218,6 +227,7 @@ def reconcile_question_records(
     *,
     source_agent_id: str | None = None,
     source_role: str = "gatekeeper",
+    source_run_id: str | None = None,
     priority: QuestionPriority = QuestionPriority.BLOCKING,
 ) -> list[QuestionRecord]:
     """Reconcile durable question records against the latest pending text list."""
@@ -245,6 +255,7 @@ def reconcile_question_records(
                 question_id=f"question-{uuid4()}",
                 source_agent_id=source_agent_id,
                 source_role=source_role,
+                source_run_id=source_run_id,
                 text=question,
                 priority=priority,
             )

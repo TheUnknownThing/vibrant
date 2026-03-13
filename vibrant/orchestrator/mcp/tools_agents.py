@@ -25,58 +25,67 @@ class AgentToolHandlers:
     def task_get(self, task_id: str) -> dict[str, Any]:
         return self.resources.task_by_id(task_id)
 
-    def agent_get(self, agent_id: str) -> dict[str, Any]:
-        result = self.resources.agent_status(agent_id=agent_id)
-        assert isinstance(result, dict)
-        return result
+    def role_get(self, role: str) -> dict[str, Any]:
+        snapshot = self.facade.roles.get(role)
+        if snapshot is None:
+            raise KeyError(f"Unknown role: {role}")
+        return _serialize_value(snapshot)
 
-    def agent_list(
+    def role_list(self) -> list[dict[str, Any]]:
+        return self.resources.role_list()
+
+    def instance_get(self, agent_id: str) -> dict[str, Any]:
+        return self.resources.instance_by_id(agent_id)
+
+    def instance_list(
         self,
         *,
         task_id: str | None = None,
+        role: str | None = None,
         include_completed: bool = True,
         active_only: bool = False,
     ) -> list[dict[str, Any]]:
-        result = self.resources.agent_status(
-            task_id=task_id,
-            include_completed=include_completed,
-            active_only=active_only,
-        )
-        assert isinstance(result, list)
-        return result
+        return [
+            _serialize_value(snapshot)
+            for snapshot in self.facade.instances.list(
+                task_id=task_id,
+                role=role,
+                include_completed=include_completed,
+                active_only=active_only,
+            )
+        ]
 
-    def agent_result_get(self, agent_id: str) -> dict[str, Any]:
-        snapshot = self.facade.get_agent(agent_id)
-        if snapshot is None:
-            raise KeyError(f"Unknown agent: {agent_id}")
-        return {
-            "agent_id": snapshot.identity.agent_id,
-            "run_id": snapshot.identity.run_id,
-            "task_id": snapshot.identity.task_id,
-            "role": snapshot.identity.role,
-            "status": snapshot.runtime.status,
-            "done": snapshot.runtime.done,
-            "awaiting_input": snapshot.runtime.awaiting_input,
-            "summary": snapshot.outcome.summary,
-            "error": snapshot.outcome.error,
-            "output": _serialize_value(snapshot.outcome.output),
-            "role_result": _serialize_value(snapshot.outcome.role_result),
-            "provider": _serialize_value(snapshot.provider),
-        }
+    def run_get(self, run_id: str) -> dict[str, Any]:
+        record = self.facade.runs.get(run_id)
+        if record is None:
+            raise KeyError(f"Unknown run: {run_id}")
+        return _serialize_value(record)
+
+    def run_list(
+        self,
+        *,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        role: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return [
+            _serialize_value(record)
+            for record in self.facade.runs.list(
+                task_id=task_id,
+                agent_id=agent_id,
+                role=role,
+            )
+        ]
 
     async def workflow_execute_next_task(self) -> dict[str, Any] | None:
         result = await self.facade.execute_next_task()
         return _serialize_value(result)
 
-    async def agent_wait(self, agent_id: str, *, release_terminal: bool = True) -> dict[str, Any]:
-        manager = getattr(self.facade.orchestrator, "agent_manager", None)
-        wait_for_agent = getattr(manager, "wait_for_agent", None)
-        if not callable(wait_for_agent):
-            raise AttributeError("Orchestrator does not expose agent wait controls")
-        result = await wait_for_agent(agent_id, release_terminal=release_terminal)
+    async def instance_wait(self, agent_id: str, *, release_terminal: bool = True) -> dict[str, Any]:
+        result = await self.facade.instances.wait(agent_id, release_terminal=release_terminal)
         return _serialize_value(result)
 
-    async def agent_respond_to_request(
+    async def instance_respond_to_request(
         self,
         agent_id: str,
         request_id: int | str,
@@ -84,11 +93,7 @@ class AgentToolHandlers:
         result: Any | None = None,
         error: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        manager = getattr(self.facade.orchestrator, "agent_manager", None)
-        respond_to_request = getattr(manager, "respond_to_request", None)
-        if not callable(respond_to_request):
-            raise AttributeError("Orchestrator does not expose agent request controls")
-        snapshot = await respond_to_request(
+        snapshot = await self.facade.instances.respond_to_request(
             agent_id,
             request_id,
             result=result,

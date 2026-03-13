@@ -44,10 +44,15 @@ class OrchestratorMCPServer:
         self.agent_tools = AgentToolHandlers(facade)
 
         self._resources: dict[str, MCPResourceDefinition] = {
-            "agent.status": MCPResourceDefinition(
-                name="agent.status",
-                description="Read one agent snapshot or list agent snapshots.",
-                handler=self.resources.agent_status,
+            "role.list": MCPResourceDefinition(
+                name="role.list",
+                description="Read the built-in orchestrator role catalog.",
+                handler=self.resources.role_list,
+            ),
+            "instance.by_id": MCPResourceDefinition(
+                name="instance.by_id",
+                description="Read one agent-instance snapshot by id.",
+                handler=self.resources.instance_by_id,
             ),
             "consensus.current": MCPResourceDefinition(
                 name="consensus.current",
@@ -74,10 +79,10 @@ class OrchestratorMCPServer:
                 description="Read one roadmap task by id.",
                 handler=self.resources.task_by_id,
             ),
-            "task.assigned": MCPResourceDefinition(
-                name="task.assigned",
-                description="Read a task together with its related agents.",
-                handler=self.resources.task_assigned,
+            "task.instances": MCPResourceDefinition(
+                name="task.instances",
+                description="Read a task together with its related agent instances.",
+                handler=self.resources.task_instances,
             ),
             "workflow.status": MCPResourceDefinition(
                 name="workflow.status",
@@ -86,30 +91,45 @@ class OrchestratorMCPServer:
             ),
         }
         self._tools: dict[str, MCPToolDefinition] = {
-            "agent_get": MCPToolDefinition(
-                "agent_get",
-                "Read one agent snapshot by id.",
-                self.agent_tools.agent_get,
+            "role_get": MCPToolDefinition(
+                "role_get",
+                "Read one orchestrator role by id.",
+                self.agent_tools.role_get,
             ),
-            "agent_list": MCPToolDefinition(
-                "agent_list",
-                "List orchestrator agent snapshots.",
-                self.agent_tools.agent_list,
+            "role_list": MCPToolDefinition(
+                "role_list",
+                "List orchestrator role metadata.",
+                self.agent_tools.role_list,
             ),
-            "agent_result_get": MCPToolDefinition(
-                "agent_result_get",
-                "Read the latest known result for one agent.",
-                self.agent_tools.agent_result_get,
+            "instance_get": MCPToolDefinition(
+                "instance_get",
+                "Read one agent-instance snapshot by id.",
+                self.agent_tools.instance_get,
             ),
-            "agent_respond_to_request": MCPToolDefinition(
-                "agent_respond_to_request",
-                "Answer a pending provider request for an existing agent.",
-                self.agent_tools.agent_respond_to_request,
+            "instance_list": MCPToolDefinition(
+                "instance_list",
+                "List orchestrator agent-instance snapshots.",
+                self.agent_tools.instance_list,
             ),
-            "agent_wait": MCPToolDefinition(
-                "agent_wait",
-                "Wait for an existing agent to reach a result state.",
-                self.agent_tools.agent_wait,
+            "run_get": MCPToolDefinition(
+                "run_get",
+                "Read one orchestrator agent run by run id.",
+                self.agent_tools.run_get,
+            ),
+            "run_list": MCPToolDefinition(
+                "run_list",
+                "List orchestrator agent runs.",
+                self.agent_tools.run_list,
+            ),
+            "instance_respond_to_request": MCPToolDefinition(
+                "instance_respond_to_request",
+                "Answer a pending provider request for an existing agent instance.",
+                self.agent_tools.instance_respond_to_request,
+            ),
+            "instance_wait": MCPToolDefinition(
+                "instance_wait",
+                "Wait for an existing agent instance to reach a result state.",
+                self.agent_tools.instance_wait,
             ),
             "consensus_get": MCPToolDefinition(
                 "consensus_get",

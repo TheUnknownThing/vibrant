@@ -114,6 +114,15 @@ def create_orchestrator_fastmcp(
         return _resource_body(await registry.read_resource("questions.pending"))
 
     @server.resource(
+        "vibrant://roles",
+        name="role.list",
+        description=_resource_description(registry, "role.list"),
+        mime_type="application/json",
+    )
+    async def role_list_resource() -> str:
+        return _resource_body(await registry.read_resource("role.list"))
+
+    @server.resource(
         "vibrant://task/{task_id}",
         name="task.by_id",
         description=_resource_description(registry, "task.by_id"),
@@ -123,22 +132,22 @@ def create_orchestrator_fastmcp(
         return _resource_body(await registry.read_resource("task.by_id", task_id=task_id))
 
     @server.resource(
-        "vibrant://task/{task_id}/assigned",
-        name="task.assigned",
-        description=_resource_description(registry, "task.assigned"),
+        "vibrant://task/{task_id}/instances",
+        name="task.instances",
+        description=_resource_description(registry, "task.instances"),
         mime_type="application/json",
     )
-    async def task_assigned(task_id: str) -> str:
-        return _resource_body(await registry.read_resource("task.assigned", task_id=task_id))
+    async def task_instances(task_id: str) -> str:
+        return _resource_body(await registry.read_resource("task.instances", task_id=task_id))
 
     @server.resource(
-        "vibrant://agent/{agent_id}/status",
-        name="agent.status",
-        description=_resource_description(registry, "agent.status"),
+        "vibrant://instance/{agent_id}",
+        name="instance.by_id",
+        description=_resource_description(registry, "instance.by_id"),
         mime_type="application/json",
     )
-    async def agent_status(agent_id: str) -> str:
-        return _resource_body(await registry.read_resource("agent.status", agent_id=agent_id))
+    async def instance_by_id(agent_id: str) -> str:
+        return _resource_body(await registry.read_resource("instance.by_id", agent_id=agent_id))
 
     @server.resource(
         "vibrant://events/recent/{task_id}{?limit}",
@@ -150,47 +159,79 @@ def create_orchestrator_fastmcp(
         return _resource_body(await registry.read_resource("events.recent", task_id=task_id, limit=limit))
 
     @server.tool(
-        name="agent_get",
-        description=_tool_description(registry, "agent_get"),
+        name="role_get",
+        description=_tool_description(registry, "role_get"),
     )
-    async def agent_get(agent_id: str) -> dict[str, Any]:
-        return await registry.call_tool("agent_get", agent_id=agent_id)
+    async def role_get(role: str) -> dict[str, Any]:
+        return await registry.call_tool("role_get", role=role)
 
     @server.tool(
-        name="agent_list",
-        description=_tool_description(registry, "agent_list"),
+        name="role_list",
+        description=_tool_description(registry, "role_list"),
     )
-    async def agent_list(
+    async def role_list() -> list[dict[str, Any]]:
+        return await registry.call_tool("role_list")
+
+    @server.tool(
+        name="instance_get",
+        description=_tool_description(registry, "instance_get"),
+    )
+    async def instance_get(agent_id: str) -> dict[str, Any]:
+        return await registry.call_tool("instance_get", agent_id=agent_id)
+
+    @server.tool(
+        name="instance_list",
+        description=_tool_description(registry, "instance_list"),
+    )
+    async def instance_list(
         task_id: str | None = None,
+        role: str | None = None,
         include_completed: bool = True,
         active_only: bool = False,
     ) -> list[dict[str, Any]]:
         return await registry.call_tool(
-            "agent_list",
+            "instance_list",
             task_id=task_id,
+            role=role,
             include_completed=include_completed,
             active_only=active_only,
         )
 
     @server.tool(
-        name="agent_result_get",
-        description=_tool_description(registry, "agent_result_get"),
+        name="run_get",
+        description=_tool_description(registry, "run_get"),
     )
-    async def agent_result_get(agent_id: str) -> dict[str, Any]:
-        return await registry.call_tool("agent_result_get", agent_id=agent_id)
+    async def run_get(run_id: str) -> dict[str, Any]:
+        return await registry.call_tool("run_get", run_id=run_id)
 
     @server.tool(
-        name="agent_respond_to_request",
-        description=_tool_description(registry, "agent_respond_to_request"),
+        name="run_list",
+        description=_tool_description(registry, "run_list"),
     )
-    async def agent_respond_to_request(
+    async def run_list(
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        role: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return await registry.call_tool(
+            "run_list",
+            task_id=task_id,
+            agent_id=agent_id,
+            role=role,
+        )
+
+    @server.tool(
+        name="instance_respond_to_request",
+        description=_tool_description(registry, "instance_respond_to_request"),
+    )
+    async def instance_respond_to_request(
         agent_id: str,
         request_id: int | str,
         result: Any | None = None,
         error: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return await registry.call_tool(
-            "agent_respond_to_request",
+            "instance_respond_to_request",
             agent_id=agent_id,
             request_id=request_id,
             result=result,
@@ -198,12 +239,12 @@ def create_orchestrator_fastmcp(
         )
 
     @server.tool(
-        name="agent_wait",
-        description=_tool_description(registry, "agent_wait"),
+        name="instance_wait",
+        description=_tool_description(registry, "instance_wait"),
     )
-    async def agent_wait(agent_id: str, release_terminal: bool = True) -> dict[str, Any]:
+    async def instance_wait(agent_id: str, release_terminal: bool = True) -> dict[str, Any]:
         return await registry.call_tool(
-            "agent_wait",
+            "instance_wait",
             agent_id=agent_id,
             release_terminal=release_terminal,
         )
