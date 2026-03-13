@@ -63,3 +63,70 @@ def test_projection_tracks_reasoning_summary_deltas_separately_from_response() -
     assert output is not None
     assert output.partial_text == "Implemented the projection changes."
     assert output.thinking.text == "Refactor plan finalized"
+
+
+def test_projection_commits_completed_segments_and_resets_for_new_turn() -> None:
+    service = AgentOutputProjectionService()
+
+    output = service.ingest(
+        {
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+            "type": "turn.started",
+            "timestamp": "2026-03-11T12:00:00Z",
+            "turn": {"id": "turn-1"},
+        }
+    )
+    assert output is not None
+
+    service.ingest(
+        {
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+            "type": "reasoning.summary.delta",
+            "timestamp": "2026-03-11T12:00:01Z",
+            "item_id": "reason-1",
+            "delta": "Drafting the reply",
+        }
+    )
+    service.ingest(
+        {
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+            "type": "content.delta",
+            "timestamp": "2026-03-11T12:00:02Z",
+            "delta": "First response.",
+        }
+    )
+    output = service.ingest(
+        {
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+            "type": "turn.completed",
+            "timestamp": "2026-03-11T12:00:03Z",
+            "turn": {"id": "turn-1"},
+        }
+    )
+
+    assert output is not None
+    assert output.status == "completed"
+    assert output.partial_text == ""
+    assert [segment.text for segment in output.segments] == ["First response."]
+
+    output = service.ingest(
+        {
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+            "type": "turn.started",
+            "timestamp": "2026-03-11T12:00:04Z",
+            "turn": {"id": "turn-2"},
+        }
+    )
+
+    assert output is not None
+    assert output.status == "running"
+    assert output.partial_text == ""
+    assert output.segments == []
+    assert output.progress == []
+    assert output.thinking.text == ""
+    assert output.thinking.status == "idle"

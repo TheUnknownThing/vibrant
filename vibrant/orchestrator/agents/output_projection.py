@@ -54,7 +54,13 @@ class AgentOutputProjectionService:
         if event_type == "turn.started":
             output.status = "running"
             output.phase = "running"
+            output.segments = []
             output.partial_text = ""
+            output.progress = []
+            output.thinking.text = ""
+            output.thinking.status = "idle"
+            output.thinking.item_id = None
+            output.thinking.timestamp = None
             output.error = None
             return output
 

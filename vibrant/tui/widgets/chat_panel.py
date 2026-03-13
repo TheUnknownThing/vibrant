@@ -6,7 +6,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
 from textual.app import ComposeResult
@@ -19,48 +19,20 @@ from ...models.state import OrchestratorStatus, QuestionRecord
 from ...orchestrator.facade import OrchestratorFacade
 from ...orchestrator.types import AgentOutput, AgentRunSnapshot
 from ..utility.gatekeeper import GatekeeperSnapshot, get_gatekeeper_snapshot
+from .conversation_renderer import (
+    MessageBlock,
+    MessagePart,
+    MessageRole,
+    ReasoningPart,
+    ReasoningStatus,
+    TextPart,
+    ToolCallPart,
+    ToolCallStatus,
+    render_conversation,
+    render_part,
+)
 
 logger = logging.getLogger(__name__)
-
-MessageRole = Literal["user", "assistant", "system"]
-ReasoningStatus = Literal["in_progress", "completed"]
-ToolCallStatus = Literal["executing", "success", "failed"]
-
-
-@dataclass(slots=True)
-class TextPart:
-    """Plain text message part."""
-
-    text: str
-
-
-@dataclass(slots=True)
-class ReasoningPart:
-    """Reasoning summary message part."""
-
-    status: ReasoningStatus
-    content: TextPart
-
-
-@dataclass(slots=True)
-class ToolCallPart:
-    """Tool-call status message part."""
-
-    tool_name: str
-    status: ToolCallStatus
-
-
-MessagePart = TextPart | ReasoningPart | ToolCallPart
-
-
-@dataclass(slots=True)
-class MessageBlock:
-    """One conversation block in the chat panel."""
-
-    message_id: str
-    role: MessageRole
-    parts: list[MessagePart] = field(default_factory=list)
-    timestamp: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -307,7 +279,7 @@ class ChatPanel(Static):
         if not self.is_mounted or self._conversation is None:
             return
 
-        self._conversation.update(_render_conversation(self._state.messages))
+        self._conversation.update(render_conversation(self._state.messages))
         self.call_after_refresh(self._scroll_to_end)
 
     def _scroll_to_end(self) -> None:
@@ -437,6 +409,12 @@ def _overlay_output(
 ) -> MessageBlock | None:
     thinking_text = output.thinking.text.strip()
     response_text = output.partial_text.strip()
+    if not response_text and output.status == "completed":
+        response_text = "\n\n".join(
+            segment.text.strip()
+            for segment in output.segments
+            if segment.kind == "response" and segment.text.strip()
+        ).strip()
     error_text = output.error.message.strip() if output.error is not None else ""
     if not thinking_text and not response_text and not error_text:
         return block
@@ -496,46 +474,6 @@ def _message_sort_key(block: MessageBlock) -> tuple[float, int, str]:
     timestamp = block.timestamp.timestamp() if block.timestamp is not None else 0.0
     role_rank = 0 if block.role == "user" else 1
     return (timestamp, role_rank, block.message_id)
-
-
-def _render_conversation(messages: list[MessageBlock]) -> str:
-    if not messages:
-        return "No Gatekeeper activity yet. Send a message to get started."
-    return "\n\n".join(_render_block(block) for block in messages)
-
-
-def _render_block(block: MessageBlock) -> str:
-    rendered_parts = [_render_part(part) for part in block.parts]
-    rendered_parts = [part for part in rendered_parts if part]
-    body = "\n\n".join(rendered_parts)
-    return f"{_role_label(block.role)}\n{body}" if body else _role_label(block.role)
-
-
-def _render_part(part: MessagePart) -> str:
-    if isinstance(part, TextPart):
-        return part.text.strip()
-    if isinstance(part, ReasoningPart):
-        label = "Reasoning…" if part.status == "in_progress" else "Reasoning"
-        content = part.content.text.strip()
-        return f"{label}\n{_indent(content)}" if content else label
-    status = {
-        "executing": "executing",
-        "success": "done",
-        "failed": "failed",
-    }[part.status]
-    return f"Tool · {part.tool_name} · {status}"
-
-
-def _indent(text: str) -> str:
-    return "\n".join(f"  {line}" if line else "" for line in text.splitlines())
-
-
-def _role_label(role: MessageRole) -> str:
-    if role == "user":
-        return "You"
-    if role == "assistant":
-        return "Gatekeeper"
-    return "System"
 
 
 def _render_question_summary(records: tuple[QuestionRecord, ...]) -> str:
@@ -607,7 +545,7 @@ def _event_timestamp(event: dict[str, Any]) -> datetime | None:
 
 
 def _turn_from_block(block: MessageBlock) -> TurnInfo | None:
-    content = "\n\n".join(filter(None, (_render_part(part) for part in block.parts))).strip()
+    content = "\n\n".join(filter(None, (render_part(part) for part in block.parts))).strip()
     if not content:
         return None
 
