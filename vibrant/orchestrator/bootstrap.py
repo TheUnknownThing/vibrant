@@ -23,7 +23,7 @@ from .control_plane import OrchestratorControlPlane
 from .conversation import ConversationStore, ConversationStreamService
 from .execution.coordinator import ExecutionCoordinator
 from .gatekeeper import GatekeeperLifecycleService
-from .mcp import OrchestratorMCPServer
+from .mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
 from .review import ReviewControlService
 from .runtime import AgentRuntimeService
 from .stores import (
@@ -75,6 +75,7 @@ class Orchestrator:
     gatekeeper_lifecycle: GatekeeperLifecycleService
     control_plane: OrchestratorControlPlane
     mcp_server: OrchestratorMCPServer
+    mcp_host: OrchestratorFastMCPHost
     session_binding: AgentSessionBindingService
     gatekeeper: Gatekeeper
     adapter_factory: Any
@@ -144,6 +145,8 @@ class Orchestrator:
             runtime_service=runtime_service,
             conversation_service=conversation_stream,
             gatekeeper=resolved_gatekeeper,
+            binding_service=None,
+            mcp_host=None,
             session_loader=lambda: workflow_state_store.load().gatekeeper_session,
             session_saver=workflow_state_store.update_gatekeeper_session,
             on_record_updated=agent_record_store.upsert,
@@ -181,13 +184,20 @@ class Orchestrator:
             gatekeeper_lifecycle=gatekeeper_lifecycle,
             control_plane=control_plane,
             mcp_server=None,  # type: ignore[arg-type]
+            mcp_host=None,  # type: ignore[arg-type]
             session_binding=None,  # type: ignore[arg-type]
             gatekeeper=resolved_gatekeeper,
             adapter_factory=resolved_adapter_factory,
             on_canonical_event=on_canonical_event,
         )
         orchestrator.mcp_server = OrchestratorMCPServer(orchestrator)
-        orchestrator.session_binding = AgentSessionBindingService(mcp_server=orchestrator.mcp_server)
+        orchestrator.mcp_host = OrchestratorFastMCPHost(orchestrator.mcp_server)
+        orchestrator.session_binding = AgentSessionBindingService(
+            mcp_server=orchestrator.mcp_server,
+            mcp_host=orchestrator.mcp_host,
+        )
+        gatekeeper_lifecycle.binding_service = orchestrator.session_binding
+        gatekeeper_lifecycle.mcp_host = orchestrator.mcp_host
         runtime_service.subscribe_canonical_events(orchestrator._record_runtime_event)
         runtime_service.subscribe_canonical_events(conversation_stream.ingest_canonical)
         orchestrator.refresh()
@@ -212,10 +222,6 @@ class Orchestrator:
     @property
     def gatekeeper_busy(self) -> bool:
         return self.gatekeeper_lifecycle.busy
-
-    @property
-    def binding_service(self) -> AgentSessionBindingService:
-        return self.session_binding
 
     def refresh(self) -> RoadmapDocument:
         self.config = load_config(start_path=self.project_root)
@@ -291,6 +297,11 @@ class Orchestrator:
 
     def list_recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
         return list(self._recent_events)[-limit:]
+
+    async def shutdown(self) -> None:
+        """Stop transport services owned by the orchestrator."""
+
+        await self.mcp_host.stop()
 
     def get_consensus_document(self) -> ConsensusDocument | None:
         return self.consensus_store.load()

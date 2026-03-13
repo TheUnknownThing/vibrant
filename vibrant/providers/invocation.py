@@ -19,10 +19,29 @@ class MCPAccessDescriptor:
     visible_tools: list[str] = field(default_factory=list)
     visible_resources: list[str] = field(default_factory=list)
     endpoint_url: str | None = None
+    server_id: str | None = None
     transport_hint: Literal["http", "stdio"] | None = None
     required: bool = True
     static_headers: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_mapping(self) -> dict[str, Any]:
+        """Return a plain, serializable representation for persistence/debugging."""
+
+        return {
+            "binding_id": self.binding_id,
+            "role": self.role,
+            "session_id": self.session_id,
+            "conversation_id": self.conversation_id,
+            "visible_tools": list(self.visible_tools),
+            "visible_resources": list(self.visible_resources),
+            "endpoint_url": self.endpoint_url,
+            "server_id": self.server_id,
+            "transport_hint": self.transport_hint,
+            "required": self.required,
+            "static_headers": dict(self.static_headers),
+            "metadata": dict(self.metadata),
+        }
 
 
 @dataclass(frozen=True, slots=True)

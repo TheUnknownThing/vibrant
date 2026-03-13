@@ -11,6 +11,7 @@ from uuid import uuid4
 from vibrant.agents.runtime import AgentHandle, AgentRuntime, BaseAgentRuntime
 from vibrant.models.agent import AgentRecord
 from vibrant.providers.base import CanonicalEvent
+from vibrant.providers.invocation import ProviderInvocationPlan
 
 from ..types import CanonicalEventHandler, RuntimeExecutionResult, RuntimeHandleSnapshot
 
@@ -64,6 +65,7 @@ class AgentRuntimeService:
         resume_thread_id: str | None = None,
         on_record_updated: Callable[[AgentRecord], Any] | None = None,
         runtime: AgentRuntime | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
         resolved_runtime = runtime or self._build_runtime(agent_record)
         self._attach_event_bridge(resolved_runtime, agent_record)
@@ -73,6 +75,7 @@ class AgentRuntimeService:
             cwd=cwd,
             resume_thread_id=resume_thread_id,
             on_record_updated=on_record_updated,
+            invocation_plan=invocation_plan,
         )
         self._runs[agent_record.identity.agent_id] = _LiveRun(
             agent_record=agent_record,
@@ -90,6 +93,7 @@ class AgentRuntimeService:
         cwd: str | None = None,
         on_record_updated: Callable[[AgentRecord], Any] | None = None,
         runtime: AgentRuntime | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
         resolved_runtime = runtime or self._build_runtime(agent_record)
         self._attach_event_bridge(resolved_runtime, agent_record)
@@ -99,6 +103,7 @@ class AgentRuntimeService:
             provider_thread=provider_thread,
             cwd=cwd,
             on_record_updated=on_record_updated,
+            invocation_plan=invocation_plan,
         )
         self._runs[agent_record.identity.agent_id] = _LiveRun(
             agent_record=agent_record,

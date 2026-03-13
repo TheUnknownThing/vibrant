@@ -16,6 +16,7 @@ from vibrant.agents.gatekeeper import (
 )
 from vibrant.models.agent import ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
+from vibrant.providers.invocation_compiler import compile_provider_invocation
 from vibrant.prompts import build_user_answer_trigger_description
 
 from ..conversation.stream import ConversationStreamService
@@ -38,6 +39,8 @@ class GatekeeperLifecycleService:
         runtime_service: AgentRuntimeService,
         conversation_service: ConversationStreamService,
         gatekeeper: Gatekeeper | None = None,
+        binding_service: Any | None = None,
+        mcp_host: Any | None = None,
         session_loader: Callable[[], GatekeeperSessionSnapshot] | None = None,
         session_saver: Callable[[GatekeeperSessionSnapshot], Any] | None = None,
         on_record_updated: Callable[[Any], Any] | None = None,
@@ -46,12 +49,15 @@ class GatekeeperLifecycleService:
         self.runtime_service = runtime_service
         self.conversation_service = conversation_service
         self.gatekeeper = gatekeeper or Gatekeeper(self.project_root)
+        self.binding_service = binding_service
+        self.mcp_host = mcp_host
         self._session_loader = session_loader
         self._session_saver = session_saver
         self._on_record_updated = on_record_updated
         self._session = self._load_session()
         self._active_handle = None
         self._active_handle_agent_id: str | None = None
+        self._binding_ids_by_agent_id: dict[str, str] = {}
         self._subscription = self.runtime_service.subscribe_canonical_events(self._on_runtime_event)
 
     @property
@@ -112,23 +118,44 @@ class GatekeeperLifecycleService:
         self._session.updated_at = utc_now()
         self._persist()
 
-        if provider_thread is not None:
-            handle = await self.runtime_service.resume_run(
-                agent_record=agent_record,
-                prompt=prompt,
-                provider_thread=provider_thread,
-                cwd=str(self.project_root),
-                runtime=self.gatekeeper.runtime,
-                on_record_updated=self._on_record_updated,
-            )
-        else:
-            handle = await self.runtime_service.start_run(
-                agent_record=agent_record,
-                prompt=prompt,
-                cwd=str(self.project_root),
-                runtime=self.gatekeeper.runtime,
-                on_record_updated=self._on_record_updated,
-            )
+        if self.binding_service is None or self.mcp_host is None:
+            raise RuntimeError("GatekeeperLifecycleService requires binding_service and mcp_host before submit()")
+
+        await self.mcp_host.ensure_started()
+        bound_capabilities = self.binding_service.bind_gatekeeper(
+            session_id=agent_record.identity.agent_id,
+            conversation_id=conversation_id,
+        )
+        registered_binding = self.mcp_host.register_binding(bound_capabilities)
+        self._binding_ids_by_agent_id[agent_record.identity.agent_id] = registered_binding.binding_id
+        invocation_plan = compile_provider_invocation(
+            agent_record.provider.kind,
+            bound_capabilities.access,
+        )
+
+        try:
+            if provider_thread is not None:
+                handle = await self.runtime_service.resume_run(
+                    agent_record=agent_record,
+                    prompt=prompt,
+                    provider_thread=provider_thread,
+                    cwd=str(self.project_root),
+                    runtime=self.gatekeeper.runtime,
+                    on_record_updated=self._on_record_updated,
+                    invocation_plan=invocation_plan,
+                )
+            else:
+                handle = await self.runtime_service.start_run(
+                    agent_record=agent_record,
+                    prompt=prompt,
+                    cwd=str(self.project_root),
+                    runtime=self.gatekeeper.runtime,
+                    on_record_updated=self._on_record_updated,
+                    invocation_plan=invocation_plan,
+                )
+        except Exception:
+            self._release_binding(agent_record.identity.agent_id)
+            raise
 
         self._active_handle = handle
         self._active_handle_agent_id = agent_record.identity.agent_id
@@ -147,6 +174,7 @@ class GatekeeperLifecycleService:
     async def stop_session(self) -> GatekeeperSessionSnapshot:
         if self._active_handle_agent_id is not None:
             await self.runtime_service.kill_run(self._active_handle_agent_id)
+            self._release_binding(self._active_handle_agent_id)
             self._active_handle_agent_id = None
             self._active_handle = None
         self._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
@@ -185,6 +213,7 @@ class GatekeeperLifecycleService:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.FAILED
             self._session.last_error = str(exc)
             self._session.updated_at = utc_now()
+            self._release_binding(agent_id)
             self._persist()
             return
 
@@ -202,6 +231,7 @@ class GatekeeperLifecycleService:
         if self._active_handle_agent_id == agent_id:
             self._active_handle_agent_id = None
             self._active_handle = None
+        self._release_binding(agent_id)
         self._persist()
 
     async def _on_runtime_event(self, event: CanonicalEvent) -> None:
@@ -265,6 +295,13 @@ class GatekeeperLifecycleService:
             last_error=loaded.last_error,
             updated_at=loaded.updated_at,
         )
+
+    def _release_binding(self, agent_id: str | None) -> None:
+        if agent_id is None:
+            return
+        binding_id = self._binding_ids_by_agent_id.pop(agent_id, None)
+        if binding_id is not None and self.mcp_host is not None:
+            self.mcp_host.unregister_binding(binding_id)
 
     def _persist(self) -> None:
         if self._session_saver is None:

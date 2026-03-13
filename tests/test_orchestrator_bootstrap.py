@@ -17,6 +17,7 @@ def test_create_orchestrator_bootstraps_redesigned_services(tmp_path: Path) -> N
 
     assert orchestrator.workflow_state_store.load().workflow_status.value == "init"
     assert orchestrator.mcp_server is not None
+    assert orchestrator.mcp_host is not None
     assert orchestrator.binding_service is not None
     assert orchestrator.conversation_store.base_dir.exists()
     assert orchestrator.attempt_store.list_active() == []

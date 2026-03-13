@@ -6,12 +6,17 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
 from vibrant.models.agent import AgentRecord
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.providers.base import CanonicalEvent
+
+if TYPE_CHECKING:
+    from vibrant.providers.invocation import MCPAccessDescriptor
+
+    from .mcp.common import MCPPrincipal
 
 
 def utc_now() -> str:
@@ -113,10 +118,11 @@ class GatekeeperSubmission:
 
 @dataclass(slots=True)
 class BoundAgentCapabilities:
-    principal: str
+    principal: MCPPrincipal
     tool_names: list[str]
     resource_names: list[str]
     provider_binding: Mapping[str, Any]
+    access: MCPAccessDescriptor | None = None
     mcp_server: Any | None = None
 
 

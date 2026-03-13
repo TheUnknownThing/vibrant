@@ -34,9 +34,9 @@ class OrchestratorMCPServer:
         self._tool_defs = self._build_tools()
 
     @staticmethod
-    def gatekeeper_principal() -> MCPPrincipal:
+    def gatekeeper_principal(principal_id: str = "gatekeeper") -> MCPPrincipal:
         return MCPPrincipal(
-            principal_id="gatekeeper",
+            principal_id=principal_id,
             role="gatekeeper",
             scopes=frozenset(
                 {
@@ -49,6 +49,14 @@ class OrchestratorMCPServer:
                 }
             ),
         )
+
+    @property
+    def tool_definitions(self) -> Mapping[str, MCPToolDefinition]:
+        return self._tool_defs
+
+    @property
+    def resource_definitions(self) -> Mapping[str, MCPResourceDefinition]:
+        return self._resource_defs
 
     def list_tools(self, *, principal: MCPPrincipal | None = None) -> list[dict[str, Any]]:
         definitions = []
@@ -63,20 +71,6 @@ class OrchestratorMCPServer:
                 }
             )
         return definitions
-
-    def gatekeeper_tool_names(self) -> list[str]:
-        return list(self._tool_defs)
-
-    def gatekeeper_resource_names(self) -> list[str]:
-        return list(self._resource_defs)
-
-    def worker_tool_names(self, *, agent_type: str) -> list[str]:
-        del agent_type
-        return []
-
-    def worker_resource_names(self, *, agent_type: str) -> list[str]:
-        del agent_type
-        return list(self._resource_defs)
 
     def list_resources(self, *, principal: MCPPrincipal | None = None) -> list[dict[str, Any]]:
         definitions = []
