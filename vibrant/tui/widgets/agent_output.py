@@ -13,7 +13,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Collapsible, ContentSwitcher, LoadingIndicator, Static
 
-from ...models.agent import AgentRecord, AgentStatus
+from ...models.agent import AgentRunRecord, AgentStatus
+from ...orchestrator.types import AgentInstanceSnapshot
 
 MAX_BUFFER_LINES = 10_000
 
@@ -183,31 +184,25 @@ class AgentOutput(Static):
 
         return self._debug_view_enabled
 
-    def sync_agents(self, agent_records: Iterable[AgentRecord]) -> None:
+    def sync_agents(self, agents: Iterable[AgentRunRecord | AgentInstanceSnapshot]) -> None:
         """Refresh known agents and hydrate log-backed state from disk."""
 
-        ordered_records = sorted(
-            list(agent_records),
-            key=lambda record: (
-                record.lifecycle.started_at.timestamp() if record.lifecycle.started_at is not None else 0.0,
-                record.identity.agent_id,
-            ),
-        )
+        ordered_agents = sorted(list(agents), key=self._agent_sort_key)
 
-        for record in ordered_records:
-            stream = self._ensure_stream(record.identity.agent_id)
-            stream.task_id = record.identity.task_id
-            stream.status = record.lifecycle.status.value
-            stream.provider_thread_id = record.provider.provider_thread_id
+        for agent in ordered_agents:
+            stream = self._ensure_stream(self._agent_id(agent))
+            stream.task_id = self._task_id(agent)
+            stream.status = self._status(agent)
+            stream.provider_thread_id = self._provider_thread_id(agent)
 
-            canonical_path = _path_or_none(record.provider.canonical_event_log)
+            canonical_path = _path_or_none(self._canonical_event_log(agent))
             if canonical_path != stream.canonical_log_path:
                 stream.canonical_log_path = canonical_path
                 stream.canonical_backfilled = False
                 if canonical_path is not None:
                     stream.canonical_lines.clear()
 
-            native_path = _path_or_none(record.provider.native_event_log)
+            native_path = _path_or_none(self._native_event_log(agent))
             if native_path != stream.native_log_path:
                 stream.native_log_path = native_path
                 stream.native_offset = 0
@@ -225,10 +220,41 @@ class AgentOutput(Static):
             ):
                 self._backfill_canonical_log(stream)
 
-        self._agent_order = [record.identity.agent_id for record in ordered_records]
+        self._agent_order = [self._agent_id(agent) for agent in ordered_agents]
         self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
         self._poll_native_logs()
         self._refresh_view()
+
+    def _agent_sort_key(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> tuple[float, str]:
+        started_at = self._started_at(agent)
+        return (started_at.timestamp() if started_at is not None else 0.0, self._agent_id(agent))
+
+    def _agent_id(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str:
+        return agent.identity.agent_id
+
+    def _task_id(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
+        return agent.identity.task_id
+
+    def _status(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str:
+        if isinstance(agent, AgentRunRecord):
+            return agent.lifecycle.status.value
+        return agent.runtime.status
+
+    def _provider_thread_id(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
+        if isinstance(agent, AgentRunRecord):
+            return agent.provider.provider_thread_id
+        return agent.provider.thread_id
+
+    def _canonical_event_log(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
+        return agent.provider.canonical_event_log
+
+    def _native_event_log(self, agent: AgentRunRecord | AgentInstanceSnapshot) -> str | None:
+        return agent.provider.native_event_log
+
+    def _started_at(self, agent: AgentRunRecord | AgentInstanceSnapshot):
+        if isinstance(agent, AgentRunRecord):
+            return agent.lifecycle.started_at
+        return agent.runtime.started_at
 
     def clear_agents(self, message: str | None = None) -> None:
         """Clear the panel when no project lifecycle is available."""

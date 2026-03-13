@@ -16,7 +16,7 @@ from vibrant.agents import (
     PLANNING_COMPLETE_MCP_TOOL,
 )
 from vibrant.agents.runtime import RunState
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -172,11 +172,11 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     FakeGatekeeperAdapter.scenario = "complete"
     initialize_project(tmp_path)
 
-    prior_record = AgentRecord(
+    prior_record = AgentRunRecord(
         identity={
             "agent_id": "gatekeeper-project_start-old",
             "task_id": "gatekeeper-project_start",
-            "type": AgentType.GATEKEEPER,
+            "role": "gatekeeper",
         },
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
@@ -184,7 +184,7 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
             resume_cursor={"threadId": "thread-existing"},
         ),
     )
-    agents_dir = tmp_path / ".vibrant" / "agents"
+    agents_dir = tmp_path / ".vibrant" / "agent-runs"
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / f"{prior_record.identity.agent_id}.json").write_text(
         prior_record.model_dump_json(indent=2) + "\n",
@@ -210,7 +210,7 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     assert result.succeeded is True
     assert result.state is RunState.COMPLETED
     assert result.provider_thread.thread_id == "thread-existing"
-    assert result.agent_record.identity.type is AgentType.GATEKEEPER
+    assert result.agent_record.identity.role == "gatekeeper"
     assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
     assert result.agent_record.context.prompt_used is not None
 
@@ -277,8 +277,9 @@ async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_pat
     )
 
     assert forwarded
-    assert forwarded[0]["agent_id"].startswith("gatekeeper-project_start-")
+    assert forwarded[0]["agent_id"] == "gatekeeper-project"
     assert forwarded[0]["task_id"] == "gatekeeper-project_start"
+    assert forwarded[0]["run_id"].startswith("run-gatekeeper-project-")
     assert any(event["type"] == "content.delta" for event in forwarded)
     assert result.agent_record is not None
     assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED

@@ -5,7 +5,7 @@ import pytest
 from vibrant.agents.base import AgentBase, AgentRunResult
 from vibrant.agents.runtime import BaseAgentRuntime, RunState
 from vibrant.config import VibrantConfig
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.orchestrator.agents.registry import AgentRegistry
 from vibrant.orchestrator.agents.store import AgentRecordStore
 from vibrant.orchestrator import OrchestratorStateBackend
@@ -14,8 +14,8 @@ from vibrant.project_init import initialize_project
 
 
 class _NotifyAgent(AgentBase):
-    def get_agent_type(self) -> AgentType:
-        return AgentType.CODE
+    def get_agent_role(self) -> str:
+        return "code"
 
 
 class _RuntimeCallbackAgent:
@@ -28,7 +28,7 @@ class _RuntimeCallbackAgent:
         self,
         *,
         prompt: str,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         cwd: str | None = None,
         resume_thread_id: str | None = None,
     ) -> AgentRunResult:
@@ -48,16 +48,16 @@ def test_agent_base_notify_record_updated_raises_callback_errors(tmp_path) -> No
 
     with pytest.raises(RuntimeError, match="persist failed"):
         agent._notify_record_updated(
-            AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE})
+            AgentRunRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "role": "code"})
         )
 
 
 @pytest.mark.asyncio
 async def test_base_agent_runtime_surfaces_on_record_updated_failures() -> None:
     runtime = BaseAgentRuntime(_RuntimeCallbackAgent())
-    record = AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE})
+    record = AgentRunRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "role": "code"})
 
-    def _raise(_record: AgentRecord) -> None:
+    def _raise(_record: AgentRunRecord) -> None:
         raise RuntimeError("persist failed")
 
     handle = await runtime.start(agent_record=record, prompt="run", on_record_updated=_raise)
@@ -84,4 +84,4 @@ def test_agent_registry_callback_surfaces_upsert_failures(tmp_path, monkeypatch:
     callback = registry.make_record_callback()
 
     with pytest.raises(RuntimeError, match="disk write failed"):
-        callback(AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE}))
+        callback(AgentRunRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "role": "code"}))

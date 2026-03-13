@@ -9,7 +9,7 @@ import inspect
 from pathlib import Path
 from typing import Any
 
-from ...models.agent import AgentRecord, ProviderResumeHandle
+from ...models.agent import AgentRunRecord, ProviderResumeHandle
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ..base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 
@@ -80,7 +80,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         claude_extra_config: Mapping[str, Any] | None = None,
         codex_binary: str | None = None,
         codex_home: str | None = None,
-        agent_record: AgentRecord | None = None,
+        agent_record: AgentRunRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
         on_stderr_line: Any | None = None,
         native_logger: NativeLogger | None = None,
@@ -209,10 +209,10 @@ class ClaudeProviderAdapter(ProviderAdapter):
 
         base_cwd = Path(cwd or self._cwd or Path.cwd()).expanduser().resolve()
         native_path = self.agent_record.provider.native_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.run_id}.ndjson"
         )
         canonical_path = self.agent_record.provider.canonical_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.run_id}.ndjson"
         )
 
         self.agent_record.provider.native_event_log = native_path
@@ -578,6 +578,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         }
         if self.agent_record is not None:
             event["agent_id"] = self.agent_record.identity.agent_id
+            event["run_id"] = self.agent_record.identity.run_id
             event["task_id"] = self.agent_record.identity.task_id
         if self.provider_thread_id is not None:
             event["provider_thread_id"] = self.provider_thread_id

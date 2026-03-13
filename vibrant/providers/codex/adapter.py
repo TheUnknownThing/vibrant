@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
-from ...models.agent import AgentRecord, ProviderResumeHandle
+from ...models.agent import AgentRunRecord, ProviderResumeHandle
 from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
 from .client import CodexClient
@@ -31,7 +31,7 @@ class CodexProviderAdapter(ProviderAdapter):
         launch_args: Sequence[str] | None = None,
         codex_home: str | None = None,
         resume_thread_id: str | None = None,
-        agent_record: AgentRecord | None = None,
+        agent_record: AgentRunRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
         on_raw_notification: NotificationHandler | None = None,
         on_stderr_line: StderrHandler | None = None,
@@ -48,6 +48,7 @@ class CodexProviderAdapter(ProviderAdapter):
         self._launch_args = list(launch_args) if launch_args is not None else None
         self._codex_home = codex_home
         self.agent_record = agent_record
+        self._initial_resume_thread_id = resume_thread_id
         self.provider_thread_id: str | None = None
         self.thread_metadata: dict[str, Any] = {}
         self.current_turn_id: str | None = None
@@ -105,10 +106,10 @@ class CodexProviderAdapter(ProviderAdapter):
 
         base_cwd = Path(cwd or self._cwd or Path.cwd()).expanduser().resolve()
         native_path = self.agent_record.provider.native_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.run_id}.ndjson"
         )
         canonical_path = self.agent_record.provider.canonical_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.run_id}.ndjson"
         )
 
         self.agent_record.provider.native_event_log = native_path
@@ -307,11 +308,6 @@ class CodexProviderAdapter(ProviderAdapter):
         if limit is not None:
             params["limit"] = int(limit)
         return await self.send_request("mcpServerStatus/list", params or None)
-
-    async def start_mcp_oauth_login(self, *, name: str) -> Any:
-        """Start an MCP OAuth login via ``mcpServer/oauth/login``."""
-
-        return await self.send_request("mcpServer/oauth/login", {"name": name})
 
     async def detect_external_agent_config(
         self,
@@ -526,7 +522,7 @@ class CodexProviderAdapter(ProviderAdapter):
     def _build_thread_payload(
         self,
         kwargs: dict[str, Any],
-    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRecord | None]:
+    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRunRecord | None]:
         data = dict(kwargs)
         runtime_mode = RuntimeMode(data.pop("runtime_mode", RuntimeMode.WORKSPACE_WRITE))
         approval_policy = data.pop("approval_policy", "never")
@@ -558,7 +554,7 @@ class CodexProviderAdapter(ProviderAdapter):
         *,
         runtime_mode: RuntimeMode | None = None,
         approval_policy: str | None = None,
-        agent_record: AgentRecord | None = None,
+        agent_record: AgentRunRecord | None = None,
         fallback_thread_id: str | None = None,
     ) -> None:
         thread_payload = self._extract_thread_payload(result)
@@ -810,6 +806,7 @@ class CodexProviderAdapter(ProviderAdapter):
         }
         if self.agent_record is not None:
             event["agent_id"] = self.agent_record.identity.agent_id
+            event["run_id"] = self.agent_record.identity.run_id
             event["task_id"] = self.agent_record.identity.task_id
         if self.provider_thread_id is not None:
             event["provider_thread_id"] = self.provider_thread_id

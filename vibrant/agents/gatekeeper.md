@@ -291,7 +291,7 @@ Introduce a Gatekeeper agent implementation as an AgentBase subclass.
 
 It should:
 
-- return AgentType.GATEKEEPER
+- return the `gatekeeper` role
 - use read-only runtime modes
 - disable automatic rejection of provider requests
 - expose Gatekeeper-specific prompt construction

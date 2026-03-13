@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.providers.base import RuntimeMode
 from vibrant.providers.registry import provider_transport
 from vibrant.prompts import build_merge_prompt as render_merge_prompt
 
-from .base import AgentBase
+from .base import AgentBase, AgentRunResult
+from .role_results import RoleResultPayload, build_merge_role_result
 
 
 class MergeAgent(AgentBase):
@@ -19,14 +20,30 @@ class MergeAgent(AgentBase):
     branches and resolve conflicts across the repository.
     """
 
-    def get_agent_type(self) -> AgentType:
-        return AgentType.MERGE
+    def get_agent_role(self) -> str:
+        return "merge"
 
     def get_thread_runtime_mode(self) -> RuntimeMode:
         return RuntimeMode.FULL_ACCESS
 
     def get_turn_runtime_mode(self) -> RuntimeMode:
         return RuntimeMode.FULL_ACCESS
+
+    def build_role_result(
+        self,
+        *,
+        result: AgentRunResult,
+        agent_record: AgentRunRecord,
+        input_requests: list[object],
+    ) -> RoleResultPayload | None:
+        return build_merge_role_result(
+            transcript=result.transcript,
+            summary=agent_record.outcome.summary,
+            error=result.error,
+            exit_code=result.exit_code,
+            awaiting_input=agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT,
+            events=result.events,
+        )
 
     @staticmethod
     def build_merge_prompt(
@@ -55,14 +72,14 @@ class MergeAgent(AgentBase):
         *,
         task_id: str,
         branch: str,
-    ) -> AgentRecord:
-        """Create an AgentRecord for a merge agent run."""
+    ) -> AgentRunRecord:
+        """Create an AgentRunRecord for a merge agent run."""
         agent_id = f"merge-{task_id}-{uuid4().hex[:8]}"
-        return AgentRecord(
+        return AgentRunRecord(
             identity={
                 "agent_id": agent_id,
                 "task_id": task_id,
-                "type": AgentType.MERGE,
+                "role": "merge",
             },
             lifecycle={"status": AgentStatus.SPAWNING},
             context={

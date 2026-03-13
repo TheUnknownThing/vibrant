@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING
+
+from collections.abc import Sequence
 
 from vibrant.consensus import RoadmapDocument, RoadmapParser
 from vibrant.models.task import TaskInfo, TaskStatus
-from vibrant.orchestrator.execution.dispatcher import TaskDispatcher
+from vibrant.orchestrator.tasks.dispatcher import TaskDispatcher
+
+if TYPE_CHECKING:
+    from vibrant.orchestrator.tasks.store import TaskStore
+    from vibrant.orchestrator.tasks.workflow import TaskWorkflowService
 
 
 class RoadmapService:
@@ -25,6 +31,17 @@ class RoadmapService:
         self.parser = parser or RoadmapParser()
         self.document: RoadmapDocument | None = None
         self.dispatcher: TaskDispatcher | None = None
+        self.task_store: TaskStore | None = None
+        self.task_workflow: TaskWorkflowService | None = None
+
+    def bind_task_state(
+        self,
+        *,
+        task_store: TaskStore,
+        task_workflow: TaskWorkflowService,
+    ) -> None:
+        self.task_store = task_store
+        self.task_workflow = task_workflow
 
     def _ensure_document(self) -> RoadmapDocument:
         if self.document is not None:
@@ -33,6 +50,7 @@ class RoadmapService:
             self.document = self.parser.parse_file(self.roadmap_path)
         else:
             self.document = RoadmapDocument(project=self.project_name, tasks=[])
+        self._sync_task_state(prefer_store=True)
         self._sync_dispatcher(concurrency_limit=1)
         return self.document
 
@@ -46,10 +64,12 @@ class RoadmapService:
 
         if self.document is None or self.dispatcher is None:
             self.document = incoming
-            self.dispatcher = TaskDispatcher(incoming.tasks, concurrency_limit=concurrency_limit)
+            self._sync_task_state(prefer_store=True)
+            self._sync_dispatcher(concurrency_limit=concurrency_limit)
             return self.document
 
         self.merge_updates(incoming)
+        self._sync_task_state(prefer_store=True)
         self._sync_dispatcher(concurrency_limit=concurrency_limit)
         return self.document
 
@@ -57,6 +77,7 @@ class RoadmapService:
         """Persist the in-memory roadmap document to disk."""
 
         document = self._ensure_document()
+        self._sync_task_state(prefer_store=False)
         self.parser.write(self.roadmap_path, document)
 
     def merge_result(self, roadmap: RoadmapDocument | None) -> None:
@@ -90,6 +111,7 @@ class RoadmapService:
 
         self.document.project = incoming.project
         self.document.tasks = merged_tasks
+        self._sync_task_state(prefer_store=False)
         self._sync_dispatcher()
 
     def get_task(self, task_id: str) -> TaskInfo | None:
@@ -112,6 +134,7 @@ class RoadmapService:
         updated_tasks.insert(insertion_index, task)
         self.parser.validate_dependency_graph(updated_tasks)
         document.tasks = updated_tasks
+        self._sync_task_state(prefer_store=False)
         self._sync_dispatcher()
         self.persist()
         return task
@@ -123,6 +146,7 @@ class RoadmapService:
         title: str | None = None,
         acceptance_criteria: Sequence[str] | None = None,
         status: TaskStatus | str | None = None,
+        agent_role: str | None = None,
         branch: str | None = None,
         retry_count: int | None = None,
         max_retries: int | None = None,
@@ -143,6 +167,8 @@ class RoadmapService:
             updated.title = title
         if acceptance_criteria is not None:
             updated.acceptance_criteria = list(acceptance_criteria)
+        if agent_role is not None:
+            updated.agent_role = agent_role
         if branch is not None:
             updated.branch = branch
         if retry_count is not None:
@@ -170,7 +196,8 @@ class RoadmapService:
         updated_tasks = list(document.tasks)
         updated_tasks[index] = updated
         self.parser.validate_dependency_graph(updated_tasks)
-        document.tasks[index] = updated
+        document.tasks = updated_tasks
+        self._sync_task_state(prefer_store=False)
         self._sync_dispatcher()
         self.persist()
         return updated
@@ -183,24 +210,36 @@ class RoadmapService:
 
         by_id = {task.id: task for task in document.tasks}
         document.tasks = [by_id[task_id] for task_id in ordered_task_ids]
+        self._sync_task_state(prefer_store=False)
         self._sync_dispatcher()
         self.persist()
         return document
+
+    def _sync_task_state(self, *, prefer_store: bool) -> None:
+        if self.document is None or self.task_store is None:
+            return
+        self.task_store.sync_tasks(self.document.tasks, prefer_store=prefer_store)
 
     def _sync_dispatcher(self, *, concurrency_limit: int | None = None) -> None:
         if self.document is None:
             return
         if self.dispatcher is None:
-            self.dispatcher = TaskDispatcher(self.document.tasks, concurrency_limit=concurrency_limit or 1)
+            self.dispatcher = TaskDispatcher(
+                self.document.tasks,
+                concurrency_limit=concurrency_limit or 1,
+                workflow_service=self.task_workflow,
+            )
             return
         if concurrency_limit is not None:
             self.dispatcher.concurrency_limit = concurrency_limit
+        self.dispatcher.workflow_service = self.task_workflow
         self.dispatcher.reconcile_tasks(self.document.tasks)
 
 
 def _apply_task_definition(existing: TaskInfo, incoming: TaskInfo) -> None:
     existing.title = incoming.title
     existing.acceptance_criteria = list(incoming.acceptance_criteria)
+    existing.agent_role = incoming.agent_role
     existing.prompt = incoming.prompt
     existing.skills = list(incoming.skills)
     existing.dependencies = list(incoming.dependencies)

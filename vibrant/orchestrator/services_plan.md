@@ -58,7 +58,7 @@ The durable human-readable artifacts remain:
 - `.vibrant/state.json`
 - `.vibrant/consensus.md`
 - `.vibrant/roadmap.md`
-- `.vibrant/agents/*.json`
+- `.vibrant/agent-runs/*.json`
 - provider event logs
 
 But the service layer should own when and how they are updated.
@@ -251,7 +251,7 @@ Own durable agent metadata and runtime visibility.
 
 - register agents
 - create agent records for code/test/merge execution roles
-- persist `AgentRecord` files
+- persist `AgentRunRecord` files
 - preserve first-registration bookkeeping such as `total_agent_spawns`
 - update runtime metadata and provider thread identifiers
 - expose durable resume handles and pending-input state to higher layers
@@ -260,7 +260,7 @@ Own durable agent metadata and runtime visibility.
 
 **Should own**
 
-- `.vibrant/agents/*.json` persistence
+- `.vibrant/agent-runs/*.json` persistence
 - record-construction helpers shared by `CodeAgent`, `MergeAgent`, and future `TestAgent`
 - spawn-accounting rules that must happen exactly once per run
 - latest status per agent

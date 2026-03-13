@@ -5,36 +5,36 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from vibrant.agents.runtime import AgentHandle
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskInfo
 
-from ..types import TaskResult
-from .git_manager import GitWorktreeInfo
-from .git_workspace import GitWorkspaceService, format_merge_error
-from .prompts import PromptService
-from .retry_policy import RetryPolicyService
-from .review import ReviewService
+from ..agents.instance import ManagedAgentInstance
 from ..agents.registry import AgentRegistry
 from ..agents.runtime import AgentRuntimeService
 from ..artifacts.roadmap import RoadmapService
 from ..artifacts.workflow import WorkflowService
+from ..execution.git_manager import GitWorktreeInfo
+from ..execution.git_workspace import GitWorkspaceService, format_merge_error
+from ..execution.prompts import PromptService
 from ..state.store import StateStore
+from ..types import TaskResult
+from .models import TaskRunRecord, TaskRunStatus
+from .retry import RetryPolicyService
+from .review import ReviewService
+from .store import TaskStore
 
 
 @dataclass(slots=True)
 class TaskExecutionAttempt:
-    """Prepared and started task execution attempt.
-
-    This is the internal orchestration object that MCP-facing code can later
-    use to start a task, inspect the agent handle, and await the normalized
-    runtime result separately.
-    """
+    """Prepared and started task execution attempt."""
 
     task: TaskInfo
     worktree: GitWorktreeInfo
     prompt: str
-    agent_record: AgentRecord
+    agent: ManagedAgentInstance
+    agent_record: AgentRunRecord
     handle: AgentHandle
+    run_record: TaskRunRecord | None = None
 
 
 class TaskExecutionService:
@@ -52,6 +52,7 @@ class TaskExecutionService:
         runtime_service: AgentRuntimeService,
         review_service: ReviewService,
         retry_service: RetryPolicyService,
+        task_store: TaskStore,
     ) -> None:
         self.state_store = state_store
         self.roadmap_service = roadmap_service
@@ -62,6 +63,18 @@ class TaskExecutionService:
         self.runtime_service = runtime_service
         self.review_service = review_service
         self.retry_service = retry_service
+        self.task_store = task_store
+
+    def _resolve_instance(self, *, role: str, scope_type: str, scope_id: str | None) -> ManagedAgentInstance:
+        return ManagedAgentInstance.from_record(
+            self.agent_registry.resolve_instance(
+                role=role,
+                scope_type=scope_type,
+                scope_id=scope_id,
+            ),
+            agent_registry=self.agent_registry,
+            runtime_service=self.runtime_service,
+        )
 
     async def execute_until_blocked(self) -> list[TaskResult]:
         results: list[TaskResult] = []
@@ -108,41 +121,61 @@ class TaskExecutionService:
         *,
         resume_thread_id: str | None = None,
     ) -> TaskExecutionAttempt:
-        """Prepare a task run and start its agent handle.
-
-        This gives the orchestrator a clear two-phase API:
-        start the run, then wait or observe it later.  The method is intended
-        to become the internal basis for future MCP task-spawn endpoints.
-        """
         worktree = self.git_service.create_fresh_worktree(task.id)
         task.branch = worktree.branch or task.branch or self.git_service.branch_name(task.id)
         self.roadmap_service.persist()
 
         prompt = self.prompt_service.build_task_prompt(task, worktree)
-        agent_record = self.agent_registry.create_code_agent_record(task=task, worktree=worktree, prompt=prompt)
-        handle = await self.runtime_service.start_task(
-            worktree=worktree,
-            prompt=prompt,
-            agent_record=agent_record,
-            resume_thread_id=resume_thread_id,
+        agent_instance = self._resolve_instance(
+            role=task.agent_role,
+            scope_type="task",
+            scope_id=task.id,
         )
+        run_record = self.task_store.record_run_started(
+            task=task,
+            agent_id=agent_instance.agent_id,
+            worktree_path=str(worktree.path),
+        )
+        try:
+            started_run = await agent_instance.start_new_run(
+                task_id=task.id,
+                branch=task.branch,
+                worktree_path=str(worktree.path),
+                prompt=prompt,
+                cwd=str(worktree.path),
+                skills=list(task.skills),
+                retry_count=task.retry_count,
+                max_retries=task.max_retries,
+                resume_thread_id=resume_thread_id,
+                increment_spawn=True,
+            )
+        except Exception as exc:
+            self.task_store.record_run_finished(task.id, status=TaskRunStatus.FAILED, error=str(exc))
+            raise
         return TaskExecutionAttempt(
             task=task,
             worktree=worktree,
             prompt=prompt,
-            agent_record=agent_record,
-            handle=handle,
+            agent=agent_instance,
+            agent_record=started_run.agent_record,
+            handle=started_run.handle,
+            run_record=run_record,
         )
 
     async def wait_for_task_attempt(self, attempt: TaskExecutionAttempt) -> TaskResult:
-        """Resolve a started task attempt through runtime, review, and merge."""
         dispatcher = self.roadmap_service.dispatcher
         assert dispatcher is not None
 
-        runtime_result = await self.runtime_service.wait_for_run(handle=attempt.handle)
+        runtime_result = await attempt.agent.wait_for_run()
         agent_record = runtime_result.agent_record
 
         if runtime_result.awaiting_input:
+            self.task_store.record_run_finished(
+                attempt.task.id,
+                status=TaskRunStatus.AWAITING_INPUT,
+                summary=runtime_result.summary,
+                error=runtime_result.error,
+            )
             self.roadmap_service.persist()
             return TaskResult(
                 task_id=attempt.task.id,
@@ -153,9 +186,16 @@ class TaskExecutionService:
                 summary=runtime_result.summary,
                 error=runtime_result.error,
                 worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
             )
 
         if runtime_result.error:
+            self.task_store.record_run_finished(
+                attempt.task.id,
+                status=TaskRunStatus.FAILED,
+                summary=runtime_result.summary,
+                error=runtime_result.error,
+            )
             return await self.retry_service.handle_failure(
                 task=attempt.task,
                 agent_record=agent_record,
@@ -163,9 +203,16 @@ class TaskExecutionService:
                 events=runtime_result.events,
                 reason=runtime_result.error,
                 summary=runtime_result.summary,
+                role_result=runtime_result.role_result,
                 notify_gatekeeper_on_retry=True,
             )
 
+        self.task_store.record_run_finished(
+            attempt.task.id,
+            status=TaskRunStatus.SUCCEEDED,
+            summary=runtime_result.summary,
+            error=runtime_result.error,
+        )
         completed_task = dispatcher.mark_completed(attempt.task.id)
         self.roadmap_service.persist()
 
@@ -181,6 +228,7 @@ class TaskExecutionService:
                 events=runtime_result.events,
                 summary=agent_record.outcome.summary,
                 worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
             )
 
         if decision in self.review_service.ACCEPTED_VERDICTS:
@@ -199,6 +247,7 @@ class TaskExecutionService:
                     merge_result=merge_result,
                     events=runtime_result.events,
                     summary=agent_record.outcome.summary,
+                    role_result=runtime_result.role_result,
                 )
 
             self.git_service.abort_merge_if_needed()
@@ -210,8 +259,41 @@ class TaskExecutionService:
                 events=runtime_result.events,
                 reason=merge_error,
                 summary=agent_record.outcome.summary,
+                role_result=runtime_result.role_result,
                 prior_gatekeeper_result=gatekeeper_result,
                 notify_gatekeeper_on_retry=True,
+            )
+
+        if decision == "retry":
+            retried_task = self.roadmap_service.get_task(completed_task.id) or dispatcher.get_task(completed_task.id)
+            self.roadmap_service.persist()
+            self.git_service.cleanup_worktree(completed_task.id)
+            return TaskResult(
+                task_id=retried_task.id,
+                outcome="retried",
+                task_status=retried_task.status,
+                agent_record=agent_record,
+                gatekeeper_result=gatekeeper_result,
+                events=runtime_result.events,
+                summary=agent_record.outcome.summary,
+                worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
+            )
+
+        if decision == "escalated":
+            escalated_task = self.roadmap_service.get_task(completed_task.id) or dispatcher.get_task(completed_task.id)
+            self.roadmap_service.persist()
+            self.git_service.cleanup_worktree(completed_task.id)
+            return TaskResult(
+                task_id=escalated_task.id,
+                outcome="escalated",
+                task_status=escalated_task.status,
+                agent_record=agent_record,
+                gatekeeper_result=gatekeeper_result,
+                events=runtime_result.events,
+                summary=agent_record.outcome.summary,
+                worktree_path=str(attempt.worktree.path),
+                role_result=runtime_result.role_result,
             )
 
         rejection_reason = gatekeeper_result.error or f"Gatekeeper verdict: {decision or 'rejected'}"
@@ -222,6 +304,7 @@ class TaskExecutionService:
             events=runtime_result.events,
             reason=rejection_reason,
             summary=agent_record.outcome.summary,
+            role_result=runtime_result.role_result,
             prior_gatekeeper_result=gatekeeper_result,
             notify_gatekeeper_on_retry=False,
         )

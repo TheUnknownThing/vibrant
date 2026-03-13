@@ -172,3 +172,32 @@ Second line
         assert updated.tasks[0].prompt == "First line\nSecond line"
         assert parser.parse_file(roadmap_path).tasks[0].prompt == "First line\nSecond line"
         assert "**Prompt**:\nFirst line\nSecond line" in roadmap_path.read_text(encoding="utf-8")
+
+    def test_agent_role_round_trips_when_present(self, tmp_path):
+        roadmap_path = tmp_path / ".vibrant" / "roadmap.md"
+        roadmap_path.parent.mkdir(parents=True)
+        parser = RoadmapParser()
+        parser.write(
+            roadmap_path,
+            parser.parse(
+                """# Roadmap — Project Vibrant
+
+### Task task-001 — Validate the branch
+- **Status**: pending
+- **Priority**: high
+- **Dependencies**: none
+- **Agent Role**: test
+- **Skills**: config
+- **Branch**: vibrant/task-001
+- **Prompt**: Run validation.
+
+**Acceptance Criteria**:
+- [ ] Validate the branch
+"""
+            ),
+        )
+
+        reparsed = parser.parse_file(roadmap_path)
+
+        assert reparsed.tasks[0].agent_role == "test"
+        assert "- **Agent Role**: test" in roadmap_path.read_text(encoding="utf-8")

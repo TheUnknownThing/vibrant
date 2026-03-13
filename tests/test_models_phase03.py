@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, ProviderResumeHandle
 from vibrant.models.consensus import (
     ConsensusDocument,
     ConsensusStatus,
@@ -23,11 +23,11 @@ from vibrant.models.task import TaskInfo, TaskStatus
 
 class TestAgentRecord:
     def test_round_trip_serialize_deserialize(self):
-        record = AgentRecord(
+        record = AgentRunRecord(
             identity={
                 "agent_id": "agent-task-001",
                 "task_id": "task-001",
-                "type": AgentType.CODE,
+                "role": "code",
             },
             lifecycle={
                 "status": AgentStatus.RUNNING,
@@ -50,10 +50,12 @@ class TestAgentRecord:
             outcome={"summary": "summary"},
         )
 
-        restored = AgentRecord.model_validate_json(record.model_dump_json())
+        restored = AgentRunRecord.model_validate_json(record.model_dump_json())
         dumped = record.model_dump(mode="json")
 
         assert restored == record
+        assert restored.identity.role == "code"
+        assert dumped["identity"]["role"] == "code"
         assert dumped["provider"]["resume_handle"] == ProviderResumeHandle(
             kind="codex",
             thread_id="thread_abc123",
@@ -63,8 +65,8 @@ class TestAgentRecord:
         assert restored.provider.resume_cursor == {"threadId": "thread_abc123"}
 
     def test_status_transitions_are_validated(self):
-        record = AgentRecord(
-            identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE}
+        record = AgentRunRecord(
+            identity={"agent_id": "agent-1", "task_id": "task-1", "role": "code"}
         )
 
         record.transition_to(AgentStatus.CONNECTING)
@@ -81,12 +83,12 @@ class TestAgentRecord:
             record.transition_to(AgentStatus.RUNNING)
 
     def test_nested_agent_record_deserializes(self):
-        record = AgentRecord.model_validate(
+        record = AgentRunRecord.model_validate(
             {
                 "identity": {
                     "agent_id": "agent-gatekeeper-user_discussion-001",
                     "task_id": "gatekeeper-user_discussion",
-                    "type": "gatekeeper",
+                    "role": "gatekeeper",
                 },
                 "lifecycle": {"status": "running"},
                 "context": {"worktree_path": "/tmp/project"},
@@ -105,7 +107,7 @@ class TestAgentRecord:
             }
         )
 
-        assert record.identity.type is AgentType.GATEKEEPER
+        assert record.identity.role == "gatekeeper"
         assert record.identity.task_id == "gatekeeper-user_discussion"
         assert record.provider.kind == "codex"
         assert record.provider.transport == "app-server-json-rpc"
@@ -140,11 +142,24 @@ class TestAgentRecord:
 
     def test_nested_agent_record_requires_identity(self):
         with pytest.raises(ValidationError, match="identity"):
-            AgentRecord.model_validate(
+            AgentRunRecord.model_validate(
                 {
                     "lifecycle": {"status": "running"},
                 }
             )
+
+    def test_role_only_identity_round_trips(self):
+        record = AgentRunRecord.model_validate(
+            {
+                "identity": {
+                    "agent_id": "merge-task-001",
+                    "task_id": "task-001",
+                    "role": "merge",
+                }
+            }
+        )
+
+        assert record.identity.role == "merge"
 
 
 class TestOrchestratorState:

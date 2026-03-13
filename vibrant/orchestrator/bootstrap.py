@@ -2,46 +2,55 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from vibrant.agents.code_agent import CodeAgent
-from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperAgent
+from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.agents.utils import maybe_forward_event
-from vibrant.agents.merge_agent import MergeAgent
-from vibrant.agents.runtime import AgentRuntime, BaseAgentRuntime
+from vibrant.agents.runtime import AgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
 from vibrant.consensus import RoadmapDocument, RoadmapParser
-from vibrant.models.agent import AgentRecord, AgentType
+from vibrant.models.agent import AgentRunRecord
 from vibrant.orchestrator.state.backend import OrchestratorStateBackend
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.registry import resolve_provider_adapter
 
+from .agents.catalog import (
+    AgentRoleCatalog,
+    ProviderKindCatalog,
+    RoleRuntimeContext,
+    build_builtin_provider_catalog,
+    build_builtin_role_catalog,
+)
 from .agents.manager import AgentManagementService
 from .agents.output_projection import AgentOutputProjectionService
 from .agents.registry import AgentRegistry
 from .agents.runtime import AgentRuntimeService
-from .agents.store import AgentRecordStore
+from .agents.store import AgentInstanceStore, AgentRecordStore
 from .artifacts.consensus import ConsensusService
 from .artifacts.planning import PlanningService
 from .artifacts.questions import QuestionService
 from .artifacts.roadmap import RoadmapService
 from .artifacts.workflow import WorkflowService
+from .execution.git_manager import GitManager
 from .execution.git_workspace import GitWorkspaceService, scoped_worktree_root
 from .execution.prompts import PromptService
-from .execution.retry_policy import RetryPolicyService
-from .execution.review import ReviewService
-from .execution.service import TaskExecutionService
 from .gatekeeper_runtime import GatekeeperRuntimeService
-from .execution.dispatcher import TaskDispatcher
-from .execution.git_manager import GitManager
 from .state.store import StateStore
+from .tasks.dispatcher import TaskDispatcher
+from .tasks.execution import TaskExecutionService
+from .tasks.retry import RetryPolicyService
+from .tasks.review import ReviewService
+from .tasks.store import TaskStore
+from .tasks.workflow import TaskWorkflowService
 from .types import TaskResult
 
 CanonicalEventCallback = Callable[[CanonicalEvent], Any]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -49,6 +58,7 @@ class _RawEventSubscription:
     handler: Any
     agent_id: str | None = None
     task_id: str | None = None
+    run_id: str | None = None
     event_types: frozenset[str] | None = None
 
 
@@ -84,8 +94,12 @@ class Orchestrator:
     retry_service: RetryPolicyService
     execution_service: TaskExecutionService
     agent_manager: AgentManagementService
-    _config_holder: dict[str, VibrantConfig] = field(repr=False)
+    role_catalog: AgentRoleCatalog = field(default_factory=build_builtin_role_catalog)
+    provider_catalog: ProviderKindCatalog = field(default_factory=build_builtin_provider_catalog)
+    _config_holder: dict[str, VibrantConfig] = field(default_factory=dict, repr=False)
     _raw_event_subscribers: list[_RawEventSubscription] = field(default_factory=list, repr=False)
+    task_store: TaskStore | None = None
+    task_workflow: TaskWorkflowService | None = None
 
     @classmethod
     def load(
@@ -129,16 +143,29 @@ class Orchestrator:
             worktree_root=scoped_worktree_root(root, config.worktree_directory),
         )
         resolved_adapter_factory = adapter_factory or resolve_provider_adapter(config.provider_kind)
+        role_catalog = build_builtin_role_catalog()
+        provider_catalog = build_builtin_provider_catalog(
+            claude_adapter_factory=resolved_adapter_factory if config.provider_kind.value == "claude" else None,
+            codex_adapter_factory=resolved_adapter_factory if config.provider_kind.value == "codex" else None,
+        )
 
         state_store = StateStore(backend)
+        instance_store = AgentInstanceStore(
+            vibrant_dir=vibrant_dir,
+        )
         agent_store = AgentRecordStore(
             vibrant_dir=vibrant_dir,
             state_store=state_store,
         )
         state_store.bind_agent_store(agent_store)
         roadmap_service = RoadmapService(roadmap_path, project_name=root.name)
+        task_store = TaskStore(state_store=state_store)
+        task_workflow = TaskWorkflowService(task_store=task_store)
+        roadmap_service.bind_task_state(task_store=task_store, task_workflow=task_workflow)
         consensus_service = ConsensusService(consensus_path, state_store=state_store)
-        agent_registry = AgentRegistry(agent_store=agent_store, vibrant_dir=vibrant_dir)
+        agent_registry = AgentRegistry(agent_store=agent_store, instance_store=instance_store, vibrant_dir=vibrant_dir)
+        agent_registry.role_catalog = role_catalog
+        agent_registry.provider_catalog = provider_catalog
         question_service = QuestionService(
             state_store=state_store,
             gatekeeper=resolved_gatekeeper,
@@ -161,7 +188,8 @@ class Orchestrator:
                 project_root=root,
                 config_getter=lambda: config_holder["value"],
                 gatekeeper=resolved_gatekeeper,
-                adapter_factory=resolved_adapter_factory,
+                role_catalog=role_catalog,
+                provider_catalog=provider_catalog,
                 on_canonical_event=handle_canonical_event,
                 agent_registry=agent_registry,
             )
@@ -185,6 +213,7 @@ class Orchestrator:
             state_store=state_store,
             roadmap_service=roadmap_service,
             git_service=git_service,
+            task_store=task_store,
             gatekeeper_runner=gatekeeper_runtime.run_request,
         )
         planning_service = PlanningService(
@@ -209,6 +238,7 @@ class Orchestrator:
             runtime_service=runtime_service,
             review_service=review_service,
             retry_service=retry_service,
+            task_store=task_store,
         )
         agent_manager = AgentManagementService(
             agent_registry=agent_registry,
@@ -227,12 +257,16 @@ class Orchestrator:
             state_backend=backend,
             gatekeeper=resolved_gatekeeper,
             git_manager=resolved_git_manager,
+            role_catalog=role_catalog,
+            provider_catalog=provider_catalog,
             adapter_factory=resolved_adapter_factory,
             on_canonical_event=on_canonical_event,
             agent_output_service=agent_output_service,
             state_store=state_store,
             agent_store=agent_store,
             roadmap_service=roadmap_service,
+            task_store=task_store,
+            task_workflow=task_workflow,
             consensus_service=consensus_service,
             agent_registry=agent_registry,
             question_service=question_service,
@@ -307,6 +341,7 @@ class Orchestrator:
         *,
         agent_id: str | None = None,
         task_id: str | None = None,
+        run_id: str | None = None,
         event_types: list[str] | tuple[str, ...] | set[str] | None = None,
     ) -> Callable[[], None]:
         normalized_event_types = None
@@ -320,6 +355,7 @@ class Orchestrator:
             handler=handler,
             agent_id=agent_id,
             task_id=task_id,
+            run_id=run_id,
             event_types=normalized_event_types,
         )
         self._raw_event_subscribers.append(subscription)
@@ -361,39 +397,25 @@ def _build_default_agent_runtime_factory(
     project_root: Path,
     config_getter: Callable[[], VibrantConfig],
     gatekeeper: Gatekeeper | Any,
-    adapter_factory: Any | None,
+    role_catalog: AgentRoleCatalog,
+    provider_catalog: ProviderKindCatalog,
     on_canonical_event: CanonicalEventCallback | None,
     agent_registry: AgentRegistry,
 ):
-    def _build(agent_record: AgentRecord) -> AgentRuntime:
+    def _build(agent_record: AgentRunRecord) -> AgentRuntime:
         config = config_getter()
-        if agent_record.identity.type is AgentType.GATEKEEPER and isinstance(gatekeeper, Gatekeeper):
-            gatekeeper_agent = gatekeeper.agent
-            agent = GatekeeperAgent(
-                project_root,
-                gatekeeper_agent.config,
-                adapter_factory=gatekeeper_agent.adapter_factory,
-                on_canonical_event=on_canonical_event,
-                on_agent_record_updated=agent_registry.make_record_callback(),
-                timeout_seconds=gatekeeper_agent.timeout_seconds,
-            )
-        elif agent_record.identity.type is AgentType.MERGE:
-            agent = MergeAgent(
-                project_root,
-                config,
-                adapter_factory=adapter_factory or resolve_provider_adapter(config.provider_kind),
+        role_spec = role_catalog.get(agent_record.identity.role)
+        return role_spec.build_runtime(
+            RoleRuntimeContext(
+                project_root=project_root,
+                agent_record=agent_record,
+                config=config,
+                gatekeeper=gatekeeper,
+                provider_catalog=provider_catalog,
                 on_canonical_event=on_canonical_event,
                 on_agent_record_updated=agent_registry.make_record_callback(),
             )
-        else:
-            agent = CodeAgent(
-                project_root,
-                config,
-                adapter_factory=adapter_factory or resolve_provider_adapter(config.provider_kind),
-                on_canonical_event=on_canonical_event,
-                on_agent_record_updated=agent_registry.make_record_callback(),
-            )
-        return BaseAgentRuntime(agent)
+        )
 
     return _build
 
@@ -405,13 +427,18 @@ async def _dispatch_raw_event_subscribers(
     for subscription in tuple(subscribers):
         if not _raw_event_matches(subscription, event):
             continue
-        await maybe_forward_event(subscription.handler, event)
+        try:
+            await maybe_forward_event(subscription.handler, event)
+        except Exception:
+            logger.exception("Raw event subscriber failed for run %s", event.get("run_id"))
 
 
 def _raw_event_matches(subscription: _RawEventSubscription, event: CanonicalEvent) -> bool:
     if subscription.agent_id is not None and event.get("agent_id") != subscription.agent_id:
         return False
     if subscription.task_id is not None and event.get("task_id") != subscription.task_id:
+        return False
+    if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
         return False
     if subscription.event_types is not None and str(event.get("type") or "") not in subscription.event_types:
         return False

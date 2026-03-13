@@ -9,14 +9,22 @@ from typing import Any
 
 import pytest
 
-from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperRunResult, GatekeeperTrigger
+from vibrant.agents import (
+    Gatekeeper,
+    GatekeeperRequest,
+    GatekeeperRoleResult,
+    GatekeeperRunResult,
+    GatekeeperTrigger,
+    serialize_role_result,
+)
 from vibrant.agents.runtime import InputRequest, RunState
 from vibrant.consensus import ConsensusParser, ConsensusWriter, RoadmapParser
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator import OrchestratorFacade, OrchestratorStateBackend, create_orchestrator
+from vibrant.orchestrator.tasks.models import TaskReviewDecision, TaskRunStatus
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -297,6 +305,14 @@ class FakeGatekeeper:
             verdict = self.completion_verdicts.pop(0) if self.completion_verdicts else "accepted"
             if verdict == "accepted":
                 roadmap.tasks[0].status = TaskStatus.ACCEPTED
+            elif verdict in {"retry", "retried"}:
+                roadmap.tasks[0].status = TaskStatus.QUEUED
+                roadmap.tasks[0].prompt = "Retry after gatekeeper review."
+                plan_modified = True
+            elif verdict in {"escalate", "escalated"}:
+                roadmap.tasks[0].retry_count = roadmap.tasks[0].max_retries
+                roadmap.tasks[0].status = TaskStatus.ESCALATED
+                plan_modified = True
             else:
                 roadmap.tasks[0].prompt = "Retry after gatekeeper review."
                 plan_modified = True
@@ -318,16 +334,24 @@ class FakeGatekeeper:
         RoadmapParser().write(roadmap_path, roadmap)
 
         transcript = f"Verdict: {verdict}"
-        gatekeeper_record = AgentRecord(
+        suggested_decision = "needs_input" if questions else verdict
+        role_result = GatekeeperRoleResult(
+            succeeded=not questions,
+            awaiting_input=bool(questions),
+            summary=transcript,
+            pending_questions=list(questions),
+            suggested_decision=suggested_decision,
+        )
+        gatekeeper_record = AgentRunRecord(
             identity={
                 "agent_id": f"gatekeeper-{request.trigger.value}-test",
                 "task_id": f"gatekeeper-{request.trigger.value}",
-                "type": AgentType.GATEKEEPER,
+                "role": "gatekeeper",
             },
             lifecycle={
                 "status": AgentStatus.AWAITING_INPUT if questions else AgentStatus.COMPLETED,
             },
-            outcome={"summary": transcript},
+            outcome={"summary": transcript, "role_result": serialize_role_result(role_result)},
             provider=AgentProviderMetadata(
                 provider_thread_id="thread-gatekeeper-1",
                 resume_cursor={"threadId": "thread-gatekeeper-1"},
@@ -348,6 +372,7 @@ class FakeGatekeeper:
                 for question in questions
             ],
             turn_result={"turn": {"id": "gatekeeper-turn-1"}},
+            role_result=role_result,
         )
 
 
@@ -366,11 +391,11 @@ def _agent_record(
     agent_id: str,
     *,
     task_id: str = "task-001",
-    agent_type: AgentType = AgentType.CODE,
+    role: str = "code",
     status: AgentStatus = AgentStatus.RUNNING,
-) -> AgentRecord:
-    return AgentRecord(
-        identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type},
+) -> AgentRunRecord:
+    return AgentRunRecord(
+        identity={"agent_id": agent_id, "task_id": task_id, "role": role},
         lifecycle={"status": status},
     )
 
@@ -415,9 +440,40 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     roadmap = RoadmapParser().parse_file(repo / ".vibrant" / "roadmap.md")
     assert roadmap.tasks[0].status is TaskStatus.ACCEPTED
 
-    agent_files = sorted((repo / ".vibrant" / "agents").glob("agent-task-001-*.json"))
+    agent_files = sorted((repo / ".vibrant" / "agent-runs").glob("run-agent-task-001-*.json"))
     assert len(agent_files) == 1
-    record = AgentRecord.model_validate_json(agent_files[0].read_text(encoding="utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_task_execution_uses_task_agent_role_for_run_creation(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    roadmap_path = repo / ".vibrant" / "roadmap.md"
+    roadmap = RoadmapParser().parse_file(roadmap_path)
+    roadmap.tasks[0].agent_role = "test"
+    RoadmapParser().write(roadmap_path, roadmap)
+
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature\n"]
+
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    assert result.agent_record is not None
+    assert result.agent_record.identity.role == "test"
+    assert result.agent_record.provider.runtime_mode == "read-only"
+    assert result.role_result is not None
+    assert result.role_result.role == "test"
+    agent_files = sorted((repo / ".vibrant" / "agent-runs").glob("run-test-task-001-*.json"))
+    assert len(agent_files) == 1
+    record = AgentRunRecord.model_validate_json(agent_files[0].read_text(encoding="utf-8"))
     assert record.lifecycle.status is record.lifecycle.status.COMPLETED
     assert record.context.branch == "vibrant/task-001"
     assert record.outcome.summary == "Implemented task-001."
@@ -425,12 +481,40 @@ async def test_code_agent_lifecycle_executes_merges_and_persists_agent_record(tm
     assert record.context.skills_loaded == ["testing-strategy"]
     assert record.lifecycle.pid is not None
     assert record.provider.provider_thread_id == "thread-task-001-1"
-    assert record.provider.runtime_mode == "workspace-write"
+    assert record.provider.runtime_mode == "read-only"
     assert record.provider.native_event_log is not None
     assert record.provider.canonical_event_log is not None
     assert lifecycle.state_backend.state.total_agent_spawns == 2
     assert lifecycle.state_backend.state.active_agents == []
     assert lifecycle.state_backend.state.status is OrchestratorStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_task_history_is_persisted_in_orchestrator_state(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature\n"]
+    gatekeeper = FakeGatekeeper(repo)
+
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    task_state = lifecycle.state_backend.state.tasks["task-001"]
+    assert task_state.status is TaskStatus.ACCEPTED
+    assert len(task_state.runs) == 1
+    assert task_state.runs[0].status is TaskRunStatus.SUCCEEDED
+    assert len(task_state.reviews) == 1
+    assert task_state.reviews[0].decision is TaskReviewDecision.ACCEPTED
+
+    reloaded = OrchestratorStateBackend.load(repo)
+    reloaded_task_state = reloaded.state.tasks["task-001"]
+    assert reloaded_task_state.status is TaskStatus.ACCEPTED
+    assert reloaded_task_state.runs[0].status is TaskRunStatus.SUCCEEDED
+    assert reloaded_task_state.reviews[0].decision is TaskReviewDecision.ACCEPTED
 
 
 @pytest.mark.asyncio
@@ -480,21 +564,21 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
     handle = await lifecycle.start_gatekeeper_message("Build an auth MVP for the app.")
 
     for _ in range(50):
-        active = lifecycle.agent_manager.list_agents(agent_type=AgentType.GATEKEEPER, include_completed=False)
+        active = lifecycle.agent_manager.list_instance_snapshots(role="gatekeeper", include_completed=False)
         if active and active[0].runtime.awaiting_input:
             break
         await asyncio.sleep(0)
     else:
         raise AssertionError("Managed Gatekeeper run never surfaced through agent_manager")
 
-    snapshot = lifecycle.agent_manager.get_agent(handle.agent_record.identity.agent_id)
+    snapshot = lifecycle.agent_manager.get_instance_snapshot(handle.agent_record.identity.agent_id)
     assert snapshot is not None
-    assert snapshot.identity.agent_type == AgentType.GATEKEEPER.value
+    assert snapshot.identity.role == "gatekeeper"
     assert snapshot.runtime.has_handle is True
     assert snapshot.runtime.awaiting_input is True
     assert snapshot.runtime.input_requests[0].request_id == "req-1"
 
-    updated = await lifecycle.agent_manager.respond_to_request(
+    updated = await lifecycle.agent_manager.respond_to_instance_request(
         handle.agent_record.identity.agent_id,
         "req-1",
         result={"answer": "Use OAuth first."},
@@ -506,7 +590,7 @@ async def test_real_gatekeeper_runs_through_shared_agent_manager(tmp_path):
 
     assert result.state is RunState.COMPLETED
     assert lifecycle.agent_manager.get_handle(handle.agent_record.identity.agent_id) is None
-    completed = lifecycle.agent_manager.get_agent(handle.agent_record.identity.agent_id)
+    completed = lifecycle.agent_manager.get_instance_snapshot(handle.agent_record.identity.agent_id)
     assert completed is not None
     assert completed.runtime.has_handle is False
     assert completed.runtime.done is True
@@ -530,7 +614,7 @@ def test_agent_store_rebuilds_state_without_engine_agent_cache(tmp_path):
     assert lifecycle.state_store.state.active_agents == ["agent-task-standalone"]
 
     facade = OrchestratorFacade(lifecycle)
-    assert [item.identity.agent_id for item in facade.list_agent_records()] == ["agent-task-standalone"]
+    assert [item.identity.agent_id for item in facade.runs.list()] == ["agent-task-standalone"]
 
 
 def test_facade_transition_to_planning_tolerates_consensus_sync_promoting_state(tmp_path):
@@ -625,6 +709,69 @@ async def test_code_agent_lifecycle_escalates_after_max_retries(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_code_agent_lifecycle_honors_gatekeeper_retry_review_transition(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature needs follow-up\n"]
+
+    class DurableRetryGatekeeper(FakeGatekeeper):
+        async def run(self, request: GatekeeperRequest, *, resume_latest_thread: bool | None = None) -> GatekeeperRunResult:
+            result = await super().run(request, resume_latest_thread=resume_latest_thread)
+            task_state = engine.state.tasks.get("task-001")
+            assert task_state is not None
+            task_state.status = TaskStatus.QUEUED
+            task_state.failure_reason = "Retry after gatekeeper review."
+            engine.persist_state()
+            return result
+
+    gatekeeper = DurableRetryGatekeeper(repo)
+    gatekeeper.completion_verdicts = ["retry"]
+
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    assert result.outcome == "retried"
+    assert (repo / "app.txt").read_text(encoding="utf-8") == "base\n"
+    assert not lifecycle.git_manager.worktree_path("task-001").exists()
+
+
+@pytest.mark.asyncio
+async def test_code_agent_lifecycle_honors_gatekeeper_escalated_review_transition(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["feature needs escalation\n"]
+
+    class DurableEscalationGatekeeper(FakeGatekeeper):
+        async def run(self, request: GatekeeperRequest, *, resume_latest_thread: bool | None = None) -> GatekeeperRunResult:
+            result = await super().run(request, resume_latest_thread=resume_latest_thread)
+            task_state = engine.state.tasks.get("task-001")
+            assert task_state is not None
+            task_state.retry_count = task_state.max_retries
+            task_state.status = TaskStatus.ESCALATED
+            task_state.failure_reason = "Gatekeeper escalated the task"
+            engine.persist_state()
+            return result
+
+    gatekeeper = DurableEscalationGatekeeper(repo)
+    gatekeeper.completion_verdicts = ["escalated"]
+
+    lifecycle = create_orchestrator(repo, state_backend=engine, gatekeeper=gatekeeper, adapter_factory=FakeCodeAgentAdapter)
+
+    result = await lifecycle.run_next_task()
+
+    assert result is not None
+    assert result.outcome == "escalated"
+    assert (repo / "app.txt").read_text(encoding="utf-8") == "base\n"
+    assert not lifecycle.git_manager.worktree_path("task-001").exists()
+
+
+@pytest.mark.asyncio
 async def test_task_execution_service_starts_with_handle_snapshot(tmp_path):
     repo, engine = _prepare_project(tmp_path)
     FakeCodeAgentAdapter.instances.clear()
@@ -646,7 +793,7 @@ async def test_task_execution_service_starts_with_handle_snapshot(tmp_path):
     assert len(snapshots) == 1
     assert snapshots[0].identity.agent_id == attempt.agent_record.identity.agent_id
     assert snapshots[0].identity.task_id == task.id
-    assert snapshots[0].identity.agent_type == "code"
+    assert snapshots[0].identity.role == "code"
 
     result = await lifecycle.agent_manager.wait_for_task(attempt)
 
@@ -672,11 +819,11 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
 
     attempt = await lifecycle.agent_manager.start_task(task)
 
-    active = lifecycle.agent_manager.list_active_agents()
+    active = lifecycle.agent_manager.list_active_instance_snapshots()
     assert len(active) == 1
     assert active[0].identity.agent_id == attempt.agent_record.identity.agent_id
     assert active[0].identity.task_id == task.id
-    assert active[0].identity.agent_type == "code"
+    assert active[0].identity.role == "code"
     assert active[0].runtime.has_handle is True
     assert active[0].runtime.active is True
     assert active[0].provider.thread_id == "thread-task-001-1"
@@ -685,7 +832,7 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
 
     assert result.outcome == "accepted"
 
-    snapshot = lifecycle.agent_manager.get_agent(attempt.agent_record.identity.agent_id)
+    snapshot = lifecycle.agent_manager.get_instance_snapshot(attempt.agent_record.identity.agent_id)
     assert snapshot is not None
     assert snapshot.identity.agent_id == attempt.agent_record.identity.agent_id
     assert snapshot.runtime.has_handle is False
@@ -696,7 +843,7 @@ async def test_agent_management_service_unifies_live_and_persisted_agent_state(t
     assert snapshot.outcome.summary == "Implemented task-001."
     assert snapshot.provider.thread_id == "thread-task-001-1"
 
-    latest = lifecycle.agent_manager.latest_for_task(task.id)
+    latest = lifecycle.agent_manager.latest_instance_snapshot_for_task(task.id)
     assert latest is not None
     assert latest.identity.agent_id == attempt.agent_record.identity.agent_id
 
@@ -718,12 +865,132 @@ def test_agent_management_service_keeps_persisted_awaiting_input_agents_active(t
     record.provider.resume_cursor = {"threadId": "thread-task-001-persisted"}
     lifecycle.agent_registry.upsert(record, increment_spawn=True)
 
-    active = lifecycle.agent_manager.list_active_agents()
+    active = lifecycle.agent_manager.list_active_instance_snapshots()
 
     assert [snapshot.identity.agent_id for snapshot in active] == [record.identity.agent_id]
     assert active[0].runtime.has_handle is False
     assert active[0].runtime.active is True
     assert active[0].runtime.awaiting_input is True
+
+
+@pytest.mark.asyncio
+async def test_agent_management_service_exposes_managed_agent_instance_lifecycle(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    FakeCodeAgentAdapter.instances.clear()
+    FakeCodeAgentAdapter.prompts.clear()
+    FakeCodeAgentAdapter.scenarios = ["success"]
+    FakeCodeAgentAdapter.success_contents = ["instance-managed feature\n"]
+
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+    assert lifecycle.dispatcher is not None
+
+    lifecycle.workflow_service.begin_execution_if_needed()
+    task = lifecycle.dispatcher.dispatch_next_task()
+    assert task is not None
+
+    attempt = await lifecycle.agent_manager.start_task(task)
+    instance = lifecycle.agent_manager.get_instance(attempt.agent_record.identity.agent_id)
+
+    assert attempt.agent.agent_id == attempt.agent_record.identity.agent_id
+    assert instance is not None
+    assert instance.agent_id == attempt.agent_record.identity.agent_id
+    assert instance.role == "code"
+    assert instance.scope_type == "task"
+    assert instance.scope_id == task.id
+    assert instance.record.latest_run_id == attempt.agent_record.identity.run_id
+    assert instance.latest_run() is not None
+    assert instance.latest_run().identity.run_id == attempt.agent_record.identity.run_id
+    assert instance.snapshot().identity.run_id == attempt.agent_record.identity.run_id
+
+    result = await lifecycle.agent_manager.wait_for_task(attempt)
+
+    assert result.outcome == "accepted"
+    assert instance.latest_run() is not None
+    assert instance.latest_run().identity.run_id == attempt.agent_record.identity.run_id
+    assert instance.active_run() is None
+    assert instance.snapshot().runtime.done is True
+
+
+def test_agent_management_service_tracks_multiple_runs_on_one_instance(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+
+    instance = lifecycle.agent_manager.resolve_instance(
+        role="code",
+        scope_type="task",
+        scope_id="task-001",
+    )
+    first_run = instance.create_run_record(
+        task_id="task-001",
+        branch="vibrant/task-001",
+        worktree_path=str(repo),
+        prompt="first run",
+    )
+    first_run.lifecycle.status = AgentStatus.FAILED
+    lifecycle.agent_registry.upsert(first_run, increment_spawn=True)
+
+    second_run = instance.create_run_record(
+        task_id="task-001",
+        branch="vibrant/task-001",
+        worktree_path=str(repo),
+        prompt="second run",
+    )
+    second_run.lifecycle.status = AgentStatus.COMPLETED
+    lifecycle.agent_registry.upsert(second_run, increment_spawn=True)
+
+    instances = lifecycle.agent_manager.list_instances(task_id="task-001")
+
+    assert len(instances) == 1
+    assert instances[0].agent_id == instance.agent_id
+    assert instances[0].record.latest_run_id == second_run.identity.run_id
+    assert instances[0].latest_run() is not None
+    assert instances[0].latest_run().identity.run_id == second_run.identity.run_id
+    assert instances[0].snapshot().identity.run_id == second_run.identity.run_id
+
+
+def test_facade_exposes_explicit_instance_and_run_aliases(tmp_path):
+    repo, engine = _prepare_project(tmp_path)
+    lifecycle = create_orchestrator(
+        repo,
+        state_backend=engine,
+        gatekeeper=FakeGatekeeper(repo),
+        adapter_factory=FakeCodeAgentAdapter,
+    )
+    facade = OrchestratorFacade(lifecycle)
+
+    instance = lifecycle.agent_manager.resolve_instance(
+        role="code",
+        scope_type="task",
+        scope_id="task-001",
+    )
+    run = instance.create_run_record(
+        task_id="task-001",
+        branch="vibrant/task-001",
+        worktree_path=str(repo),
+        prompt="alias test",
+    )
+    run.lifecycle.status = AgentStatus.COMPLETED
+    lifecycle.agent_registry.upsert(run, increment_spawn=True)
+
+    agent_snapshot = facade.instances.get(instance.agent_id)
+    instances = facade.instances.list(task_id="task-001")
+    run_records = facade.runs.list()
+
+    assert agent_snapshot is not None
+    assert agent_snapshot.identity.agent_id == instance.agent_id
+    assert agent_snapshot.identity.run_id == run.identity.run_id
+    assert [snapshot.identity.agent_id for snapshot in instances] == [instance.agent_id]
+    assert [record.identity.run_id for record in run_records] == [run.identity.run_id]
 
 
 def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path):
@@ -735,12 +1002,12 @@ def test_agent_management_service_normalizes_string_agent_type_filters(tmp_path)
         adapter_factory=FakeCodeAgentAdapter,
     )
 
-    code_record = _agent_record("agent-task-001-code", agent_type=AgentType.CODE)
-    merge_record = _agent_record("merge-task-001-merge", agent_type=AgentType.MERGE)
+    code_record = _agent_record("agent-task-001-code", role="code")
+    merge_record = _agent_record("merge-task-001-merge", role="merge")
     lifecycle.agent_registry.upsert(code_record, increment_spawn=True)
     lifecycle.agent_registry.upsert(merge_record, increment_spawn=True)
 
-    snapshots = lifecycle.agent_manager.list_agents(agent_type=" CODE ")
+    snapshots = lifecycle.agent_manager.list_instance_snapshots(role=" CODE ")
 
     assert [snapshot.identity.agent_id for snapshot in snapshots] == [code_record.identity.agent_id]
 
@@ -754,5 +1021,5 @@ def test_agent_management_service_rejects_invalid_string_agent_type_filters(tmp_
         adapter_factory=FakeCodeAgentAdapter,
     )
 
-    with pytest.raises(ValueError, match="Unsupported agent type filter"):
-        lifecycle.agent_manager.list_agents(agent_type="bogus")
+    with pytest.raises(ValueError, match="Unsupported agent role filter"):
+        lifecycle.agent_manager.list_instance_snapshots(role="bogus")

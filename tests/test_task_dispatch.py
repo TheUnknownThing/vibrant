@@ -5,7 +5,7 @@ from __future__ import annotations
 from vibrant.consensus import RoadmapParser
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.artifacts.roadmap import RoadmapService
-from vibrant.orchestrator.execution.dispatcher import TaskDispatcher
+from vibrant.orchestrator.tasks.dispatcher import TaskDispatcher
 
 
 class TestTaskDispatcher:
