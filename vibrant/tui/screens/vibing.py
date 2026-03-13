@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static, TabbedContent, TabPane
 
+from ...models.task import TaskInfo
+from ...orchestrator.facade import OrchestratorFacade
 from ..widgets.agent_output import AgentOutput
 from ..widgets.chat_panel import ChatPanel
 from ..widgets.consensus_view import ConsensusView
@@ -86,6 +90,7 @@ class VibingScreen(Static):
         super().__init__()
         self._initial_tab = initial_tab if initial_tab in self._VALID_TABS else "task-status"
         self._active_tab = self._initial_tab
+        self._selected_task_id: str | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="vibing-shell"):
@@ -142,6 +147,48 @@ class VibingScreen(Static):
         chat_panel = self.query_one(ChatPanel)
         chat_notice.display = is_loading
         chat_panel.display = not is_loading
+
+    def sync_task_views(
+        self,
+        tasks: Sequence[TaskInfo],
+        *,
+        facade: OrchestratorFacade | None,
+        agent_summaries: dict[str, str] | None = None,
+    ) -> None:
+        """Refresh the task tree and task-status panel from the latest roadmap state."""
+
+        task_list = list(tasks)
+        self.task_status.bind(facade)
+        if not task_list:
+            self._selected_task_id = None
+            self.plan_tree.clear_tasks("No roadmap tasks found.")
+            self.task_status.clear_tasks("No roadmap tasks found.")
+            return
+
+        selected_task_id = self.task_status.sync(task_list, selected_task_id=self._selected_task_id)
+        self._selected_task_id = selected_task_id
+        self.plan_tree.update_tasks(
+            task_list,
+            agent_summaries=agent_summaries,
+            selected_task_id=selected_task_id,
+        )
+        if selected_task_id is not None:
+            self.call_after_refresh(self._restore_selected_task, selected_task_id)
+
+    def on_plan_tree_task_highlighted(self, event: PlanTree.TaskHighlighted) -> None:
+        self._selected_task_id = event.task.id
+        self.task_status.select_task(event.task.id)
+
+    def on_plan_tree_task_selected(self, event: PlanTree.TaskSelected) -> None:
+        self._selected_task_id = event.task.id
+        self.task_status.select_task(event.task.id)
+        self.show_task_status()
+
+    def _restore_selected_task(self, task_id: str) -> None:
+        if self._selected_task_id != task_id:
+            return
+        self.task_status.select_task(task_id)
+        self.plan_tree.select_task(task_id)
 
     @property
     def agent_output(self) -> AgentOutput:

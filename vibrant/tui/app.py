@@ -777,11 +777,11 @@ class VibrantApp(App):
             return
 
         if vibing_screen is not None:
-            if plan_tree is not None:
-                plan_tree.update_tasks(
-                    roadmap_tasks,
-                    agent_summaries=self._collect_task_summaries(),
-                )
+            vibing_screen.sync_task_views(
+                roadmap_tasks,
+                facade=orchestrator,
+                agent_summaries=self._collect_task_summaries(),
+            )
             with suppress(Exception):
                 vibing_screen.set_roadmap_loading(not bool(roadmap_tasks))
 

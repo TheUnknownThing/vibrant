@@ -1,0 +1,252 @@
+{
+  "agent_summaries": {
+    "task-001": "Planner shell shipped and merged.",
+    "task-002": "The task-status panel is being wired to the stable facade and live task events.",
+    "task-003": "Shared task selection now stays in sync across refreshes."
+  },
+  "tasks": [
+    {
+      "id": "task-001",
+      "title": "Ship planner shell",
+      "status": "accepted",
+      "branch": "vibrant/task-001",
+      "priority": 1,
+      "acceptance_criteria": [
+        "Planning screen loads on startup",
+        "Consensus panel can be toggled"
+      ],
+      "prompt": "Polish the planning shell and its consensus panel."
+    },
+    {
+      "id": "task-002",
+      "title": "Build task-status panel",
+      "status": "in-progress",
+      "branch": "vibrant/task-002",
+      "priority": 0,
+      "acceptance_criteria": [
+        "Selected task appears in the panel",
+        "Roadmap progress is visible",
+        "Current execution details update live"
+      ],
+      "prompt": "Read docs/tui.md and docs/tui-todo.md. Replace the stub task-status panel with a real one.",
+      "skills": [
+        "textual"
+      ]
+    },
+    {
+      "id": "task-003",
+      "title": "Backfill task selection sync",
+      "status": "completed",
+      "branch": "vibrant/task-003",
+      "priority": 2,
+      "acceptance_criteria": [
+        "Tree highlight updates the panel",
+        "Tree selection opens the task-status tab"
+      ],
+      "prompt": "Make the plan tree and task-status panel share the same selected task."
+    },
+    {
+      "id": "task-004",
+      "title": "Preview task list in the frontend",
+      "status": "queued",
+      "branch": "vibrant/task-004",
+      "priority": 2,
+      "dependencies": [
+        "task-002"
+      ],
+      "acceptance_criteria": [
+        "Fixture tasks are visible in a preview app",
+        "The user can click through the task list to validate the panel"
+      ],
+      "prompt": "Create a lightweight frontend preview path that does not depend on live orchestrator state."
+    }
+  ],
+  "instances_by_task": {
+    "task-002": [
+      {
+        "identity": {
+          "task_id": "task-002",
+          "agent_id": "agent-task-002",
+          "role": "code"
+        },
+        "runtime": {
+          "state": "running",
+          "status": "running",
+          "active": true,
+          "done": false,
+          "awaiting_input": false,
+          "started_at": "2026-03-13T15:45:00Z",
+          "finished_at": null
+        },
+        "workspace": {
+          "worktree_path": "/tmp/vibrant-preview/task-002",
+          "branch": "vibrant/task-002"
+        },
+        "provider": {
+          "thread_id": "thread-task-002"
+        },
+        "outcome": {
+          "summary": "Wiring the task-status panel to live task state.",
+          "error": null
+        },
+        "agent_id": "agent-task-002",
+        "role": "code",
+        "latest_run": {
+          "started_at": "2026-03-13T15:45:00Z",
+          "finished_at": null
+        }
+      }
+    ],
+    "task-003": [
+      {
+        "identity": {
+          "task_id": "task-003",
+          "agent_id": "agent-task-003",
+          "role": "code"
+        },
+        "runtime": {
+          "state": "completed",
+          "status": "completed",
+          "active": false,
+          "done": true,
+          "awaiting_input": false,
+          "started_at": "2026-03-13T14:30:00Z",
+          "finished_at": "2026-03-13T14:55:00Z"
+        },
+        "workspace": {
+          "worktree_path": "/tmp/vibrant-preview/task-003",
+          "branch": "vibrant/task-003"
+        },
+        "provider": {
+          "thread_id": "thread-task-003"
+        },
+        "outcome": {
+          "summary": "Selection state is now shared by the vibing screen.",
+          "error": null
+        },
+        "agent_id": "agent-task-003",
+        "role": "code",
+        "latest_run": {
+          "started_at": "2026-03-13T14:30:00Z",
+          "finished_at": "2026-03-13T14:55:00Z"
+        }
+      }
+    ]
+  },
+  "runs_by_task": {
+    "task-002": {
+      "run_id": "run-task-002-live",
+      "agent_id": "agent-task-002",
+      "task_id": "task-002",
+      "role": "code",
+      "lifecycle": {
+        "status": "running",
+        "started_at": "2026-03-13T15:45:00Z",
+        "finished_at": null
+      },
+      "runtime": {
+        "state": "running",
+        "awaiting_input": false
+      },
+      "workspace": {
+        "worktree_path": "/tmp/vibrant-preview/task-002",
+        "branch": "vibrant/task-002"
+      },
+      "provider": {
+        "thread_id": "thread-task-002"
+      },
+      "summary": "Wiring the task-status panel to live task state.",
+      "error": null
+    },
+    "task-003": {
+      "run_id": "run-task-003-done",
+      "agent_id": "agent-task-003",
+      "task_id": "task-003",
+      "role": "code",
+      "lifecycle": {
+        "status": "completed",
+        "started_at": "2026-03-13T14:30:00Z",
+        "finished_at": "2026-03-13T14:55:00Z"
+      },
+      "runtime": {
+        "state": "completed",
+        "awaiting_input": false
+      },
+      "workspace": {
+        "worktree_path": "/tmp/vibrant-preview/task-003",
+        "branch": "vibrant/task-003"
+      },
+      "provider": {
+        "thread_id": "thread-task-003"
+      },
+      "summary": "Selection state is now shared by the vibing screen.",
+      "error": null
+    }
+  },
+  "outputs_by_agent": {
+    "agent-task-002": {
+      "thinking": {
+        "text": "Inspecting the canonical event projection and task selection flow.",
+        "status": "streaming"
+      },
+      "partial_text": "Rendering the latest execution details in the panel now."
+    }
+  },
+  "events_by_run": {
+    "run-task-002-live": [
+      {
+        "type": "turn.started"
+      },
+      {
+        "type": "task.progress",
+        "item": {
+          "type": "fileRead",
+          "path": "docs/tui.md"
+        }
+      },
+      {
+        "type": "reasoning.summary.delta",
+        "delta": "Inspecting the current stub."
+      },
+      {
+        "type": "task.progress",
+        "item": {
+          "type": "commandExecution",
+          "command": "uv run pytest tests/test_task_status_widget.py"
+        }
+      },
+      {
+        "type": "task.progress",
+        "item": {
+          "type": "fileChange",
+          "path": "vibrant/tui/widgets/task_status.py"
+        }
+      },
+      {
+        "type": "task.progress",
+        "item": {
+          "type": "agentMessage",
+          "text": "Task tree selection now controls the main status panel."
+        }
+      }
+    ],
+    "run-task-003-done": [
+      {
+        "type": "turn.started"
+      },
+      {
+        "type": "task.progress",
+        "item": {
+          "type": "fileChange",
+          "path": "vibrant/tui/screens/vibing.py"
+        }
+      },
+      {
+        "type": "turn.completed"
+      },
+      {
+        "type": "task.completed"
+      }
+    ]
+  }
+}
