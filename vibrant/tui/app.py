@@ -367,22 +367,15 @@ class VibrantApp(App):
         pending_question = self._current_pending_gatekeeper_question()
         try:
             if pending_question is not None:
-                result = await self.orchestrator_facade.answer_pending_question(text, question=pending_question)
+                await self.orchestrator_facade.answer_pending_question(text, question=pending_question)
             else:
-                result = await self.orchestrator_facade.submit_gatekeeper_message(text)
-            self._sync_gatekeeper_storage_thread_id(
-                getattr(getattr(result, "agent_record", None), "agent_id", None)
-            )
-            gatekeeper_text = _render_gatekeeper_result_text(result)
-            if gatekeeper_text:
-                chat_panel = self._chat_panel()
-                if chat_panel is not None:
-                    chat_panel.record_gatekeeper_response(gatekeeper_text)
+                await self.orchestrator_facade.submit_gatekeeper_message(text)
+
+            self._refresh_project_views()
             self._persist_gatekeeper_thread()
             if self._maybe_sync_post_planning_transition():
                 return
 
-            self._refresh_project_views()
             self.notify("Message sent to Gatekeeper.")
             self._set_status("Gatekeeper updated the plan")
             self._start_automatic_workflow_if_needed()
@@ -429,10 +422,7 @@ class VibrantApp(App):
         input_bar.set_enabled(False)
         input_bar.set_context("gatekeeper", "sending…")
         self._set_status("Sending message to Gatekeeper…")
-        chat_panel.record_gatekeeper_user_message(
-            event.text,
-            question=self._current_pending_gatekeeper_question(),
-        )
+        chat_panel.append_user_message(event.text)
         self._launch_gatekeeper_message(event.text)
         self._refresh_gatekeeper_state()
 
@@ -545,12 +535,7 @@ class VibrantApp(App):
         elif event_type == "user-input.requested":
             self._refresh_gatekeeper_state(force_flash=True)
         elif event_type == "gatekeeper.result.applied":
-            gatekeeper_text = _render_gatekeeper_event_text(event)
-            if gatekeeper_text:
-                chat_panel = self._chat_panel()
-                if chat_panel is not None:
-                    chat_panel.record_gatekeeper_response(gatekeeper_text)
-                    self._persist_gatekeeper_thread()
+            self._persist_gatekeeper_thread()
             self._refresh_gatekeeper_state(force_flash=bool(event.get("questions")))
             if event.get("error"):
                 self.notify(f"Gatekeeper error: {event['error']}", severity="error")
@@ -568,34 +553,15 @@ class VibrantApp(App):
         if chat_panel is None:
             return
 
-        if self._sync_gatekeeper_storage_thread_id(event.get("agent_id")):
-            self._persist_gatekeeper_thread()
+        with suppress(Exception):
+            chat_panel.bind(self.orchestrator_facade)
+            chat_panel.sync()
 
         event_type = str(event.get("type") or "")
-        if event_type == "turn.started":
-            chat_panel.clear_gatekeeper_streaming_text()
-            return
-        if event_type == "turn.completed":
-            return
-        if event_type == "runtime.error":
-            streamed_text = chat_panel.get_gatekeeper_streaming_text().strip()
-            if not streamed_text:
-                error_text = _error_text_from_event(event)
-                if error_text:
-                    chat_panel.record_gatekeeper_response(f"Error: {error_text}")
-                    self._persist_gatekeeper_thread()
-            chat_panel.clear_gatekeeper_streaming_text()
-            return
-        if event_type != "content.delta":
-            return
-
-        delta = str(event.get("delta") or "")
-        if not delta:
-            return
-
-        previous = chat_panel.get_gatekeeper_streaming_text()
-        chat_panel.update_gatekeeper_streaming_text(f"{previous}{delta}")
-        self._set_status("Gatekeeper is responding…")
+        if event_type == "content.delta":
+            self._set_status("Gatekeeper is responding…")
+        if event_type in {"turn.completed", "runtime.error"}:
+            self._persist_gatekeeper_thread()
 
     def _initialize_project_setup(self) -> None:
         project_root = find_project_root(self._settings.default_cwd or os.getcwd())
@@ -626,7 +592,7 @@ class VibrantApp(App):
                 continue
             if not self._gatekeeper_history_matches_project(thread):
                 continue
-            chat_panel.restore_gatekeeper_thread(thread)
+            chat_panel.import_thread(thread)
             break
 
     def _project_has_vibrant_state(self) -> bool:
@@ -643,9 +609,7 @@ class VibrantApp(App):
     def _mount_workspace(self, workspace: WorkspaceScreen) -> None:
         host = self._workspace_host()
         previous_chat = self._chat_panel()
-        gatekeeper_thread = None
-        if previous_chat is not None:
-            gatekeeper_thread = previous_chat.get_persisted_gatekeeper_thread() or previous_chat.get_gatekeeper_thread()
+        gatekeeper_thread = previous_chat.export_thread() if previous_chat is not None else None
 
         host.remove_children()
         host.mount(workspace)
@@ -654,12 +618,11 @@ class VibrantApp(App):
         if gatekeeper_thread is not None:
             self.call_after_refresh(self._restore_workspace_gatekeeper_thread, workspace, gatekeeper_thread)
 
-
     def _restore_workspace_gatekeeper_thread(self, workspace: WorkspaceScreen, thread: ThreadInfo) -> None:
         if self._workspace_screen is not workspace:
             return
         with suppress(Exception):
-            workspace.chat_panel.restore_gatekeeper_thread(thread)
+            workspace.chat_panel.import_thread(thread)
 
     def _apply_workspace_placeholder(self, placeholder: str) -> None:
         input_bar = self._input_bar()
@@ -817,21 +780,13 @@ class VibrantApp(App):
             if orchestrator and orchestrator.get_workflow_status() is OrchestratorStatus.COMPLETED:
                 self.notify("Workflow completed.")
                 self._set_status("Workflow completed")
-            elif orchestrator and orchestrator.list_pending_questions():
+            elif orchestrator and orchestrator.questions.pending():
                 banner = orchestrator.get_user_input_banner()
                 self.notify(banner, severity="warning")
                 self._set_status(banner)
             else:
                 self._notify_no_ready_task()
             return
-
-        if result.gatekeeper_result is not None:
-            gatekeeper_text = _render_gatekeeper_result_text(result.gatekeeper_result)
-            if gatekeeper_text:
-                chat_panel = self._chat_panel()
-                if chat_panel is not None:
-                    chat_panel.record_gatekeeper_response(gatekeeper_text)
-                    self._persist_gatekeeper_thread()
 
         if result.outcome == "accepted":
             completed = bool(orchestrator and orchestrator.get_workflow_status() is OrchestratorStatus.COMPLETED)
@@ -864,18 +819,12 @@ class VibrantApp(App):
         if chat_panel is None:
             return
 
-        gatekeeper_thread = chat_panel.get_persisted_gatekeeper_thread()
+        gatekeeper_thread = chat_panel.export_thread()
         if gatekeeper_thread is None or not gatekeeper_thread.turns:
             return
 
         gatekeeper_thread.cwd = str(self._project_root)
         self._history.save_thread(gatekeeper_thread)
-
-    def _sync_gatekeeper_storage_thread_id(self, thread_id: str | None) -> bool:
-        chat_panel = self._chat_panel()
-        if chat_panel is None:
-            return False
-        return chat_panel.set_gatekeeper_storage_thread_id(thread_id)
 
     @staticmethod
     def _is_gatekeeper_history_thread(thread: ThreadInfo) -> bool:
@@ -891,12 +840,19 @@ class VibrantApp(App):
     def _pending_gatekeeper_questions(self) -> list[str]:
         if self.orchestrator_facade is None:
             return []
-        return self.orchestrator_facade.list_pending_questions()
+        return [
+            record.text
+            for record in self.orchestrator_facade.questions.pending()
+            if record.source_role == "gatekeeper"
+        ]
 
     def _current_pending_gatekeeper_question(self) -> str | None:
         if self.orchestrator_facade is None:
             return None
-        return self.orchestrator_facade.get_current_pending_question()
+        record = self.orchestrator_facade.questions.current()
+        if record is None or record.source_role != "gatekeeper":
+            return None
+        return record.text
 
     def _gatekeeper_is_busy(self) -> bool:
         return bool(
@@ -919,13 +875,8 @@ class VibrantApp(App):
         new_questions = [question for question in questions if question not in self._known_pending_questions]
         flash = force_flash or bool(new_questions)
         with suppress(Exception):
-            chat_panel.set_gatekeeper_state(
-                status=normalized_status or status,
-                pending_questions=questions,
-                flash=flash,
-            )
-        with suppress(Exception):
-            chat_panel.show_gatekeeper_thread()
+            chat_panel.bind(self.orchestrator_facade)
+            chat_panel.sync(flash=flash)
 
         if questions and not self._gatekeeper_is_busy():
             banner = (
@@ -1133,28 +1084,8 @@ def _error_text_from_event(event: dict[str, Any]) -> str:
     return str(error or "").strip()
 
 
-def _render_gatekeeper_event_text(event: dict[str, Any]) -> str:
-    transcript = event.get("transcript")
-    if isinstance(transcript, str) and transcript.strip():
-        return transcript.strip()
-
-    verdict = event.get("verdict")
-    if isinstance(verdict, str) and verdict.strip():
-        return f"Verdict: {verdict.strip()}"
-
-    return ""
 
 
-def _render_gatekeeper_result_text(result: object) -> str:
-    transcript = getattr(result, "transcript", None)
-    if isinstance(transcript, str) and transcript.strip():
-        return transcript.strip()
-
-    verdict = getattr(result, "verdict", None)
-    if isinstance(verdict, str) and verdict.strip():
-        return f"Verdict: {verdict.strip()}"
-
-    return "Gatekeeper updated the plan."
 
 
 def _event_requests_planning_completion(event: object) -> bool:
