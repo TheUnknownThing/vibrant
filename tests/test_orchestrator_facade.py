@@ -154,11 +154,35 @@ class _FakeQuestionService:
         return pending[0] if pending else None
 
 
-def _state_store(status: OrchestratorStatus, *, records: list[AgentRunRecord] | None = None) -> SimpleNamespace:
+def _state_store(
+    status: OrchestratorStatus,
+    *,
+    records: list[AgentRunRecord] | None = None,
+    command_history: list[str] | None = None,
+) -> SimpleNamespace:
+    history = [entry.strip() for entry in command_history or [] if isinstance(entry, str) and entry.strip()]
+
+    def list_command_history(*, limit: int | None = None) -> list[str]:
+        if limit is None:
+            return list(history)
+        if limit <= 0:
+            return []
+        return list(history[-limit:])
+
+    def record_command_history_entry(text: str, *, limit: int | None = None) -> list[str]:
+        normalized = text.strip()
+        if normalized:
+            history.append(normalized)
+        if limit is not None and limit > 0 and len(history) > limit:
+            del history[:-limit]
+        return list_command_history(limit=limit)
+
     return SimpleNamespace(
         status=status,
         user_input_banner=lambda: "banner",
         notification_bell_enabled=lambda: False,
+        command_history=list_command_history,
+        record_command_history_entry=record_command_history_entry,
     )
 
 
@@ -168,11 +192,12 @@ def _facade_lifecycle(
     status: OrchestratorStatus = OrchestratorStatus.PLANNING,
     execution_mode: RoadmapExecutionMode = RoadmapExecutionMode.MANUAL,
     question_records: list[QuestionRecord] | None = None,
+    command_history: list[str] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         agent_manager=agent_manager,
         agent_output_service=SimpleNamespace(output_for_agent=lambda _agent_id: None),
-        state_store=_state_store(status),
+        state_store=_state_store(status, command_history=command_history),
         execution_mode=execution_mode,
         question_service=_FakeQuestionService(question_records),
         roadmap_document=None,
@@ -276,6 +301,22 @@ def test_facade_exposes_workflow_and_question_state() -> None:
     assert facade.list_question_records() == [question]
     assert facade.list_pending_question_records() == [question]
     assert facade.get_current_pending_question() == "Need approval?"
+
+
+def test_facade_records_and_lists_command_history() -> None:
+    facade = OrchestratorFacade(
+        _facade_lifecycle(
+            agent_manager=_FakeAgentManager([]),
+            command_history=["/help", "build a dashboard"],
+        )
+    )
+
+    assert facade.list_command_history() == ["/help", "build a dashboard"]
+
+    facade.record_command_history_entry(" review the API ")
+
+    assert facade.list_command_history() == ["/help", "build a dashboard", "review the API"]
+    assert facade.list_command_history(limit=2) == ["build a dashboard", "review the API"]
 
 
 def test_facade_snapshot_exposes_instance_snapshots() -> None:
@@ -487,6 +528,7 @@ async def test_orchestrator_subscribe_raw_events_filters_and_unsubscribes() -> N
     await orchestrator._publish_raw_event(
         {"agent_id": "agent-1", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:00Z"}
     )
+
     await orchestrator._publish_raw_event(
         {"agent_id": "agent-2", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:01Z"}
     )
@@ -501,6 +543,23 @@ async def test_orchestrator_subscribe_raw_events_filters_and_unsubscribes() -> N
     )
 
     assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_facade_interrupt_gatekeeper_delegates_to_orchestrator() -> None:
+    orchestrator = _make_test_orchestrator()
+    interrupt_calls = 0
+
+    async def interrupt_gatekeeper() -> bool:
+        nonlocal interrupt_calls
+        interrupt_calls += 1
+        return True
+
+    orchestrator.gatekeeper_runtime = SimpleNamespace(interrupt=interrupt_gatekeeper)
+    facade = OrchestratorFacade(orchestrator)
+
+    assert await facade.interrupt_gatekeeper() is True
+    assert interrupt_calls == 1
 
 
 @pytest.mark.asyncio

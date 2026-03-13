@@ -41,8 +41,14 @@ class VibingScreen(Static):
         height: 1fr;
     }
 
+    VibingScreen #workspace-tabs > ContentSwitcher,
+    VibingScreen #workspace-tabs > ContentSwitcher > TabPane {
+        height: 1fr;
+    }
+
+    VibingScreen #workspace-tabs > ContentTabs,
     VibingScreen #workspace-tabs Tabs {
-        height: auto;
+        height: 2;
         margin-bottom: 1;
     }
 
@@ -67,7 +73,6 @@ class VibingScreen(Static):
 
     VibingScreen #input-panel {
         height: auto;
-        max-height: 8;
         border-top: solid $primary-background;
         padding: 0 1;
         background: $surface;
@@ -110,7 +115,7 @@ class VibingScreen(Static):
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.control.id != "workspace-tabs":
             return
-        tab_id = event.tab.id or ""
+        tab_id = event.pane.id or ""
         if tab_id in self._VALID_TABS:
             self._active_tab = tab_id
 
@@ -123,6 +128,10 @@ class VibingScreen(Static):
     def set_active_tab(self, tab_id: str) -> None:
         if tab_id not in self._VALID_TABS:
             return
+
+        if tab_id == "consensus":
+            self.consensus_view.load_document()
+            self.consensus_view.assert_facade()
 
         self._active_tab = tab_id
         self.query_one("#workspace-tabs", TabbedContent).active = tab_id

@@ -68,6 +68,18 @@ class StateStore:
     def notification_bell_enabled(self) -> bool:
         return bool(getattr(self.engine, "notification_bell_enabled", False))
 
+    def command_history(self, *, limit: int | None = None) -> list[str]:
+        return self.engine.state.recent_command_history(limit=limit)
+
+    def record_command_history_entry(self, text: str, *, limit: int | None = None) -> list[str]:
+        if limit is None:
+            changed = self.engine.state.append_command_history(text)
+        else:
+            changed = self.engine.state.append_command_history(text, limit=limit)
+        if changed:
+            self.persist()
+        return self.command_history(limit=limit)
+
     def agent_records(self) -> list:
         return list(self._agent_records())
 

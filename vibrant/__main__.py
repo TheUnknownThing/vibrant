@@ -3,6 +3,7 @@
 Usage::
 
     python -m vibrant [--cwd DIR] [--model MODEL]
+    python -m vibrant [--dev] [--cwd DIR] [--model MODEL]
     python -m vibrant init [PATH]
 """
 
@@ -19,6 +20,18 @@ from collections.abc import Sequence
 from .config import find_project_root, load_config
 from .project_init import initialize_project
 from .providers.base import ProviderKind
+
+
+def _enable_textual_devtools() -> None:
+    """Enable Textual debug and devtools features for this process."""
+
+    features = {
+        feature.strip()
+        for feature in os.environ.get("TEXTUAL", "").split(",")
+        if feature.strip()
+    }
+    features.update({"debug", "devtools"})
+    os.environ["TEXTUAL"] = ",".join(sorted(features))
 
 
 def _check_binary(binary: str | None) -> str | None:
@@ -50,9 +63,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Default model (default: gpt-5.3-codex)",
     )
     parser.add_argument(
-        "--debug",
+        "--log",
         action="store_true",
         help="Enable debug logging to ~/.vibrant/debug.log",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Enable Textual devtools support for `textual console`",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -75,12 +93,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"Initialized Vibrant project in {vibrant_dir}")
         return
 
+    if args.dev:
+        _enable_textual_devtools()
+
     start_path = args.cwd or os.getcwd()
     project_root = find_project_root(start_path)
     config = load_config(start_path=start_path)
     provider_binary = config.codex_binary
     resolved_provider_binary = None
-    if config.provider_kind is ProviderKind.CODEX:
+    if config.provider_kind is ProviderKind.CODEX and not config.mock_responses:
         resolved_provider_binary = _check_binary(config.codex_binary)
         if not resolved_provider_binary:
             print(
@@ -100,7 +121,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             )
             sys.exit(1)
 
-    if args.debug:
+    if args.log:
         import pathlib
 
         log_dir = pathlib.Path("~/.vibrant").expanduser()
@@ -110,6 +131,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             level=logging.DEBUG,
             format="%(asctime)s %(name)s %(levelname)s %(message)s",
         )
+        logging.getLogger("markdown_it").setLevel(logging.INFO)
+
     else:
         logging.basicConfig(level=logging.WARNING)
 

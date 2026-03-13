@@ -100,6 +100,9 @@ class QuestionRecord(BaseModel):
         self.resolved_at = datetime.now(timezone.utc)
 
 
+MAX_COMMAND_HISTORY_ENTRIES = 200
+
+
 class OrchestratorState(BaseModel):
     """Durable orchestrator state stored in ``.vibrant/state.json``."""
 
@@ -112,6 +115,7 @@ class OrchestratorState(BaseModel):
     gatekeeper_status: GatekeeperStatus = GatekeeperStatus.IDLE
     questions: list[QuestionRecord] = Field(default_factory=list)
     pending_questions: list[str] = Field(default_factory=list)
+    command_history: list[str] = Field(default_factory=list)
     last_consensus_version: int = 0
     concurrency_limit: int = 4
     provider_runtime: dict[str, ProviderRuntimeState] = Field(default_factory=dict)
@@ -155,6 +159,11 @@ class OrchestratorState(BaseModel):
             return normalized
         return value
 
+    @field_validator("command_history", mode="before")
+    @classmethod
+    def normalize_command_history(cls, value: object) -> list[str]:
+        return _normalize_command_history(value)
+
     @model_validator(mode="after")
     def validate_state(self) -> OrchestratorState:
         if self.last_consensus_version < 0:
@@ -163,6 +172,7 @@ class OrchestratorState(BaseModel):
             raise ValueError("concurrency_limit must be >= 1")
         if self.total_agent_spawns < 0:
             raise ValueError("total_agent_spawns must be >= 0")
+        self.command_history = _normalize_command_history(self.command_history)
         self.sync_pending_question_projection()
         return self
 
@@ -175,6 +185,23 @@ class OrchestratorState(BaseModel):
     def replace_questions(self, questions: list[QuestionRecord]) -> None:
         self.questions = questions
         self.sync_pending_question_projection()
+
+    def recent_command_history(self, *, limit: int | None = None) -> list[str]:
+        if limit is None:
+            return list(self.command_history)
+        if limit <= 0:
+            return []
+        return list(self.command_history[-limit:])
+
+    def append_command_history(self, text: str, *, limit: int = MAX_COMMAND_HISTORY_ENTRIES) -> bool:
+        normalized = _normalize_command_history_entry(text)
+        if normalized is None:
+            return False
+        self.command_history.append(normalized)
+        effective_limit = max(1, limit)
+        if len(self.command_history) > effective_limit:
+            self.command_history = self.command_history[-effective_limit:]
+        return True
 
 
 def _legacy_provider_runtime(items: list[object]) -> dict[str, ProviderRuntimeState]:
@@ -219,6 +246,25 @@ def _legacy_question_records(items: list[object]) -> list[QuestionRecord]:
             )
         )
     return records
+
+
+def _normalize_command_history(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    history: list[str] = []
+    for item in value:
+        normalized = _normalize_command_history_entry(item)
+        if normalized is not None:
+            history.append(normalized)
+    return history[-MAX_COMMAND_HISTORY_ENTRIES:]
+
+
+def _normalize_command_history_entry(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def reconcile_question_records(

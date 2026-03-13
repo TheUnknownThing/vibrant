@@ -24,14 +24,14 @@ class PlanningScreen(Static):
     }
 
     PlanningScreen #planning-consensus-panel {
-        width: 44;
-        min-width: 32;
-        max-width: 56;
+        width: 1fr;
+        min-width: 48;
         margin-right: 1;
         display: none;
     }
 
     PlanningScreen #planning-shell {
+        width: 1fr;
         height: 1fr;
         border: round $primary-background;
         background: $surface;
@@ -50,7 +50,6 @@ class PlanningScreen(Static):
 
     PlanningScreen #input-panel {
         height: auto;
-        max-height: 8;
         border-top: solid $primary-background;
         padding: 0 1;
         background: $surface;
@@ -113,7 +112,16 @@ class PlanningScreen(Static):
         """Show or hide the docked consensus panel."""
 
         self._consensus_visible = visible
-        self.query_one("#planning-consensus-panel", ConsensusView).display = visible
+        consensus_view = self.query_one("#planning-consensus-panel", ConsensusView)
+        if visible:
+            if consensus_view._orchestrator_facade is None:
+                self.notify("Consensus panel is unavailable until project initialization completes.", severity="warning")
+                self._consensus_visible = False
+                consensus_view.display = False
+                return
+            consensus_view.load_document()
+            consensus_view.assert_facade()
+        consensus_view.display = visible
 
     def toggle_consensus_panel(self) -> None:
         """Toggle the docked consensus panel."""

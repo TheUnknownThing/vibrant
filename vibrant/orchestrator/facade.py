@@ -885,6 +885,12 @@ class OrchestratorFacade:
     def list_pending_question_records(self) -> list[QuestionRecord]:
         return self.questions.pending()
 
+    def list_command_history(self, *, limit: int | None = None) -> list[str]:
+        return self.orchestrator.state_store.command_history(limit=limit)
+
+    def record_command_history_entry(self, text: str, *, limit: int | None = None) -> list[str]:
+        return self.orchestrator.state_store.record_command_history_entry(text, limit=limit)
+
     def get_task(self, task_id: str) -> TaskInfo | None:
         return self.tasks.get(task_id)
 
@@ -1007,6 +1013,9 @@ class OrchestratorFacade:
     ) -> GatekeeperRunResult:
         return await self.orchestrator.question_service.answer(answer, question=question)
 
+    async def interrupt_gatekeeper(self) -> bool:
+        return await self.orchestrator.interrupt_gatekeeper()
+
     async def execute_next_task(self) -> TaskExecutionResult | None:
         return await self.workflow.execute_next_task()
 
@@ -1058,6 +1067,11 @@ class OrchestratorFacade:
             raise ValueError(f"Invalid orchestrator state transition: {current.value} -> {next_status.value}")
 
         self._sync_consensus_status(next_status)
+
+        current = self.orchestrator.state_store.status
+        if current is next_status:
+            return
+
         if self.orchestrator.state_store.status is next_status:
             self.orchestrator.state_store.refresh()
             return
