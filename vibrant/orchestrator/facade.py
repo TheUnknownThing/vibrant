@@ -633,7 +633,6 @@ class OrchestratorSnapshot:
     workflow: WorkflowSnapshot
     documents: DocumentSnapshot
 
-
 class OrchestratorFacade:
     """Single entry point for orchestrator-backed app operations."""
 

@@ -123,6 +123,23 @@ class TestAgentRecord:
         with pytest.raises(ValidationError, match="Unsupported provider runtime mode"):
             AgentProviderMetadata.model_validate({"runtime_mode": "mystery-mode"})
 
+    def test_claude_session_resume_cursor_restores_provider_thread_id(self):
+        provider = AgentProviderMetadata.model_validate(
+            {
+                "kind": "claude",
+                "transport": "sdk-stream-json",
+                "runtime_mode": "workspace-write",
+                "resume_cursor": {"sessionId": "session-123"},
+            }
+        )
+
+        assert provider.provider_thread_id == "session-123"
+        assert provider.resume_handle == ProviderResumeHandle(
+            kind="claude",
+            thread_id="session-123",
+            resume_cursor={"sessionId": "session-123"},
+        )
+
     def test_nested_agent_record_requires_identity(self):
         with pytest.raises(ValidationError, match="identity"):
             AgentRunRecord.model_validate(

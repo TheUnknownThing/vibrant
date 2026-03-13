@@ -23,7 +23,7 @@ from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root,
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.orchestrator.agents.catalog import build_builtin_provider_catalog, build_builtin_role_catalog
 from vibrant.providers.base import CanonicalEvent
-from vibrant.providers.codex.adapter import CodexProviderAdapter
+from vibrant.providers.registry import provider_transport, resolve_provider_adapter
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
 
 from .base import AgentRunResult, ReadOnlyAgentBase
@@ -126,8 +126,11 @@ class GatekeeperAgent(ReadOnlyAgentBase):
 
     def build_agent_record(self, request: GatekeeperRequest) -> AgentRunRecord:
         role_spec = _ROLE_CATALOG.get("gatekeeper")
-        provider_catalog = build_builtin_provider_catalog(codex_adapter_factory=self.adapter_factory)
-        provider_spec = provider_catalog.get(role_spec.default_provider_kind)
+        provider_catalog = build_builtin_provider_catalog(
+            claude_adapter_factory=self.adapter_factory if self.config.provider_kind.value == "claude" else None,
+            codex_adapter_factory=self.adapter_factory if self.config.provider_kind.value == "codex" else None,
+        )
+        provider_spec = provider_catalog.get(self.config.provider_kind.value)
         agent_id = "gatekeeper-project"
         run_id = f"run-gatekeeper-project-{uuid4().hex[:8]}"
         task_id = f"gatekeeper-{request.trigger.value}"
@@ -199,7 +202,7 @@ class Gatekeeper:
         self.agent = GatekeeperAgent(
             self.project_root,
             self.config,
-            adapter_factory=adapter_factory or CodexProviderAdapter,
+            adapter_factory=adapter_factory or resolve_provider_adapter(self.config.provider_kind),
             on_canonical_event=on_canonical_event,
             timeout_seconds=timeout_seconds,
         )

@@ -17,7 +17,7 @@ from vibrant.models.agent import AgentRunRecord
 from vibrant.orchestrator.state.backend import OrchestratorStateBackend
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
-from vibrant.providers.codex.adapter import CodexProviderAdapter
+from vibrant.providers.registry import resolve_provider_adapter
 
 from .agents.catalog import (
     AgentRoleCatalog,
@@ -142,9 +142,12 @@ class Orchestrator:
             repo_root=root,
             worktree_root=scoped_worktree_root(root, config.worktree_directory),
         )
-        resolved_adapter_factory = adapter_factory or CodexProviderAdapter
+        resolved_adapter_factory = adapter_factory or resolve_provider_adapter(config.provider_kind)
         role_catalog = build_builtin_role_catalog()
-        provider_catalog = build_builtin_provider_catalog(codex_adapter_factory=resolved_adapter_factory)
+        provider_catalog = build_builtin_provider_catalog(
+            claude_adapter_factory=resolved_adapter_factory if config.provider_kind.value == "claude" else None,
+            codex_adapter_factory=resolved_adapter_factory if config.provider_kind.value == "codex" else None,
+        )
 
         state_store = StateStore(backend)
         instance_store = AgentInstanceStore(

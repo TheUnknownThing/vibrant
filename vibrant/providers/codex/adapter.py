@@ -30,6 +30,7 @@ class CodexProviderAdapter(ProviderAdapter):
         codex_binary: str = "codex",
         launch_args: Sequence[str] | None = None,
         codex_home: str | None = None,
+        resume_thread_id: str | None = None,
         agent_record: AgentRunRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
         on_raw_notification: NotificationHandler | None = None,
@@ -37,6 +38,7 @@ class CodexProviderAdapter(ProviderAdapter):
         native_logger: NativeLogger | None = None,
         canonical_logger: CanonicalLogger | None = None,
         client_factory: Any | None = None,
+        **_: Any,
     ) -> None:
         super().__init__(on_canonical_event=on_canonical_event)
         self.client = client
@@ -46,6 +48,7 @@ class CodexProviderAdapter(ProviderAdapter):
         self._launch_args = list(launch_args) if launch_args is not None else None
         self._codex_home = codex_home
         self.agent_record = agent_record
+        self._initial_resume_thread_id = resume_thread_id
         self.provider_thread_id: str | None = None
         self.thread_metadata: dict[str, Any] = {}
         self.current_turn_id: str | None = None
@@ -149,6 +152,7 @@ class CodexProviderAdapter(ProviderAdapter):
         if self.client is not None:
             await self.client.stop()
         self._session_started = False
+        self._pending_requests.clear()
         await self._emit_canonical("session.state.changed", state="stopped")
 
     async def start_thread(self, **kwargs: Any) -> Any:
@@ -205,12 +209,18 @@ class CodexProviderAdapter(ProviderAdapter):
     ) -> Any:
         client = self._ensure_client()
         runtime_mode = RuntimeMode(runtime_mode)
+        effort = kwargs.pop("effort", kwargs.pop("reasoning_effort", None))
+        summary = kwargs.pop("summary", kwargs.pop("reasoning_summary", None))
         payload = {
             "input": [dict(item) for item in input_items],
             "sandboxPolicy": runtime_mode.codex_turn_sandbox_policy,
             "approvalPolicy": approval_policy,
             **kwargs,
         }
+        if effort is not None:
+            payload["effort"] = effort
+        if summary is not None:
+            payload["summary"] = summary
         if self.provider_thread_id and "threadId" not in payload:
             payload["threadId"] = self.provider_thread_id
         return await client.send_request("turn/start", payload)
@@ -472,6 +482,7 @@ class CodexProviderAdapter(ProviderAdapter):
                 provider_payload=dict(params),
             )
             self._item_states.clear()
+            self._pending_requests.clear()
         elif method in {"error", "turn/error"}:
             error_payload = params.get("error", params)
             await self._emit_canonical(
@@ -482,6 +493,7 @@ class CodexProviderAdapter(ProviderAdapter):
                 provider_payload=dict(params),
             )
             self._item_states.clear()
+            self._pending_requests.clear()
 
         await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
 
@@ -875,7 +887,6 @@ def _coerce_auth_mode(value: object) -> CodexAuthMode:
             "apikeys": CodexAuthMode.API_KEY,
             "apikeymode": CodexAuthMode.API_KEY,
             "apikeyauth": CodexAuthMode.API_KEY,
-            "apikeymode": CodexAuthMode.API_KEY,
             "apiKey": CodexAuthMode.API_KEY,
             "chatgpt": CodexAuthMode.CHATGPT,
             "chatgptauthtokens": CodexAuthMode.CHATGPT_AUTH_TOKENS,

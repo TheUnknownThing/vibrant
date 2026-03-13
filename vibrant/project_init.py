@@ -96,6 +96,7 @@ def _render_default_config() -> str:
     config = VibrantConfig()
     lines = [
         "[provider]",
+        f'kind = "{config.provider_kind.value}"',
         f'codex-binary = "{config.codex_binary}"',
         "launch-args = []",
         f'model = "{config.model}"',

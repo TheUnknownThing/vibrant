@@ -138,13 +138,22 @@ class AgentRoleCatalog:
 
 
 
-def build_builtin_provider_catalog(*, codex_adapter_factory: Any | None = None) -> ProviderKindCatalog:
+def build_builtin_provider_catalog(
+    *,
+    codex_adapter_factory: Any | None = None,
+    claude_adapter_factory: Any | None = None,
+) -> ProviderKindCatalog:
     """Return the built-in provider catalog."""
 
     if codex_adapter_factory is None:
         from vibrant.providers.codex.adapter import CodexProviderAdapter
 
         codex_adapter_factory = CodexProviderAdapter
+
+    if claude_adapter_factory is None:
+        from vibrant.providers.claude.adapter import ClaudeProviderAdapter
+
+        claude_adapter_factory = ClaudeProviderAdapter
 
     return ProviderKindCatalog(
         [
@@ -153,7 +162,13 @@ def build_builtin_provider_catalog(*, codex_adapter_factory: Any | None = None) 
                 display_name="Codex",
                 adapter_factory=codex_adapter_factory,
                 default_transport="app-server-json-rpc",
-            )
+            ),
+            ProviderKindSpec(
+                kind="claude",
+                display_name="Claude",
+                adapter_factory=claude_adapter_factory,
+                default_transport="sdk-stream-json",
+            ),
         ]
     )
 
