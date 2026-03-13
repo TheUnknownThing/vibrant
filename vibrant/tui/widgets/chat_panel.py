@@ -12,7 +12,7 @@ from textual.widgets import Static
 
 from ...models import ItemInfo, ItemType, ThreadInfo, ThreadStatus, TurnInfo, TurnRole, TurnStatus
 from ...models.state import OrchestratorStatus
-from .conversation_view import ConversationView
+from .conversation_renderer import ConversationView
 
 
 @dataclass(slots=True)
