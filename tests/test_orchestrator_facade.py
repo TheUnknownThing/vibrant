@@ -528,6 +528,7 @@ async def test_orchestrator_subscribe_raw_events_filters_and_unsubscribes() -> N
     await orchestrator._publish_raw_event(
         {"agent_id": "agent-1", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:00Z"}
     )
+
     await orchestrator._publish_raw_event(
         {"agent_id": "agent-2", "task_id": "task-1", "type": "turn.started", "timestamp": "2026-03-11T12:00:01Z"}
     )
@@ -542,6 +543,23 @@ async def test_orchestrator_subscribe_raw_events_filters_and_unsubscribes() -> N
     )
 
     assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_facade_interrupt_gatekeeper_delegates_to_orchestrator() -> None:
+    orchestrator = _make_test_orchestrator()
+    interrupt_calls = 0
+
+    async def interrupt_gatekeeper() -> bool:
+        nonlocal interrupt_calls
+        interrupt_calls += 1
+        return True
+
+    orchestrator.gatekeeper_runtime = SimpleNamespace(interrupt=interrupt_gatekeeper)
+    facade = OrchestratorFacade(orchestrator)
+
+    assert await facade.interrupt_gatekeeper() is True
+    assert interrupt_calls == 1
 
 
 @pytest.mark.asyncio

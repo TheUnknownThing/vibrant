@@ -68,6 +68,7 @@ class VibrantApp(App):
         Binding("f6", "show_chat_history", "Chat", show=True),
         Binding("f7", "toggle_consensus", "Consensus", show=True),
         Binding("f8", "show_agent_logs", "Logs", show=True),
+        Binding("escape", "interrupt_gatekeeper", show=False),
         Binding("f10", "quit_app", "Quit", show=True),
         Binding("ctrl+s", "open_settings", "Settings", show=False),
         Binding("ctrl+c", "quit_app", "Quit", show=True),
@@ -85,6 +86,8 @@ class VibrantApp(App):
             return planning_screen is not None or vibing_screen is not None
         if action == "toggle_pause":
             return vibing_screen is not None
+        if action == "interrupt_gatekeeper":
+            return (planning_screen is not None or vibing_screen is not None) and self._gatekeeper_is_busy()
         if action in {"show_task_status", "show_chat_history", "show_agent_logs"}:
             return vibing_screen is not None
         if action == "toggle_consensus":
@@ -298,6 +301,28 @@ class VibrantApp(App):
             return
 
         self._launch_roadmap_runner(notify_when_idle=True)
+
+    async def action_interrupt_gatekeeper(self) -> None:
+        orchestrator = self.orchestrator_facade
+        if orchestrator is None or not self._gatekeeper_is_busy():
+            return
+
+        try:
+            interrupted = await orchestrator.interrupt_gatekeeper()
+        except Exception as exc:
+            logger.exception("Failed to interrupt Gatekeeper")
+            self.notify(f"Failed to interrupt Gatekeeper: {exc}", severity="error")
+            self._set_status(f"Gatekeeper interrupt failed: {exc}")
+            return
+
+        if not interrupted:
+            self.notify("Gatekeeper interrupt is not available for the current run.", severity="warning")
+            self._set_status("Gatekeeper interrupt unavailable")
+            return
+
+        self.notify("Interrupt requested for Gatekeeper.")
+        self._set_status("Interrupting Gatekeeper…")
+        self._refresh_gatekeeper_state()
 
     async def _run_roadmap_tasks(self, *, notify_when_idle: bool) -> None:
         assert self.orchestrator is not None
@@ -657,7 +682,7 @@ class VibrantApp(App):
         if self._workspace_screen is None:
             return
 
-        placeholder = "Tell me what you want to build" if planning_mode else InputBar.DEFAULT_PLACEHOLDER
+        placeholder = self._default_input_placeholder()
         self.call_after_refresh(self._apply_workspace_placeholder, placeholder)
         self.refresh_bindings()
 
@@ -916,6 +941,7 @@ class VibrantApp(App):
             self._set_banner(banner)
             input_bar.set_enabled(True)
             input_bar.set_context("gatekeeper", "awaiting answer")
+            input_bar.set_placeholder(self._default_input_placeholder())
             if flash:
                 self.notify(banner, severity="warning")
                 self._set_status(banner)
@@ -925,7 +951,8 @@ class VibrantApp(App):
         elif self._gatekeeper_is_busy():
             self._set_banner("Gatekeeper is responding…")
             input_bar.set_enabled(False)
-            input_bar.set_context("gatekeeper", "running…")
+            input_bar.set_context("gatekeeper", "running… · Esc to interrupt")
+            input_bar.set_placeholder("Gatekeeper is responding… Press Esc to interrupt.")
         else:
             self._set_banner(None)
             if normalized_status is OrchestratorStatus.INIT:
@@ -940,8 +967,16 @@ class VibrantApp(App):
             else:
                 input_bar.set_enabled(True)
                 input_bar.set_context("gatekeeper", "feedback")
+            input_bar.set_placeholder(self._default_input_placeholder())
 
         self._known_pending_questions = tuple(questions)
+
+    def _default_input_placeholder(self) -> str:
+        return (
+            "Tell me what you want to build"
+            if self.orchestrator is None or self._is_planning_mode()
+            else InputBar.DEFAULT_PLACEHOLDER
+        )
 
     def _chat_panel(self) -> ChatPanel | None:
         if self._workspace_screen is not None:

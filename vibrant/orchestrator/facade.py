@@ -1013,6 +1013,9 @@ class OrchestratorFacade:
     ) -> GatekeeperRunResult:
         return await self.orchestrator.question_service.answer(answer, question=question)
 
+    async def interrupt_gatekeeper(self) -> bool:
+        return await self.orchestrator.interrupt_gatekeeper()
+
     async def execute_next_task(self) -> TaskExecutionResult | None:
         return await self.workflow.execute_next_task()
 

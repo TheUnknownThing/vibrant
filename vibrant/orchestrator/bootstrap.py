@@ -332,6 +332,9 @@ class Orchestrator:
     async def answer_pending_question(self, answer: str, *, question: str | None = None) -> Any:
         return await self.question_service.answer(answer, question=question)
 
+    async def interrupt_gatekeeper(self) -> bool:
+        return await self.gatekeeper_runtime.interrupt()
+
     async def run_until_blocked(self) -> list[TaskResult]:
         self.refresh()
         return await self.agent_manager.execute_until_blocked()

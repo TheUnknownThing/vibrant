@@ -61,6 +61,7 @@ class GatekeeperRuntimeService:
         self.agent_registry = agent_registry
         self.runtime_service = runtime_service
         self._active_futures: set[asyncio.Future[Any]] = set()
+        self._active_interrupt_handle: Any | None = None
 
     @property
     def busy(self) -> bool:
@@ -109,6 +110,36 @@ class GatekeeperRuntimeService:
     def future_handle(self, future: asyncio.Future[GatekeeperRunResult]) -> AsyncGatekeeperHandle:
         self.track_future(future)
         return AsyncGatekeeperHandle(future)
+
+    def _track_interrupt_handle(self, handle: Any, *, future: asyncio.Future[Any] | None = None) -> None:
+        if not callable(getattr(handle, "interrupt", None)):
+            return
+
+        self._active_interrupt_handle = handle
+
+        if future is None:
+            return
+
+        def clear_interrupt_handle(done_future: asyncio.Future[Any]) -> None:
+            del done_future
+            if self._active_interrupt_handle is handle:
+                self._active_interrupt_handle = None
+
+        future.add_done_callback(clear_interrupt_handle)
+
+    async def interrupt(self) -> bool:
+        """Interrupt the active Gatekeeper turn when the runtime supports it."""
+
+        if self._uses_managed_runtime():
+            await self._gatekeeper_instance().interrupt()
+            return True
+
+        handle = self._active_interrupt_handle
+        if not callable(getattr(handle, "interrupt", None)):
+            return False
+
+        await handle.interrupt()
+        return True
 
     async def _maybe_invoke_callback(
         self,
@@ -173,6 +204,7 @@ class GatekeeperRuntimeService:
                 wait_for_result(),
                 name=f"gatekeeper-{request.trigger.value}-{started_run.agent_record.identity.run_id}",
             )
+            self._track_interrupt_handle(started_run.handle, future=future)
             return self.future_handle(future)
 
         start_run = getattr(self.gatekeeper, "start_run", None)
@@ -192,12 +224,12 @@ class GatekeeperRuntimeService:
 
             handle = await start_run(request, **kwargs)
             if supports_on_result:
-                self.track_future(
-                    asyncio.create_task(
-                        handle.wait(),
-                        name=f"gatekeeper-wait-{request.trigger.value}",
-                    )
+                wait_future = asyncio.create_task(
+                    handle.wait(),
+                    name=f"gatekeeper-wait-{request.trigger.value}",
                 )
+                self.track_future(wait_future)
+                self._track_interrupt_handle(handle, future=wait_future)
                 return handle
 
             async def wait_and_apply() -> GatekeeperRunResult:
@@ -208,6 +240,7 @@ class GatekeeperRuntimeService:
                 wait_and_apply(),
                 name=f"gatekeeper-{request.trigger.value}",
             )
+            self._track_interrupt_handle(handle, future=future)
             return self.future_handle(future)
 
         async def run_and_apply() -> GatekeeperRunResult:
