@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from textual.app import ComposeResult
@@ -43,6 +44,14 @@ class _ExecutionSnapshot:
     thinking_status: str = "idle"
     live_response: str | None = None
     recent_activity: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _RunEventCacheEntry:
+    canonical_event_log: str
+    file_size: int
+    mtime_ns: int
+    events: list[dict[str, Any]]
 
 
 class TaskStatusView(Static):
@@ -128,6 +137,7 @@ class TaskStatusView(Static):
         self._task_details_text = ""
         self._execution_text = ""
         self._activity_text = ""
+        self._run_event_cache: dict[str, _RunEventCacheEntry] = {}
 
     def compose(self) -> ComposeResult:
         yield Static("Task Status", id="task-status-header")
@@ -360,12 +370,7 @@ class TaskStatusView(Static):
             except Exception:
                 snapshot.output = None
 
-        events: list[dict[str, Any]] = []
-        if snapshot.latest_run is not None:
-            try:
-                events = list(facade.runs.events(snapshot.latest_run.run_id))
-            except Exception:
-                events = []
+        events = self._events_for_run(snapshot.latest_run)
 
         thinking_text, thinking_status = _thinking_from_events(events)
         if snapshot.output is not None and snapshot.output.thinking.text.strip():
@@ -378,6 +383,46 @@ class TaskStatusView(Static):
             snapshot.live_response = snapshot.output.partial_text.strip()
         snapshot.recent_activity = _recent_activity_from_events(events)
         return snapshot
+
+    def _events_for_run(self, run: AgentRunSnapshot | None) -> list[dict[str, Any]]:
+        if run is None or self._facade is None:
+            return []
+
+        canonical_event_log = getattr(run.provider, "canonical_event_log", None)
+        file_stats = self._canonical_event_log_stats(canonical_event_log)
+        cached = self._run_event_cache.get(run.run_id)
+        if (
+            cached is not None
+            and file_stats is not None
+            and cached.canonical_event_log == canonical_event_log
+            and cached.file_size == file_stats[0]
+            and cached.mtime_ns == file_stats[1]
+        ):
+            return cached.events
+
+        try:
+            events = list(self._facade.runs.events(run.run_id))
+        except Exception:
+            events = []
+
+        if file_stats is not None and canonical_event_log:
+            self._run_event_cache[run.run_id] = _RunEventCacheEntry(
+                canonical_event_log=canonical_event_log,
+                file_size=file_stats[0],
+                mtime_ns=file_stats[1],
+                events=events,
+            )
+        return events
+
+    @staticmethod
+    def _canonical_event_log_stats(canonical_event_log: str | None) -> tuple[int, int] | None:
+        if not canonical_event_log:
+            return None
+        try:
+            stats = Path(canonical_event_log).stat()
+        except OSError:
+            return None
+        return stats.st_size, stats.st_mtime_ns
 
 
 def _build_progress(tasks: Sequence[TaskInfo]) -> _RoadmapProgress:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -74,6 +76,7 @@ class _RunsAPI:
     ) -> None:
         self._runs_by_task = runs_by_task
         self._events_by_run = events_by_run
+        self.events_calls = 0
 
     def latest_for_task(self, task_id: str, *, role: str | None = None) -> SimpleNamespace | None:
         run = self._runs_by_task.get(task_id)
@@ -84,6 +87,7 @@ class _RunsAPI:
         return run
 
     def events(self, run_id: str) -> list[dict[str, object]]:
+        self.events_calls += 1
         return list(self._events_by_run.get(run_id, ()))
 
 
@@ -344,6 +348,38 @@ async def test_task_status_view_can_switch_to_a_queued_task() -> None:
         assert "State: Queued" in widget.get_execution_text()
         assert "Task is queued and waiting for a worker slot." in widget.get_execution_text()
         assert "Waiting in the execution queue." in widget.get_activity_text()
+
+
+@pytest.mark.asyncio
+async def test_task_status_view_reuses_cached_run_events_until_log_changes(tmp_path: Path) -> None:
+    tasks, facade = _sample_state()
+    run_log = tmp_path / "run-task-002-live.ndjson"
+    run_log.write_text('{"type":"turn.started"}\n', encoding="utf-8")
+
+    run = facade.runs._runs_by_task["task-002"]
+    run.provider = SimpleNamespace(thread_id=run.provider.thread_id, canonical_event_log=str(run_log))
+
+    app = TaskStatusHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(TaskStatusView)
+        widget.bind(facade)
+
+        widget.sync(tasks)
+        await pilot.pause()
+        assert facade.runs.events_calls == 1
+
+        widget.sync(tasks)
+        await pilot.pause()
+        assert facade.runs.events_calls == 1
+
+        run_log.write_text('{"type":"turn.started"}\n{"type":"task.progress"}\n', encoding="utf-8")
+        current_stats = run_log.stat()
+        os.utime(run_log, ns=(current_stats.st_atime_ns, current_stats.st_mtime_ns + 1_000))
+
+        widget.sync(tasks)
+        await pilot.pause()
+        assert facade.runs.events_calls == 2
 
 
 @pytest.mark.asyncio
