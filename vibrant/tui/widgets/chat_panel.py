@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from textual.app import ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Vertical
 from textual.widgets import Static
 
 from ...agents.utils import extract_error_message
@@ -20,6 +20,7 @@ from ...orchestrator.facade import OrchestratorFacade
 from ...orchestrator.types import AgentOutput, AgentRunSnapshot
 from ..utility.gatekeeper import GatekeeperSnapshot, get_gatekeeper_snapshot
 from .conversation_renderer import (
+    ConversationRegion,
     MessageBlock,
     MessagePart,
     MessageRole,
@@ -28,8 +29,6 @@ from .conversation_renderer import (
     TextPart,
     ToolCallPart,
     ToolCallStatus,
-    render_conversation,
-    render_part,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,8 +99,22 @@ class ChatPanel(Static):
         scrollbar-size: 1 1;
     }
 
-    #chat-panel-conversation {
+    #chat-panel-scroll .conversation-block {
+        margin-bottom: 1;
+        height: auto;
         width: 100%;
+    }
+
+    #chat-panel-scroll .conversation-role,
+    #chat-panel-scroll .conversation-part,
+    #chat-panel-scroll .reasoning-part,
+    #chat-panel-scroll .conversation-parts {
+        height: auto;
+        width: 100%;
+    }
+
+    #chat-panel-scroll .reasoning-content {
+        padding-left: 2;
     }
     """
 
@@ -115,16 +128,15 @@ class ChatPanel(Static):
         self._has_pending_questions = False
         self._notification_token = 0
         self._state = ChatPanelState()
-        self._conversation: Static | None = None
+        self._conversation: ConversationRegion | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-panel-layout"):
             yield Static("[b]Agent: Gatekeeper[/b]", id="chat-panel-header", markup=True)
             # yield Static(self._subtitle_text, id="chat-panel-subtitle")
             yield Static(self._question_summary_text, id="chat-panel-notice", markup=False)
-            with VerticalScroll(id="chat-panel-scroll"):
-                self._conversation = Static("", id="chat-panel-conversation", markup=False)
-                yield self._conversation
+            self._conversation = ConversationRegion(id="chat-panel-scroll")
+            yield self._conversation
 
     def on_mount(self) -> None:
         self._refresh_view()
@@ -142,8 +154,8 @@ class ChatPanel(Static):
             self._state.provider_thread_id = snapshot.provider_thread_id
 
         stream_run_id = None
-        if event_type in {"content.delta", "reasoning.summary.delta"} and snapshot.instance is not None:
-            stream_run_id = snapshot.instance.active_run_id
+        if event_type in {"content.delta", "reasoning.summary.delta"}:
+            stream_run_id = _active_run_id(snapshot)
 
         assistant_messages = _assistant_messages(
             snapshot,
@@ -288,12 +300,14 @@ class ChatPanel(Static):
         if not self.is_mounted or self._conversation is None:
             return
 
-        self._conversation.update(render_conversation(self._state.messages))
+        self._conversation.set_messages(self._state.messages)
         self.call_after_refresh(self._scroll_to_end)
 
     def _scroll_to_end(self) -> None:
+        if self._conversation is None:
+            return
         with suppress(Exception):
-            self.query_one("#chat-panel-scroll", VerticalScroll).scroll_end(animate=False)
+            self._conversation.scroll_end(animate=False)
 
 
 def _assistant_messages(
@@ -323,9 +337,7 @@ def _assistant_messages(
         if block is not None:
             assistant_by_id[block.message_id] = block
 
-    overlay_run_id = None
-    if snapshot.instance is not None:
-        overlay_run_id = snapshot.instance.active_run_id or snapshot.instance.latest_run_id
+    overlay_run_id = _overlay_run_id(snapshot)
     if snapshot.output is not None and overlay_run_id is not None:
         base_block = assistant_by_id.get(overlay_run_id)
         if base_block is None:
@@ -343,6 +355,27 @@ def _assistant_messages(
     messages = list(assistant_by_id.values())
     messages.sort(key=_message_sort_key)
     return messages
+
+
+def _active_run_id(snapshot: GatekeeperSnapshot) -> str | None:
+    for run in reversed(snapshot.runs):
+        if run.runtime.active:
+            return run.run_id
+    if snapshot.instance is None:
+        return None
+    return snapshot.instance.active_run_id
+
+
+def _overlay_run_id(snapshot: GatekeeperSnapshot) -> str | None:
+    run_ids = {run.run_id for run in snapshot.runs}
+    active = _active_run_id(snapshot)
+    if active and active in run_ids:
+        return active
+    if snapshot.instance is not None and snapshot.instance.latest_run_id in run_ids:
+        return snapshot.instance.latest_run_id
+    if snapshot.runs:
+        return snapshot.runs[-1].run_id
+    return None
 
 
 def _block_from_run(run: AgentRunSnapshot, events: list[dict[str, Any]]) -> MessageBlock | None:
@@ -400,7 +433,7 @@ def _block_from_run(run: AgentRunSnapshot, events: list[dict[str, Any]]) -> Mess
         if event_type == "runtime.error":
             error_text = extract_error_message(event).strip()
 
-    response_text = "".join(response_chunks).strip()
+    response_text = "".join(response_chunks)
     parts: list[MessagePart] = []
     if reasoning_text.strip():
         parts.append(
@@ -410,7 +443,7 @@ def _block_from_run(run: AgentRunSnapshot, events: list[dict[str, Any]]) -> Mess
             )
         )
     parts.extend(tool_parts)
-    if response_text:
+    if response_text.strip():
         parts.append(TextPart(response_text))
     elif error_text:
         parts.append(TextPart(f"Error: {error_text}"))
@@ -435,21 +468,21 @@ def _overlay_output(
     output: AgentOutput,
     message_id: str,
 ) -> MessageBlock | None:
-    thinking_text = output.thinking.text.strip()
-    response_text = output.partial_text.strip()
+    thinking_text = output.thinking.text
+    response_text = output.partial_text
     if not response_text and output.status == "completed":
         response_text = "\n\n".join(
-            segment.text.strip()
+            segment.text
             for segment in output.segments
-            if segment.kind == "response" and segment.text.strip()
-        ).strip()
+            if segment.kind == "response" and segment.text
+        )
     error_text = output.error.message.strip() if output.error is not None else ""
-    if not thinking_text and not response_text and not error_text:
+    if not thinking_text.strip() and not response_text and not error_text:
         return block
 
     tool_parts = [part for part in block.parts if isinstance(part, ToolCallPart)] if block is not None else []
     parts: list[MessagePart] = []
-    if thinking_text:
+    if thinking_text.strip():
         reasoning_status: ReasoningStatus = (
             "completed" if output.thinking.status == "completed" else "in_progress"
         )
@@ -581,7 +614,7 @@ def _event_timestamp(event: dict[str, Any]) -> datetime | None:
 
 
 def _turn_from_block(block: MessageBlock) -> TurnInfo | None:
-    content = "\n\n".join(filter(None, (render_part(part) for part in block.parts))).strip()
+    content = "\n\n".join(filter(None, (part.plain_text() for part in block.parts))).strip()
     if not content:
         return None
 
@@ -702,8 +735,4 @@ def _clone_block(block: MessageBlock) -> MessageBlock:
 
 
 def _clone_part(part: MessagePart) -> MessagePart:
-    if isinstance(part, TextPart):
-        return TextPart(part.text)
-    if isinstance(part, ReasoningPart):
-        return ReasoningPart(part.status, TextPart(part.content.text))
-    return ToolCallPart(part.tool_name, part.status)
+    return part.clone()
