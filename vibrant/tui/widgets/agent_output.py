@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
+from textual.timer import Timer
 from textual.widgets import Collapsible, ContentSwitcher, LoadingIndicator, Static
 
 from ...models.agent import AgentRunRecord, AgentStatus
@@ -143,6 +144,7 @@ class AgentOutput(Static):
         self._auto_follow = True
         self._debug_view_enabled = False
         self._empty_message = "No agent activity yet. Use /run to execute the next roadmap task."
+        self._native_log_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("[b]Agent Logs[/b]", id="agent-output-header", markup=True)
@@ -160,8 +162,13 @@ class AgentOutput(Static):
                 yield Static("", id="agent-output-debug", markup=False)
 
     def on_mount(self) -> None:
-        self.set_interval(0.25, self._poll_native_logs)
+        self._native_log_timer = self.set_interval(0.25, self._poll_native_logs)
         self._refresh_view()
+
+    def on_unmount(self) -> None:
+        if self._native_log_timer is not None:
+            self._native_log_timer.stop()
+            self._native_log_timer = None
 
     def on_click(self) -> None:
         self.focus()
