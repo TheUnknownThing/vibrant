@@ -25,7 +25,7 @@
 
 ### Task Status
 
-[ ] Implement stub in `vibrant/tui/widgets/task_status.py`.
+[x] Implement stub in `vibrant/tui/widgets/task_status.py`.
 
 ## Screen Fixes
 
@@ -43,6 +43,6 @@
 ### Vibing Screen
 
 [x] Use Tabs instead of buttons to select tab to display.
-[ ] Replace the `TaskStatusView` stub with a real task-status panel that shows the selected task, progress, and current execution details.
+[x] Replace the `TaskStatusView` stub with a real task-status panel that shows the selected task, progress, and current execution details.
 [ ] Replace the temporary roadmap-loading notices with a proper loading spinner for the `Task Status` and `Chat History` tabs before roadmap generation finishes.
 [ ] Implement Roadmap-loading placeholder.
