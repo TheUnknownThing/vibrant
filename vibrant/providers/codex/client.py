@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import signal
+from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Coroutine
 
 from ...models.wire import JsonRpcNotification, JsonRpcRequest
@@ -35,7 +36,8 @@ class CodexClient:
         *,
         cwd: str | None = None,
         codex_binary: str = "codex",
-        launch_args: list[str] | None = None,
+        launch_args: Sequence[str] | None = None,
+        launch_env: Mapping[str, str] | None = None,
         codex_home: str | None = None,
         on_notification: Callable[[JsonRpcNotification], Coroutine[Any, Any, None]] | None = None,
         on_stderr: Callable[[str], None] | None = None,
@@ -43,7 +45,8 @@ class CodexClient:
     ) -> None:
         self._cwd = cwd or os.getcwd()
         self._codex_binary = codex_binary
-        self._launch_args = launch_args
+        self._launch_args = list(launch_args or [])
+        self._launch_env = dict(launch_env or {})
         self._codex_home = codex_home
         self._on_notification = on_notification
         self._on_stderr = on_stderr
@@ -65,8 +68,9 @@ class CodexClient:
         env = {**os.environ}
         if self._codex_home:
             env["CODEX_HOME"] = self._codex_home
+        env.update(self._launch_env)
 
-        argv = list(self._launch_args) if self._launch_args else ["app-server"]
+        argv = [*self._launch_args, "app-server"]
         self._process = await asyncio.create_subprocess_exec(
             self._codex_binary,
             *argv,

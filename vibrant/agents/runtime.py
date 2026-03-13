@@ -46,6 +46,7 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
+from vibrant.providers.invocation import ProviderInvocationPlan
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,7 @@ class AgentRuntime(Protocol):
         cwd: str | None = None,
         resume_thread_id: str | None = None,
         on_record_updated: AgentRecordCallback | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
         """Launch the agent and return a handle immediately.
 
@@ -308,6 +310,7 @@ class AgentRuntime(Protocol):
         provider_thread: ProviderThreadHandle,
         cwd: str | None = None,
         on_record_updated: AgentRecordCallback | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
         """Resume a previously interrupted or awaiting-input agent.
 
@@ -366,6 +369,7 @@ class BaseAgentRuntime:
         cwd: str | None = None,
         resume_thread_id: str | None = None,
         on_record_updated: AgentRecordCallback | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
         return await self._launch(
             agent_record=agent_record,
@@ -373,6 +377,7 @@ class BaseAgentRuntime:
             cwd=cwd,
             resume_thread_id=resume_thread_id,
             on_record_updated=on_record_updated,
+            invocation_plan=invocation_plan,
         )
 
     async def resume_run(
@@ -383,6 +388,7 @@ class BaseAgentRuntime:
         provider_thread: ProviderThreadHandle,
         cwd: str | None = None,
         on_record_updated: AgentRecordCallback | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
         if not provider_thread.resumable:
             raise ValueError(
@@ -394,6 +400,7 @@ class BaseAgentRuntime:
             cwd=cwd,
             resume_thread_id=provider_thread.thread_id,
             on_record_updated=on_record_updated,
+            invocation_plan=invocation_plan,
         )
 
     # ------------------------------------------------------------------
@@ -408,6 +415,7 @@ class BaseAgentRuntime:
         cwd: str | None,
         resume_thread_id: str | None,
         on_record_updated: AgentRecordCallback | None,
+        invocation_plan: ProviderInvocationPlan | None,
     ) -> AgentHandle:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[NormalizedRunResult] = loop.create_future()
@@ -467,6 +475,7 @@ class BaseAgentRuntime:
                     agent_record=agent_record,
                     cwd=cwd,
                     resume_thread_id=resume_thread_id,
+                    invocation_plan=invocation_plan,
                 )
 
                 provider_thread = ProviderResumeHandle.from_provider_metadata(agent_record.provider) or ProviderResumeHandle(

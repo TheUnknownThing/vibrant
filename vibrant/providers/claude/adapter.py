@@ -12,6 +12,7 @@ from typing import Any
 from ...models.agent import AgentRecord, ProviderResumeHandle
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ..base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
+from ..invocation import ProviderInvocationPlan
 
 try:
     from claude_agent_sdk import ClaudeSDKClient, get_session_messages, list_sessions
@@ -67,6 +68,8 @@ class ClaudeProviderAdapter(ProviderAdapter):
         client: ClaudeSDKClient | Any | None = None,
         *,
         cwd: str | None = None,
+        launch_args: Sequence[str] | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
         resume_thread_id: str | None = None,
         claude_cli_path: str | None = None,
         claude_settings: str | None = None,
@@ -92,6 +95,8 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self.client = client
         self._client_factory = client_factory or ClaudeSDKClient
         self._cwd = cwd
+        self._launch_args = [str(arg) for arg in launch_args or []]
+        self._invocation_plan = invocation_plan
         self._initial_resume_thread_id = resume_thread_id
         self._claude_cli_path = claude_cli_path
         self._claude_settings = claude_settings
@@ -121,14 +126,20 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._canonical_logger = canonical_logger
 
         self._ensure_loggers()
-        if codex_binary or codex_home:
+        ignored_constructor_extras: dict[str, Any] = {}
+        if codex_binary:
+            ignored_constructor_extras["codex_binary"] = codex_binary
+        if codex_home:
+            ignored_constructor_extras["codex_home"] = codex_home
+        if self._launch_args:
+            ignored_constructor_extras["launch_args"] = list(self._launch_args)
+        if invocation_plan is not None and invocation_plan.launch_args:
+            ignored_constructor_extras["invocation_launch_args"] = list(invocation_plan.launch_args)
+        if ignored_constructor_extras:
             self._handle_native_event(
                 {
                     "event": "provider.constructor.extra_ignored",
-                    "data": {
-                        "codex_binary": codex_binary,
-                        "codex_home": codex_home,
-                    },
+                    "data": ignored_constructor_extras,
                 }
             )
 
@@ -198,7 +209,31 @@ class ClaudeProviderAdapter(ProviderAdapter):
             if value is not None:
                 option_kwargs[key] = value
 
+        self._apply_invocation_plan(option_kwargs)
+
         return ClaudeAgentOptions(**option_kwargs)
+
+    def _apply_invocation_plan(self, option_kwargs: dict[str, Any]) -> None:
+        if self._invocation_plan is None:
+            return
+
+        overrides = dict(self._invocation_plan.session_options)
+
+        base_env = option_kwargs.get("env")
+        merged_env = dict(base_env) if isinstance(base_env, Mapping) else {}
+        merged_env.update(self._invocation_plan.launch_env)
+        env_override = overrides.pop("env", None)
+        if isinstance(env_override, Mapping):
+            merged_env.update({str(key): value for key, value in env_override.items()})
+        if merged_env:
+            option_kwargs["env"] = merged_env
+
+        for key in ("add_dirs", "allowed_tools", "disallowed_tools", "setting_sources"):
+            values = overrides.pop(key, None)
+            if _is_string_sequence(values):
+                option_kwargs[key] = _merge_unique_strings(option_kwargs.get(key), values)
+
+        option_kwargs.update(overrides)
 
     def _ensure_loggers(self, cwd: str | None = None) -> None:
         if self._native_logger is not None and self._canonical_logger is not None:
@@ -768,6 +803,23 @@ def _coerce_provider_payload(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
     return {"value": _serialize_value(value)}
+
+
+def _is_string_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+
+
+def _merge_unique_strings(existing: Any, extra: Sequence[Any]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for source in (existing or [], extra):
+        for item in source:
+            text = str(item)
+            if text in seen:
+                continue
+            seen.add(text)
+            merged.append(text)
+    return merged
 
 
 def _prompt_from_input_items(input_items: Sequence[Mapping[str, Any]]) -> str:

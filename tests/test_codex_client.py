@@ -66,6 +66,60 @@ class TestCodexClientInit:
         with pytest.raises(CodexClientError, match="not running"):
             client.send_notification("test", {})
 
+    @pytest.mark.asyncio
+    async def test_start_composes_launch_args_around_app_server(self, monkeypatch):
+        captured: dict[str, object] = {}
+
+        class FakeStream:
+            async def readline(self) -> bytes:
+                return b""
+
+        class FakeStdin:
+            def write(self, _data: bytes) -> None:
+                return None
+
+        class FakeProcess:
+            def __init__(self) -> None:
+                self.pid = 321
+                self.returncode = None
+                self.stdin = FakeStdin()
+                self.stdout = FakeStream()
+                self.stderr = FakeStream()
+
+            def send_signal(self, _signal: int) -> None:
+                self.returncode = 0
+
+            async def wait(self) -> int:
+                self.returncode = 0
+                return 0
+
+        async def fake_create_subprocess_exec(*argv, **kwargs):
+            captured["argv"] = argv
+            captured["env"] = kwargs["env"]
+            return FakeProcess()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+        client = CodexClient(
+            cwd="/tmp/project",
+            codex_binary="/usr/bin/codex",
+            launch_args=["--verbose", "--config", "foo='bar'"],
+            launch_env={"CODEX_TRACE": "1"},
+            codex_home="/tmp/codex-home",
+        )
+
+        await client.start()
+        await client.stop()
+
+        assert captured["argv"] == (
+            "/usr/bin/codex",
+            "--verbose",
+            "--config",
+            "foo='bar'",
+            "app-server",
+        )
+        assert captured["env"]["CODEX_HOME"] == "/tmp/codex-home"
+        assert captured["env"]["CODEX_TRACE"] == "1"
 
     @pytest.mark.asyncio
     async def test_send_request_fails_when_stdin_closed(self):

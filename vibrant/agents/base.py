@@ -20,6 +20,7 @@ from typing import Any, Callable
 from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.providers.invocation import ProviderInvocationPlan
 
 from .utils import (
     extract_error_message,
@@ -157,6 +158,7 @@ class AgentBase(ABC):
         agent_record: AgentRecord,
         cwd: str | Path | None = None,
         resume_thread_id: str | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentRunResult:
         """Execute a full adapter lifecycle and return the result.
 
@@ -232,6 +234,7 @@ class AgentBase(ABC):
             adapter = self.adapter_factory(
                 cwd=working_dir,
                 codex_binary=self.config.codex_binary,
+                launch_args=self.config.launch_args,
                 codex_home=self.config.codex_home,
                 resume_thread_id=resume_thread_id,
                 claude_cli_path=self.config.claude_cli_path,
@@ -244,6 +247,7 @@ class AgentBase(ABC):
                 claude_model=self.config.model,
                 claude_effort=self.config.reasoning_effort,
                 claude_extra_config=self.config.extra_config,
+                invocation_plan=invocation_plan,
                 agent_record=agent_record,
                 on_canonical_event=handle_event,
             )

@@ -14,6 +14,7 @@ from vibrant.models.wire import JsonRpcNotification
 from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 from vibrant.providers.codex.client import CodexClientError
+from vibrant.providers.invocation import ProviderInvocationPlan
 
 
 class FakeCodexClient:
@@ -46,6 +47,54 @@ class FakeCodexClient:
 
 
 class TestCodexProviderAdapter:
+    @pytest.mark.asyncio
+    async def test_start_session_passes_composed_launch_config_to_client(self):
+        captured: dict[str, Any] = {}
+
+        class CapturingClient(FakeCodexClient):
+            def __init__(self, **kwargs: Any) -> None:
+                super().__init__()
+                captured.update(kwargs)
+                self.responses["initialize"] = {"serverInfo": {"name": "codex"}}
+
+        adapter = CodexProviderAdapter(
+            cwd="/tmp/project",
+            launch_args=["--verbose"],
+            invocation_plan=ProviderInvocationPlan(
+                launch_args=["--config", "mcp_servers.local.command='uvx fastmcp'"],
+                launch_env={"CODEX_TRACE": "1"},
+            ),
+            client_factory=CapturingClient,
+        )
+
+        await adapter.start_session(cwd="/tmp/project")
+
+        assert captured["launch_args"] == [
+            "--verbose",
+            "--config",
+            "mcp_servers.local.command='uvx fastmcp'",
+        ]
+        assert captured["launch_env"] == {"CODEX_TRACE": "1"}
+
+    @pytest.mark.asyncio
+    async def test_start_thread_applies_invocation_thread_overrides(self):
+        client = FakeCodexClient()
+        client.responses["thread/start"] = {"thread": {"id": "thread_abc123"}}
+        adapter = CodexProviderAdapter(
+            client=client,
+            invocation_plan=ProviderInvocationPlan(session_options={"thread": {"foo": "bar"}}),
+        )
+
+        await adapter.start_thread(
+            model="gpt-5.3-codex",
+            cwd="/tmp/project",
+            runtime_mode=RuntimeMode.WORKSPACE_WRITE,
+            approval_policy="never",
+        )
+
+        assert client.calls[0][0] == "thread/start"
+        assert client.calls[0][1]["foo"] == "bar"
+
     @pytest.mark.asyncio
     async def test_start_session_handshake_and_start_thread(self):
         client = FakeCodexClient()

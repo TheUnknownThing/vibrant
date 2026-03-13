@@ -12,6 +12,7 @@ from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ...models.agent import AgentRecord, ProviderResumeHandle
 from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
+from ..invocation import ProviderInvocationPlan
 from .client import CodexClient
 
 DEFAULT_CLIENT_INFO = {"name": "vibrant", "title": "Vibrant", "version": "0.1.0"}
@@ -30,6 +31,7 @@ class CodexProviderAdapter(ProviderAdapter):
         codex_binary: str = "codex",
         launch_args: Sequence[str] | None = None,
         codex_home: str | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
         resume_thread_id: str | None = None,
         agent_record: AgentRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
@@ -45,8 +47,9 @@ class CodexProviderAdapter(ProviderAdapter):
         self._client_factory = client_factory or CodexClient
         self._cwd = cwd
         self._codex_binary = codex_binary
-        self._launch_args = list(launch_args) if launch_args is not None else None
+        self._launch_args = list(launch_args or [])
         self._codex_home = codex_home
+        self._invocation_plan = invocation_plan
         self.agent_record = agent_record
         self.provider_thread_id: str | None = None
         self.thread_metadata: dict[str, Any] = {}
@@ -88,8 +91,12 @@ class CodexProviderAdapter(ProviderAdapter):
                 "on_stderr": self._handle_stderr,
                 "on_raw_event": self._handle_native_event,
             }
-            if self._launch_args is not None:
-                kwargs["launch_args"] = self._launch_args
+            launch_args = self._effective_launch_args()
+            if launch_args:
+                kwargs["launch_args"] = launch_args
+            launch_env = self._effective_launch_env()
+            if launch_env:
+                kwargs["launch_env"] = launch_env
             if self._codex_home is not None:
                 kwargs["codex_home"] = self._codex_home
             self.client = self._client_factory(**kwargs)
@@ -134,6 +141,7 @@ class CodexProviderAdapter(ProviderAdapter):
             "capabilities": capabilities,
             **kwargs,
         }
+        initialize_params.update(self._invocation_scope_options("initialize"))
         result = await client.send_request("initialize", initialize_params)
         client.send_notification("initialized")
         self._session_started = True
@@ -220,6 +228,7 @@ class CodexProviderAdapter(ProviderAdapter):
             payload["effort"] = effort
         if summary is not None:
             payload["summary"] = summary
+        payload.update(self._invocation_scope_options("turn"))
         if self.provider_thread_id and "threadId" not in payload:
             payload["threadId"] = self.provider_thread_id
         return await client.send_request("turn/start", payload)
@@ -550,7 +559,27 @@ class CodexProviderAdapter(ProviderAdapter):
         if persist_extended_history is not None:
             payload["persistExtendedHistory"] = persist_extended_history
         payload.update(extra_config)
+        payload.update(self._invocation_scope_options("thread"))
         return payload, runtime_mode, approval_policy, agent_record
+
+    def _effective_launch_args(self) -> list[str]:
+        launch_args = list(self._launch_args)
+        if self._invocation_plan is not None:
+            launch_args.extend(self._invocation_plan.launch_args)
+        return launch_args
+
+    def _effective_launch_env(self) -> dict[str, str]:
+        if self._invocation_plan is None:
+            return {}
+        return dict(self._invocation_plan.launch_env)
+
+    def _invocation_scope_options(self, scope: str) -> dict[str, Any]:
+        if self._invocation_plan is None:
+            return {}
+        scoped = self._invocation_plan.session_options.get(scope)
+        if not isinstance(scoped, Mapping):
+            return {}
+        return dict(scoped)
 
     def _persist_thread_metadata(
         self,

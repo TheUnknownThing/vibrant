@@ -10,58 +10,60 @@ binding information into provider-specific launch and session arguments.
 
 This is not only a Codex problem.
 
-The immediate trigger is Codex MCP support, because Codex can accept per-run
-config overrides through repeated `--config key=value`. But the same
-orchestrator binding must also be able to target other providers, including
-Claude, whose runtime is configured through SDK options rather than the Codex
+The immediate trigger is orchestrator MCP support for Codex, because Codex can
+accept per-run config overrides through repeated `--config key=value`. But the
+same orchestrator binding must also be able to target other providers,
+including Claude, whose runtime is configured through SDK options rather than a
 CLI.
 
-The correct architecture is:
+The target architecture is:
 
-- the orchestrator produces one normalized MCP binding description
-- a dedicated provider-argument compiler converts that description into the
-  exact launch/session shape required by the active provider
-- the runtime launches the provider using that compiled plan
+- the orchestrator binding layer produces one normalized MCP access descriptor
+- a provider-argument compiler converts that descriptor into the exact provider
+  invocation shape required by the active provider
+- the runtime launches the provider using that compiled invocation plan
 
-This document describes the target design for that middle layer.
+The important constraint is that orchestration policy must stay provider-
+neutral. Codex-specific flags and Claude-specific option maps should be emitted
+only by the compiler layer, not by the orchestrator itself.
 
-## Problem Statement
+## Problem
 
-The current runtime stack mixes three concerns that should be separated:
+The current runtime stack mixes three different concerns:
 
 - semantic capability selection
 - provider launch construction
 - provider-specific transport details
 
-That is already becoming a problem for Codex, and it will become worse once
-Vibrant supports more than one provider-specific MCP integration path.
+That is already a problem for Codex, and it will become a larger design problem
+once Vibrant supports more providers with different MCP integration models.
 
-### Current failure mode
-
-Today the repository has most of the pieces, but they stop short of a usable
-end-to-end path.
+### Verified current gaps
 
 - `launch_args` exists in
   [`vibrant/config.py`](/home/color/workspace/vibrant/vibrant/config.py#L49),
-  but it is not passed through the main agent launch path in
-  [`vibrant/agents/base.py`](/home/color/workspace/vibrant/vibrant/agents/base.py#L232).
+  but the main launch path in
+  [`vibrant/agents/base.py`](/home/color/workspace/vibrant/vibrant/agents/base.py#L232)
+  never passes it into `adapter_factory(...)`
 - the Codex transport can consume launch args in
   [`vibrant/providers/codex/adapter.py`](/home/color/workspace/vibrant/vibrant/providers/codex/adapter.py#L31)
   and
   [`vibrant/providers/codex/client.py`](/home/color/workspace/vibrant/vibrant/providers/codex/client.py#L69),
   but real runs never receive them
-- the orchestrator binding layer already computes `provider_binding` metadata in
+- the orchestrator binding layer already computes descriptive `provider_binding`
+  metadata in
   [`vibrant/orchestrator/binding.py`](/home/color/workspace/vibrant/vibrant/orchestrator/binding.py#L66),
-  but neither Gatekeeper startup nor worker startup consumes it
+  but neither Gatekeeper startup nor worker startup consumes it before provider
+  launch
 - the only generic pass-through that reaches Codex today is `extra_config`,
-  which is merged into the thread payload in
+  merged into the thread payload in
   [`vibrant/providers/codex/adapter.py`](/home/color/workspace/vibrant/vibrant/providers/codex/adapter.py#L536)
   and
   [`vibrant/providers/codex/adapter.py`](/home/color/workspace/vibrant/vibrant/providers/codex/adapter.py#L552)
 
-That last point is useful, but it is not enough. Provider-neutral binding data
-must not be shoved directly into a provider thread payload and treated as if all
-providers consume the same shape.
+That last seam is useful, but it is the wrong abstraction boundary for
+provider-neutral MCP policy. It is a provider thread payload escape hatch, not
+a general provider invocation model.
 
 ## Why a Middle Layer Is Required
 
@@ -73,182 +75,267 @@ different.
 Codex launch is process-oriented.
 
 - the app is launched as `codex app-server`
-- per-run config overrides are naturally expressed as CLI arguments
+- one-off provider configuration is naturally expressed as CLI arguments
 - MCP server configuration belongs to Codex config keys such as
   `mcp_servers.<id>.*`
-- some settings are process-level and some are thread-level
+- some settings are process-level while others are part of the thread payload
 
 ### Claude
 
 Claude launch is SDK-oriented.
 
 - the provider is initialized with `ClaudeAgentOptions`
-- tool allow/deny policy is expressed as SDK options like `allowed_tools` and
+- tool policy is expressed as SDK options such as `allowed_tools` and
   `disallowed_tools`
-- extra provider behavior is passed through option fields such as `env`,
-  `plugins`, `agents`, and related keys in
+- extra provider behavior is passed through option fields like `env`, `plugins`,
+  and `agents` in
   [`vibrant/providers/claude/adapter.py`](/home/color/workspace/vibrant/vibrant/providers/claude/adapter.py#L155)
 - there is no natural equivalent of Codex `--config mcp_servers.*`
 
 ### Consequence
 
-The orchestrator should never compile its MCP binding directly into Codex CLI
-flags or Claude SDK options. That translation must happen in a dedicated
-provider-specific compiler layer.
+The orchestrator must not compile its MCP binding directly into:
 
-Otherwise the codebase ends up with:
+- Codex CLI flags
+- Codex config override strings
+- Claude SDK option dictionaries
+- any other provider-native transport shape
 
-- Codex-specific fields leaking into orchestrator binding code
-- provider adapters carrying policy they do not own
-- no reusable place to express "this agent gets these MCP capabilities" once
-  more providers are added
+That translation belongs in a dedicated compiler layer.
+
+Without that layer, the codebase will drift toward:
+
+- Codex-specific fields leaking into orchestrator policy code
+- provider adapters becoming policy owners
+- repeated ad hoc launch plumbing for every new provider
 
 ## Design Goals
 
-- keep the orchestrator binding output provider-neutral
+- keep orchestrator binding output provider-neutral
+- preserve one authoritative place where MCP capability policy is decided
 - support different provider launch shapes without duplicating orchestration
   policy
-- keep provider adapters focused on provider protocol details, not orchestration
+- keep provider adapters focused on provider protocol behavior, not binding
   policy
-- make per-run provider configuration explicit and inspectable
-- preserve a clean boundary between process launch settings and thread/session
-  settings
+- make per-run provider configuration explicit, inspectable, and persistable
+- separate process launch settings from thread/session settings
 
 ## Non-Goals
 
-- this document does not specify FastMCP server internals
-- this document does not specify provider transport protocol details beyond what
-  is needed for argument shaping
-- this document does not propose a migration strategy or staged compatibility
-  plan
+- this document does not define FastMCP server internals
+- this document does not define provider protocol semantics beyond the argument
+  transformation boundary
+- this document does not specify backward-compatibility shims or staged
+  migration behavior
 
-## Proposed Architecture
+## Target Architecture
 
-## 1. Normalize the binding output
+The design should be expressed as three distinct layers.
 
-`AgentSessionBindingService` should output a provider-neutral binding descriptor,
-not provider-specific arguments.
+### Layer 1: binding policy
+
+Owner:
+
+- `AgentSessionBindingService`
+
+Responsibility:
+
+- decide what the agent is allowed to access
+
+Output:
+
+- one provider-neutral MCP access descriptor
+
+This layer answers:
+
+- which tools are visible
+- which resources are visible
+- which MCP endpoint should be used
+- whether the binding is required
+- which stable identity should represent the binding
+
+This layer must not answer:
+
+- how Codex receives that binding
+- how Claude receives that binding
+- which CLI flags or SDK options are required
+
+### Layer 2: provider-argument compilation
+
+Owner:
+
+- a provider compiler subsystem, one compiler per provider family
+
+Responsibility:
+
+- translate the provider-neutral binding into provider-native launch and session
+  arguments
+
+Output:
+
+- one provider invocation plan
+
+This layer answers:
+
+- what environment variables should be set
+- what process arguments should be passed
+- what provider session options should be used
+- what normalized debug metadata should be persisted
+
+### Layer 3: runtime launch
+
+Owner:
+
+- the runtime and provider adapter boundary
+
+Responsibility:
+
+- consume the compiled invocation plan and start or resume the provider
+
+This layer should not reinterpret MCP policy. It should only execute the plan
+it receives.
+
+## Data Contracts
+
+## 1. Provider-neutral binding descriptor
+
+The binding layer should emit an explicit, provider-neutral descriptor.
 
 Example:
 
 ```python
 @dataclass(slots=True)
-class MCPBindingDescriptor:
+class MCPAccessDescriptor:
     binding_id: str
     role: str
-    conversation_id: str | None
     session_id: str
-    tool_names: list[str]
-    resource_names: list[str]
+    conversation_id: str | None
+    visible_tools: list[str]
+    visible_resources: list[str]
+    endpoint_url: str | None
     transport_hint: Literal["http", "stdio"] | None = None
-    endpoint_url: str | None = None
     required: bool = True
     static_headers: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
-This object says what the run should be allowed to access. It does not say how
-Codex or Claude should consume that information.
+Required properties of this descriptor:
 
-Responsibilities of the binding layer:
+- it is valid even when the provider is not Codex
+- it can describe read-only and write-capable bindings
+- it can represent different visibility surfaces for Gatekeeper, workers,
+  validators, and future agent roles
+- it does not expose provider-native argument syntax
 
-- choose visible tools and resources
-- assign a stable `binding_id`
-- point the binding at the orchestrator MCP endpoint
-- express provider-neutral transport intent
+## 2. Provider invocation plan
 
-Responsibilities the binding layer should not own:
+The provider compiler should emit one runtime-facing invocation plan.
 
-- rendering CLI flags
-- rendering Codex config overrides
-- constructing Claude SDK option dictionaries
-
-## 2. Add an explicit provider-argument compiler layer
-
-Add a new provider-facing middle layer with an interface like:
+Example:
 
 ```python
 @dataclass(slots=True)
 class ProviderInvocationPlan:
+    provider_kind: ProviderKind
     launch_env: dict[str, str] = field(default_factory=dict)
     launch_args: list[str] = field(default_factory=list)
     session_options: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
+    binding_id: str | None = None
+    visible_tools: list[str] = field(default_factory=list)
+    visible_resources: list[str] = field(default_factory=list)
+    debug_metadata: dict[str, Any] = field(default_factory=dict)
+```
 
+This object is the runtime input.
 
+It should be rich enough to:
+
+- launch Codex with repeated `--config` overrides
+- launch Claude with SDK options and tool policy
+- support future providers with different transport models
+
+It should also be normalized enough that the runtime can treat it as one stable
+contract instead of a provider-specific kwargs bag.
+
+## 3. Compiler contract
+
+The missing middle layer should be explicit.
+
+Example:
+
+```python
 class ProviderArgumentCompiler(Protocol):
     def compile(
         self,
         *,
         provider_kind: ProviderKind,
         project_config: VibrantConfig,
-        binding: MCPBindingDescriptor | None,
         agent_record: AgentRecord,
+        binding: MCPAccessDescriptor | None,
     ) -> ProviderInvocationPlan: ...
 ```
 
-This layer is the translation seam the current architecture is missing.
+There should also be a registry or resolver that selects the correct compiler
+for the active provider.
 
-Why this should exist as its own subsystem:
+That registry is important because:
 
-- it centralizes provider-specific compilation logic
-- it keeps binding policy out of the providers
-- it gives the runtime one stable input regardless of provider
-- it allows later providers to be added without rewriting orchestrator policy
+- orchestrator code should not switch on provider type in multiple places
+- adding a provider should mean adding one compiler, not threading new special
+  cases through the runtime
 
-## 3. Make the runtime consume `ProviderInvocationPlan`
+## Ownership Boundaries
 
-The runtime start boundary should accept a compiled invocation plan, not a loose
-set of optional provider kwargs.
+## `AgentSessionBindingService`
 
-Example:
+Owns:
 
-```python
-async def start_run(
-    ...,
-    invocation_plan: ProviderInvocationPlan | None = None,
-) -> AgentHandle: ...
-```
+- capability policy
+- visibility sets
+- stable binding identity
+- transport intent in provider-neutral form
 
-The same applies to `resume_run()`.
+Must not own:
 
-`AgentBase` should then merge:
+- Codex `--config` rendering
+- Codex argv construction
+- Claude SDK option shaping
 
-- project-level provider config
-- agent-type defaults
-- compiled invocation plan
+## Provider compilers
 
-before constructing the provider adapter.
+Own:
 
-This makes launch behavior explicit and inspectable.
+- provider-specific translation
+- process versus session split for that provider
+- provider-native argument syntax
 
-## 4. Split process launch config from thread/session config
+Must not own:
 
-The middle layer should not collapse everything into one dictionary.
+- selection of visible tools or resources
+- orchestration policy about what a role is allowed to do
 
-The minimum split is:
+## Runtime and provider adapters
 
-- `launch_env`
-- `launch_args`
-- `session_options`
+Own:
 
-Why:
+- launching the provider
+- resuming the provider
+- passing compiled data to the provider in the right mechanical form
 
-- Codex needs process launch args for `--config`
-- Claude needs SDK options, not CLI args
-- both may still need session-level options beyond process launch
+Must not own:
 
-This split also makes debugging much simpler.
+- orchestration capability policy
+- provider-specific translation policy that belongs in the compiler
 
-## Provider-Specific Compilation
+## Provider-Specific Projections
 
-## 1. Codex compilation
+## 1. Codex projection
 
-For Codex, the provider-argument compiler should transform
-`MCPBindingDescriptor` into:
+For Codex, the provider compiler should translate `MCPAccessDescriptor` into:
 
 - repeated `--config key=value` launch arguments
-- optional environment variables such as `CODEX_HOME`
-- optional thread/session payload augmentation when appropriate
+- optional launch environment variables such as `CODEX_HOME`
+- optional thread/session options when they are truly thread-scoped
 
 Example target shape:
 
@@ -264,31 +351,32 @@ codex \
 
 Codex-specific observations:
 
-- the Codex docs already support this one-off config model
-- this is a process launch concern, not a thread payload concern
-- `extra_config` should not be the primary mechanism for dynamic MCP server
-  registration
+- this is primarily a process launch concern
+- MCP registration should not be modeled as a generic thread payload patch
+- Codex config precedence makes per-run overrides the correct fit for
+  orchestrator-driven bindings
 
-The Codex compiler should be responsible for:
+The Codex compiler should therefore own:
 
-- producing a stable server id
-- rendering TOML-safe `--config` values
-- deciding when `required=true` should be set
-- passing static binding headers if the orchestrator MCP host uses them
+- server id generation
+- TOML-safe config rendering
+- the split between CLI config overrides and thread/session options
+- any static header injection needed for binding selection on loopback HTTP
 
-## 2. Claude compilation
+## 2. Claude projection
 
-For Claude, the compiler should not try to mimic the Codex CLI model.
+For Claude, the provider compiler should not attempt to imitate the Codex CLI
+model.
 
-Instead, it should compile the same binding into Claude-specific session
-options. Based on the current adapter structure, that may include:
+Instead, it should project the same `MCPAccessDescriptor` into Claude-native
+session options, for example:
 
 - `allowed_tools`
 - `disallowed_tools`
-- provider `plugins`
-- provider `agents`
-- provider `env`
-- other supported Claude SDK options routed through `claude_extra_config`
+- provider plugin descriptors
+- provider agent descriptors
+- provider environment settings
+- other supported SDK options routed into `claude_extra_config`
 
 Relevant current seams already exist in:
 
@@ -296,214 +384,207 @@ Relevant current seams already exist in:
 - [`vibrant/providers/claude/adapter.py`](/home/color/workspace/vibrant/vibrant/providers/claude/adapter.py#L71)
 - [`vibrant/providers/claude/adapter.py`](/home/color/workspace/vibrant/vibrant/providers/claude/adapter.py#L155)
 
-The Claude compiler should decide how MCP access is represented for Claude
-without forcing the orchestrator binding layer to know those details.
+The important point is not that Claude must consume MCP in the same way as
+Codex. The important point is that the architecture must give Claude an equally
+clean target for provider-native argument generation.
 
-That means the compiler may eventually produce:
+That means the Claude compiler may legitimately produce:
 
-- no MCP-specific options if Claude cannot consume them directly
-- a plugin/agent bridge descriptor if Claude supports that path
-- only tool policy changes for Claude while Codex gets a full MCP server config
-
-The important point is that the architecture can represent those differences
-cleanly.
+- no direct MCP transport config
+- only tool policy changes
+- plugin or bridge descriptors if Claude later gains an MCP bridge path
 
 ## 3. Future providers
 
-New providers should implement the same compiler contract.
+Future providers should implement the same compiler contract.
 
-That means adding a provider is:
+Adding a provider should mean:
 
-- define how that provider consumes launch/session config
+- define how that provider consumes launch and session config
 - add one compiler implementation
-- keep the orchestrator binding policy unchanged
+- keep orchestrator capability policy unchanged
 
-This is much cleaner than threading new provider-specific fields through
-`AgentBase` every time.
+That is the core payoff of the middle layer.
 
-## Concrete Model Proposal
+## Runtime Integration
 
-The following shape is sufficient for the current need while remaining
-provider-neutral:
+The runtime boundary should consume `ProviderInvocationPlan` directly.
+
+Example:
 
 ```python
-@dataclass(slots=True)
-class ProviderInvocationPlan:
-    provider_kind: ProviderKind
-    launch_env: dict[str, str] = field(default_factory=dict)
-    launch_args: list[str] = field(default_factory=list)
-    session_options: dict[str, Any] = field(default_factory=dict)
-    visible_tools: list[str] = field(default_factory=list)
-    visible_resources: list[str] = field(default_factory=list)
-    binding_id: str | None = None
-    debug_metadata: dict[str, Any] = field(default_factory=dict)
+async def start_run(
+    ...,
+    invocation_plan: ProviderInvocationPlan | None = None,
+) -> AgentHandle: ...
 ```
 
-This should be the runtime input.
+The same applies to `resume_run()`.
 
-The provider compiler should also have access to the project config so it can
-merge defaults rather than replacing them.
+The runtime should:
 
-## Current Code Impact
+- merge project-level defaults with the compiled plan
+- pass the compiled launch and session data into the adapter constructor and
+  startup path
+- avoid introducing new provider-specific branches outside the compiler and
+  adapter layers
 
-## `vibrant/orchestrator/binding.py`
+This is the seam that keeps lifecycle services provider-neutral.
 
-Change responsibility from:
+## Configuration Precedence
 
-- producing descriptive `provider_binding` blobs
-
-to:
-
-- producing `MCPBindingDescriptor`
-- remaining the single policy owner for capability selection
-
-It should not produce raw Codex `--config` flags.
-
-## `vibrant/agents/base.py`
-
-Change responsibility from:
-
-- manually threading a fixed list of provider kwargs
-
-to:
-
-- accepting a compiled `ProviderInvocationPlan`
-- applying the plan when constructing the adapter
-- passing provider launch details in a provider-neutral way
-
-This is the narrowest place where all providers already converge.
-
-## `vibrant/providers/codex/client.py`
-
-The client should stop treating `launch_args` as a replacement argv tail.
-
-It should explicitly support:
-
-- appending launch args before `app-server`
-- receiving repeated `--config` arguments
-- consuming launch env from the invocation plan
-
-The resulting command shape should always include `app-server`.
-
-## `vibrant/providers/codex/adapter.py`
-
-The adapter should receive Codex-relevant parts of the invocation plan, not
-reconstruct policy on its own.
-
-Responsibilities:
-
-- pass compiled CLI flags and env to the client
-- preserve the existing thread payload logic where appropriate
-- avoid becoming the owner of orchestrator binding semantics
-
-## `vibrant/providers/claude/adapter.py`
-
-The adapter already demonstrates that provider config is structurally different
-from Codex.
-
-It should consume only the Claude-relevant part of the invocation plan, such
-as:
-
-- tool allowlists and deny lists
-- plugin or agent descriptors
-- Claude SDK extra config
-
-It should not know how to interpret orchestrator MCP binding policy directly.
-
-## `vibrant/agents/runtime.py`
-
-The runtime service should accept the compiled invocation plan and preserve it
-through both `start_run()` and `resume_run()`.
-
-That keeps provider-launch concerns out of orchestrator lifecycle services and
-lets those services pass one explicit object instead of ad hoc kwargs.
-
-## `vibrant/orchestrator/gatekeeper/lifecycle.py`
-
-Before launching the Gatekeeper:
-
-- call the binding layer
-- compile the binding through the provider-argument compiler
-- pass the resulting invocation plan into the runtime
-
-The lifecycle service should not know whether the active provider is using:
-
-- Codex `--config`
-- Claude SDK options
-- some future provider-specific representation
-
-## `vibrant/orchestrator/execution/coordinator.py`
-
-Use the same mechanism for worker runs once worker MCP policy is ready.
-
-The worker path should not get a separate provider-config mechanism.
-
-## Configuration Policy
-
-Configuration precedence should be:
+The correct precedence order is:
 
 1. provider/client built-in defaults
 2. project `VibrantConfig`
 3. agent-type defaults
 4. compiled invocation plan for this run
 
-This preserves a clean layering:
+This gives the design a clean layering:
 
-- project config expresses long-lived defaults
-- orchestrator binding expresses run-specific capability policy
-- provider compilers translate that policy into launch/session details
+- project config defines durable defaults
+- the binding layer defines run-scoped capability policy
+- the provider compiler defines provider-native projection
+- the runtime executes the resulting plan
 
 ## Persistence and Debugging
 
-The effective invocation plan should be represented in agent metadata well
-enough to debug a run.
+The effective invocation plan should be represented in durable metadata well
+enough to explain a run after the fact.
 
-Do not persist raw secrets if they ever appear, but do persist enough to answer:
+The important persisted information is:
 
-- which binding id was used
-- which provider compiler produced the plan
-- which MCP server id or equivalent provider object was used
-- what endpoint URL was targeted
-- what tool/resource visibility the run was supposed to have
+- binding id
+- provider kind
+- compiler identity or compiler family
+- effective endpoint URL or equivalent provider-side bridge target
+- visible tools and resources
+- normalized provider launch metadata, such as configured server id
 
-That metadata belongs in a normalized form, not as a raw dump of argv tokens.
+The goal is not to persist raw argv strings. The goal is to persist the meaning
+of the chosen invocation plan in a provider-neutral or lightly normalized form.
 
-## Example End State
+## Codebase Impact
 
-Gatekeeper binding flow:
+## `vibrant/orchestrator/binding.py`
 
-1. `AgentSessionBindingService` produces `MCPBindingDescriptor`
-2. `ProviderArgumentCompilerRegistry` picks the compiler for the active provider
-3. the compiler produces `ProviderInvocationPlan`
-4. the runtime launches the provider with that plan
-5. the provider adapter consumes only its translated provider-specific inputs
+Refocus this file on capability policy only.
 
-Codex result:
+It should:
 
-- loopback FastMCP endpoint wired through repeated `--config`
+- produce `MCPAccessDescriptor`
+- remain the single owner of tool and resource visibility policy
 
-Claude result:
+It should not:
 
-- equivalent capability restrictions and provider-specific tool/session options
-  without pretending Claude consumes Codex config
+- render Codex config strings
+- build provider-native option maps
+
+## `vibrant/agents/base.py`
+
+Refocus this file on runtime handoff.
+
+It should:
+
+- accept a compiled `ProviderInvocationPlan`
+- merge project defaults with that plan
+- pass provider-native launch and session inputs into the adapter boundary
+
+It should not:
+
+- invent provider-specific argument syntax
+- choose MCP visibility policy
+
+## `vibrant/providers/codex/client.py`
+
+Refocus this file on process launch mechanics.
+
+It should:
+
+- build argv so `app-server` is always present
+- append repeated `--config` arguments supplied by the invocation plan
+- consume any launch env emitted by the compiler
+
+It should not:
+
+- know how to interpret orchestrator capability policy directly
+
+## `vibrant/providers/codex/adapter.py`
+
+Refocus this file on Codex transport behavior.
+
+It should:
+
+- consume the Codex-relevant part of the invocation plan
+- preserve existing thread payload behavior where still appropriate
+
+It should not:
+
+- decide which MCP tools a role may see
+- become the authority for binding semantics
+
+## `vibrant/providers/claude/adapter.py`
+
+Refocus this file on Claude SDK behavior.
+
+It should:
+
+- consume only the Claude-relevant projection of the invocation plan
+- remain responsible for Claude-native option handling
+
+It should not:
+
+- learn orchestrator binding policy directly
+- absorb Codex-oriented MCP concepts
+
+## `vibrant/agents/runtime.py`
+
+This is the correct boundary to carry the invocation plan through both start and
+resume operations.
+
+That keeps provider-launch concerns:
+
+- out of prompt construction
+- out of orchestrator lifecycle policy
+- out of persistent orchestrator stores except for normalized debugging metadata
+
+## `vibrant/orchestrator/gatekeeper/lifecycle.py`
+
+Before launching the Gatekeeper:
+
+- obtain the provider-neutral binding descriptor
+- compile it through the active provider compiler
+- pass the compiled invocation plan into the runtime
+
+The lifecycle service should not know whether the active provider uses:
+
+- Codex CLI flags
+- Claude SDK options
+- some future provider-native representation
+
+## `vibrant/orchestrator/execution/coordinator.py`
+
+Use the same mechanism for worker runs once worker MCP policy is ready.
+
+Workers should not get a separate provider-config path. They should use the
+same binding, compilation, and runtime handoff model.
 
 ## Recommendation
 
 Do not solve this by:
 
-- passing more loose kwargs through `AgentBase`
-- embedding Codex-specific config generation in the orchestrator binding layer
-- overloading `extra_config` with provider launch semantics
+- passing more loose provider kwargs through `AgentBase`
+- embedding Codex-specific config generation inside the binding layer
+- overloading `extra_config` with process launch semantics
 
 Do solve it by adding:
 
-- one normalized `MCPBindingDescriptor`
-- one explicit `ProviderArgumentCompiler` layer
-- one runtime-level `ProviderInvocationPlan`
+- one provider-neutral `MCPAccessDescriptor`
+- one explicit provider compiler subsystem
+- one runtime-facing `ProviderInvocationPlan`
 
 That is the minimum architecture that can support Codex now and other providers
-later without turning MCP integration into provider-specific glue scattered
-across the orchestrator.
+later without scattering provider-specific MCP glue across the orchestrator.
 
 ## Sources
 
