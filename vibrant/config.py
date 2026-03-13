@@ -56,6 +56,11 @@ class VibrantConfig(BaseModel):
         validation_alias=AliasChoices("codex_home", "codex-home", "CODEX_HOME"),
         serialization_alias="codex-home",
     )
+    mock_responses: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("mock_responses", "mock-responses"),
+        serialization_alias="mock-responses",
+    )
     claude_cli_path: str | None = Field(
         default=None,
         validation_alias=AliasChoices("claude_cli_path", "claude-cli-path"),

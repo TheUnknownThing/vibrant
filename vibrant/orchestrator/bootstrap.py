@@ -131,8 +131,17 @@ class Orchestrator:
             await _dispatch_raw_event_subscribers(raw_event_subscribers, event)
             await maybe_forward_event(on_canonical_event, event)
 
+        if adapter_factory is not None:
+            resolved_adapter_factory = adapter_factory
+        elif config.mock_responses:
+            from vibrant.providers.mock.adapter import MockCodexAdapter
+
+            resolved_adapter_factory = MockCodexAdapter
+        else:
+            resolved_adapter_factory = resolve_provider_adapter(config.provider_kind)
         resolved_gatekeeper = gatekeeper or Gatekeeper(
             root,
+            adapter_factory=resolved_adapter_factory,
             on_canonical_event=on_canonical_event,
         )
         gatekeeper_agent = getattr(resolved_gatekeeper, "agent", None)
@@ -142,7 +151,6 @@ class Orchestrator:
             repo_root=root,
             worktree_root=scoped_worktree_root(root, config.worktree_directory),
         )
-        resolved_adapter_factory = adapter_factory or resolve_provider_adapter(config.provider_kind)
         role_catalog = build_builtin_role_catalog()
         provider_catalog = build_builtin_provider_catalog(
             claude_adapter_factory=resolved_adapter_factory if config.provider_kind.value == "claude" else None,

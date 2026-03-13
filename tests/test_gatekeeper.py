@@ -19,6 +19,7 @@ from vibrant.agents.runtime import RunState
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
+from vibrant.providers.mock.adapter import MockCodexAdapter
 
 
 class FakeGatekeeperAdapter:
@@ -230,10 +231,10 @@ async def test_gatekeeper_start_run_surfaces_provider_requests_through_agent_han
         )
     )
 
-    for _ in range(50):
+    for _ in range(100):
         if handle.awaiting_input:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     else:
         raise AssertionError("Gatekeeper handle never entered awaiting_input state")
 
@@ -283,3 +284,58 @@ async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_pat
     assert any(event["type"] == "content.delta" for event in forwarded)
     assert result.agent_record is not None
     assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_mock_codex_adapter_streams_completed_response(tmp_path):
+    initialize_project(tmp_path)
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=MockCodexAdapter, timeout_seconds=1)
+
+    result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description="Summarize the current plan. [mock:tool,long]",
+            agent_summary="Summarize the current plan. [mock:tool,long]",
+        ),
+        resume_latest_thread=True,
+    )
+
+    assert result.succeeded is True
+    assert any(event["type"] == "turn.started" for event in result.events)
+    assert any(event["type"] == "reasoning.summary.delta" for event in result.events)
+    assert any(
+        event["type"] == "request.opened" and event.get("request_kind") == "request"
+        for event in result.events
+    )
+    assert any(event["type"] == "turn.completed" for event in result.events)
+    assert "Mock Gatekeeper response." in result.transcript
+
+
+@pytest.mark.asyncio
+async def test_mock_codex_adapter_supports_question_round_trip(tmp_path):
+    initialize_project(tmp_path)
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=MockCodexAdapter, timeout_seconds=1)
+
+    handle = await gatekeeper.start_run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description="Need one decision before continuing. [mock:question]",
+            agent_summary="Need one decision before continuing. [mock:question]",
+        )
+    )
+
+    for _ in range(100):
+        if handle.awaiting_input:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("Mock Gatekeeper never requested input")
+
+    assert handle.input_requests[0].message == "Mock Gatekeeper needs one decision before continuing."
+
+    await handle.respond_to_request("mock-request-1", result={"answer": "Choose the simpler path."})
+    result = await handle.wait()
+
+    assert result.succeeded is True
+    assert "The mock question was resolved." in result.transcript
+    assert any(event["type"] == "request.resolved" for event in result.events)

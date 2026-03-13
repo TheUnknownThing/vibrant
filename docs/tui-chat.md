@@ -33,3 +33,23 @@ Implementation Method:
 - Implement the conversation renderer to render the conversation based on the message block structure defined above.
 - Ensure that the renderer can handle the different types of message parts and render them appropriately.
 - DO NOT write any test.
+
+---
+
+## Mock Provider For TUI Development
+
+To exercise the chat panel without waiting on a real Codex session, enable the built-in mock provider in `.vibrant/vibrant.toml`:
+
+```toml
+[provider]
+mock-responses = true
+```
+
+The mock adapter emits the same canonical event types the TUI already consumes, including streamed `reasoning.summary.delta`, `content.delta`, `request.opened`, `request.resolved`, `runtime.error`, and `turn.completed`.
+
+Use message markers to force specific UI states while testing:
+
+- `[mock:tool]` streams a tool-call lifecycle before the final answer.
+- `[mock:question]` pauses for user input and resumes after you answer.
+- `[mock:error]` emits a runtime error instead of completing normally.
+- `[mock:long]` emits a longer streamed response for scroll and persistence checks.

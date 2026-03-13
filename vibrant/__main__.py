@@ -101,7 +101,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     config = load_config(start_path=start_path)
     provider_binary = config.codex_binary
     resolved_provider_binary = None
-    if config.provider_kind is ProviderKind.CODEX:
+    if config.provider_kind is ProviderKind.CODEX and not config.mock_responses:
         resolved_provider_binary = _check_binary(config.codex_binary)
         if not resolved_provider_binary:
             print(
