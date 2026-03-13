@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 import json
-from pathlib import Path
 from typing import Any, Iterable
 
 from textual.app import ComposeResult
@@ -30,22 +29,17 @@ _STATUS_ICONS: dict[str, str] = {
 
 @dataclass(slots=True)
 class AgentStreamState:
-    """Per-agent stream buffers and log-tail metadata."""
+    """Per-agent stream buffers derived from orchestrator records and events."""
 
     agent_id: str
     task_id: str | None = None
     status: str | None = None
     provider_thread_id: str | None = None
-    canonical_log_path: Path | None = None
-    native_log_path: Path | None = None
     canonical_lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
     debug_lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
     thought_text: str = ""
     thought_timestamp: str | None = None
     active_thought_item_id: str | None = None
-    canonical_backfilled: bool = False
-    native_offset: int = 0
-    native_partial: str = ""
 
 
 class AgentOutput(Static):
@@ -159,7 +153,6 @@ class AgentOutput(Static):
                 yield Static("", id="agent-output-debug", markup=False)
 
     def on_mount(self) -> None:
-        self.set_interval(0.25, self._poll_native_logs)
         self._refresh_view()
 
     def on_click(self) -> None:
@@ -184,7 +177,7 @@ class AgentOutput(Static):
         return self._debug_view_enabled
 
     def sync_agents(self, agent_records: Iterable[AgentRecord]) -> None:
-        """Refresh known agents and hydrate log-backed state from disk."""
+        """Refresh known agents from orchestrator-owned runtime records."""
 
         ordered_records = sorted(
             list(agent_records),
@@ -200,34 +193,8 @@ class AgentOutput(Static):
             stream.status = record.lifecycle.status.value
             stream.provider_thread_id = record.provider.provider_thread_id
 
-            canonical_path = _path_or_none(record.provider.canonical_event_log)
-            if canonical_path != stream.canonical_log_path:
-                stream.canonical_log_path = canonical_path
-                stream.canonical_backfilled = False
-                if canonical_path is not None:
-                    stream.canonical_lines.clear()
-
-            native_path = _path_or_none(record.provider.native_event_log)
-            if native_path != stream.native_log_path:
-                stream.native_log_path = native_path
-                stream.native_offset = 0
-                stream.native_partial = ""
-                stream.thought_text = ""
-                stream.thought_timestamp = None
-                stream.active_thought_item_id = None
-                if native_path is not None:
-                    stream.debug_lines.clear()
-
-            if (
-                not stream.canonical_backfilled
-                and stream.canonical_log_path is not None
-                and stream.canonical_log_path.exists()
-            ):
-                self._backfill_canonical_log(stream)
-
         self._agent_order = [record.identity.agent_id for record in ordered_records]
         self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
-        self._poll_native_logs()
         self._refresh_view()
 
     def clear_agents(self, message: str | None = None) -> None:
@@ -253,6 +220,9 @@ class AgentOutput(Static):
             stream.task_id = task_id
 
         event_type = str(event.get("type") or "event")
+        debug_line = _render_debug_event_line(event)
+        if debug_line:
+            self._append_debug_line(stream, debug_line)
 
         if event_type == "reasoning.summary.delta":
             delta = event.get("delta")
@@ -302,15 +272,13 @@ class AgentOutput(Static):
         self._refresh_view(active_agent_changed=True)
 
     def action_toggle_debug_view(self) -> None:
-        """Switch between canonical logs and raw native debug output."""
+        """Switch between operational logs and canonical-event debug output."""
 
         self._debug_view_enabled = not self._debug_view_enabled
         self._refresh_view(active_agent_changed=True)
 
     def poll_native_logs_now(self) -> None:
-        """Synchronously poll native logs once."""
-
-        self._poll_native_logs()
+        """Compatibility no-op now that the widget is event-driven only."""
 
     def get_rendered_text(self, agent_id: str | None = None, *, debug: bool | None = None) -> str:
         """Return the rendered text for tests and diagnostics."""
@@ -396,7 +364,7 @@ class AgentOutput(Static):
         status = stream.status or "unknown"
         task = stream.task_id or "n/a"
         meta.update(
-            f"Active: {stream.agent_id} · Task: {task} · Status: {status} · View: {mode} · {follow} · Tab next · S lock · D raw"
+            f"Active: {stream.agent_id} · Task: {task} · Status: {status} · View: {mode} · {follow} · Tab next · S lock · D debug"
         )
 
     def _update_tabs(self) -> None:
@@ -426,7 +394,7 @@ class AgentOutput(Static):
 
         if self._active_agent_id is None:
             stream_body.update(self._empty_message)
-            debug_body.update("No native logs yet.")
+            debug_body.update("No event debug output yet.")
             return
 
         stream = self._streams[self._active_agent_id]
@@ -471,156 +439,13 @@ class AgentOutput(Static):
         return "\n".join(stream.canonical_lines) if stream.canonical_lines else "Operational activity will appear here…"
 
     def _build_debug_text(self, stream: AgentStreamState) -> str:
-        return "\n".join(stream.debug_lines) if stream.debug_lines else "Waiting for native debug output…"
+        return "\n".join(stream.debug_lines) if stream.debug_lines else "Waiting for event debug output…"
 
     def _append_canonical_line(self, stream: AgentStreamState, line: str) -> None:
         stream.canonical_lines.append(line)
 
     def _append_debug_line(self, stream: AgentStreamState, line: str) -> None:
         stream.debug_lines.append(line)
-
-    def _backfill_canonical_log(self, stream: AgentStreamState) -> None:
-        path = stream.canonical_log_path
-        if path is None or not path.exists():
-            return
-        try:
-            raw_lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return
-
-        for raw_line in raw_lines:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                self._append_canonical_line(stream, raw_line)
-                continue
-
-            event = {
-                "type": payload.get("event", "event"),
-                "timestamp": payload.get("timestamp"),
-                **(payload.get("data") if isinstance(payload.get("data"), dict) else {}),
-                "agent_id": stream.agent_id,
-                "task_id": stream.task_id,
-            }
-            self.ingest_canonical_event(event)
-        stream.canonical_backfilled = True
-
-    def _poll_native_logs(self) -> None:
-        active_updated = False
-        for agent_id in self._agent_order:
-            stream = self._streams[agent_id]
-            if self._tail_native_log(stream) and agent_id == self._active_agent_id:
-                active_updated = True
-        if active_updated:
-            self._refresh_view(active_agent_changed=False)
-
-    def _tail_native_log(self, stream: AgentStreamState) -> bool:
-        path = stream.native_log_path
-        if path is None or not path.exists():
-            return False
-
-        try:
-            size = path.stat().st_size
-        except OSError:
-            return False
-
-        if size < stream.native_offset:
-            stream.native_offset = 0
-            stream.native_partial = ""
-            stream.debug_lines.clear()
-            stream.thought_text = ""
-            stream.thought_timestamp = None
-            stream.active_thought_item_id = None
-
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                handle.seek(stream.native_offset)
-                chunk = handle.read()
-                stream.native_offset = handle.tell()
-        except OSError:
-            return False
-
-        if not chunk:
-            return False
-
-        pending = f"{stream.native_partial}{chunk}"
-        lines = pending.split("\n")
-        stream.native_partial = lines.pop()
-
-        updated = False
-        for raw_line in lines:
-            line = raw_line.strip()
-            if not line:
-                continue
-            updated = True
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                self._append_debug_line(stream, raw_line)
-                continue
-            self._ingest_native_thought_event(stream, payload)
-            self._append_debug_line(stream, _render_native_entry(payload))
-        return updated
-
-    def _ingest_native_thought_event(self, stream: AgentStreamState, payload: dict[str, Any]) -> None:
-        event_name = payload.get("event")
-        if event_name != "jsonrpc.notification.received":
-            return
-
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        method = str(data.get("method") or "")
-        params = data.get("params") if isinstance(data.get("params"), dict) else {}
-        timestamp = _timestamp_text(payload.get("timestamp"))
-
-        if method == "item/started":
-            item = params.get("item") if isinstance(params.get("item"), dict) else {}
-            item_id = item.get("id")
-            item_type = str(item.get("type") or "").strip().lower()
-            if item_type == "reasoning" and isinstance(item_id, str) and item_id:
-                stream.active_thought_item_id = item_id
-                stream.thought_text = _extract_reasoning_text(item)
-                stream.thought_timestamp = timestamp
-            return
-
-        method_lower = method.lower()
-        if "reasoning" in method_lower and "delta" in method_lower:
-            item_id = params.get("itemId") or params.get("item_id")
-            if isinstance(item_id, str) and item_id:
-                if stream.active_thought_item_id is None:
-                    stream.active_thought_item_id = item_id
-                if item_id == stream.active_thought_item_id:
-                    delta = params.get("delta")
-                    if isinstance(delta, str) and delta:
-                        stream.thought_text = f"{stream.thought_text}{delta}"
-                        if stream.thought_timestamp is None:
-                            stream.thought_timestamp = timestamp
-            return
-
-        if method != "item/completed":
-            return
-
-        item = params.get("item") if isinstance(params.get("item"), dict) else {}
-        item_id = item.get("id")
-        item_type = str(item.get("type") or "").strip().lower()
-        if item_type != "reasoning":
-            return
-
-        final_text = _extract_reasoning_text(item, fallback=stream.thought_text)
-        if final_text:
-            stream.thought_text = final_text
-        if stream.active_thought_item_id is None or item_id == stream.active_thought_item_id:
-            stream.active_thought_item_id = None
-        if stream.thought_timestamp is None:
-            stream.thought_timestamp = timestamp
-
-
-def _path_or_none(value: str | None) -> Path | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return Path(value)
 
 
 def _timestamp_text(value: Any) -> str | None:
@@ -652,6 +477,14 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
 
     if event_type == "task.completed":
         return [_compose_line(event, "✓ Task completed")]
+    if event_type == "tool.call.started":
+        tool_name = str(event.get("tool_name") or "tool").strip() or "tool"
+        return [_compose_line(event, f"🛠 {tool_name} started")]
+    if event_type == "tool.call.completed":
+        tool_name = str(event.get("tool_name") or "tool").strip() or "tool"
+        if event.get("error") is not None:
+            return [_compose_line(event, f"✗ {tool_name} failed")]
+        return [_compose_line(event, f"✅ {tool_name} completed")]
     if event_type == "user-input.requested":
         return [_compose_line(event, "⚠ User input requested")]
     if event_type == "runtime.error":
@@ -747,14 +580,13 @@ def _error_text(event: dict[str, Any]) -> str:
         return str(error.get("message") or error)
     return str(error or "")
 
-def _render_native_entry(payload: dict[str, Any]) -> str:
-    prefix = _timestamp_prefix(_timestamp_text(payload.get("timestamp")))
-    event_name = payload.get("event") or "event"
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    if event_name == "stderr.line":
-        return f"{prefix}stderr {data.get('line', '')}".rstrip()
-    compact = json.dumps(data, ensure_ascii=False, sort_keys=True) if data else ""
-    return f"{prefix}{event_name} {compact}".strip()
+def _render_debug_event_line(event: dict[str, Any]) -> str:
+    prefix = _timestamp_prefix(_timestamp_text(event.get("timestamp")))
+    event_type = str(event.get("type") or "event")
+    ignored = {"timestamp", "type", "agent_id", "task_id"}
+    payload = {key: value for key, value in event.items() if key not in ignored}
+    compact = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str) if payload else ""
+    return f"{prefix}{event_type} {compact}".strip()
 
 
 __all__ = ["AgentOutput", "MAX_BUFFER_LINES"]

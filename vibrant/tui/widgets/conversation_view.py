@@ -1,130 +1,29 @@
-"""Conversation view widget — renders thread messages with Rich/Markdown formatting."""
+"""Conversation view widget backed by orchestrator conversation streams."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll, Vertical
-from textual.widgets import Static, Markdown, Collapsible
+from textual.containers import VerticalScroll
+from textual.widgets import Collapsible, Markdown, Static
 
-from ...models import ItemInfo, ItemType, ThreadInfo, TurnInfo, TurnRole
+from ...orchestrator.types import AgentConversationEntry, AgentConversationView, AgentStreamEvent
 
 
-class MessageBubble(Static):
-    """A single message (user or assistant) in the conversation."""
+class EntryBubble(Static):
+    """A single conversation entry."""
 
-    def __init__(self, turn: TurnInfo, **kwargs) -> None:
+    def __init__(self, entry: AgentConversationEntry, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.turn = turn
+        self.entry = entry
 
     def compose(self) -> ComposeResult:
-        role_label = "🧑 You" if self.turn.role == TurnRole.USER else "🤖 Codex"
-        role_class = "user-msg" if self.turn.role == TurnRole.USER else "assistant-msg"
-        self.add_class(role_class)
-
-        yield Static(f"[b]{role_label}[/b]", classes="msg-role", markup=True)
-
-        for item in self.turn.items:
-            yield from self._render_item(item)
-
-    def _render_item(self, item: ItemInfo) -> list:
-        """Yield one or more widgets for a single item."""
-        widgets = []
-
-        if item.type == ItemType.TEXT:
-            is_reasoning = item.metadata.get("is_reasoning", False)
-            if is_reasoning:
-                widgets.append(Collapsible(
-                    Static(item.content, markup=False),
-                    title="💭 Reasoning",
-                    collapsed=True,
-                    classes="reasoning-collapsible",
-                ))
-            else:
-                if self.turn.role == TurnRole.ASSISTANT:
-                    widgets.append(Markdown(item.content, classes="msg-content"))
-                else:
-                    widgets.append(Static(item.content, classes="msg-content", markup=False))
-
-        elif item.type == ItemType.COMMAND:
-            cmd = item.metadata.get("command", item.content)
-            output = item.metadata.get("output", "")
-            exit_code = item.metadata.get("exit_code")
-            duration = item.metadata.get("duration_ms")
-
-            status_icon = "✅" if exit_code == 0 else "❌" if exit_code is not None else "⏳"
-            duration_str = f" ({duration}ms)" if duration is not None else ""
-            title = f"{status_icon} $ {cmd}{duration_str}"
-
-            # Command output inside a Collapsible — collapsed by default
-            if output:
-                display_output = output if len(output) <= 2000 else output[:2000] + "\n… (truncated)"
-                widgets.append(Collapsible(
-                    Static(display_output, markup=False, classes="msg-command-output"),
-                    title=title,
-                    collapsed=True,
-                    classes="command-collapsible",
-                ))
-            else:
-                widgets.append(Static(title, classes="msg-command-header", markup=False))
-
-        elif item.type == ItemType.FILE_CHANGE:
-            widgets.append(Static(
-                f"✏ Modified: {item.content}",
-                classes="msg-file",
-                markup=False,
-            ))
-
-        elif item.type == ItemType.FILE_READ:
-            widgets.append(Static(
-                f"📖 Read: {item.content}",
-                classes="msg-file",
-                markup=False,
-            ))
-
-        elif item.type == ItemType.APPROVAL_REQUEST:
-            widgets.append(Static(
-                f"⚠ Approval needed: {item.content}",
-                classes="msg-approval",
-                markup=False,
-            ))
-
-        else:
-            if item.content:
-                widgets.append(Static(
-                    item.content[:300],
-                    classes="msg-unknown",
-                    markup=False,
-                ))
-
-        return widgets
-
-
-class StreamingBubble(Vertical):
-    """A live-updating container for streaming assistant responses."""
-
-    DEFAULT_CSS = """
-    StreamingBubble {
-        margin: 1 0;
-        padding: 0 1;
-    }
-    """
-
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._md: Markdown | None = None
-
-    def compose(self) -> ComposeResult:
-        yield Static("[b]🤖 Codex[/b]", classes="msg-role", markup=True)
-        self._md = Markdown("", classes="msg-content")
-        yield self._md
-
-    def update_text(self, text: str) -> None:
-        if self._md is not None:
-            self._md.update(text)
+        self.add_class(f"{self.entry.role}-msg")
+        yield Static(f"[b]{_role_label(self.entry.role)}[/b]", classes="msg-role", markup=True)
+        yield from _render_entry(self.entry)
 
 
 class ConversationView(Static):
-    """Scrollable view of the conversation for the active thread."""
+    """Scrollable view of one orchestrator-managed conversation."""
 
     DEFAULT_CSS = """
     ConversationView #empty-state {
@@ -139,7 +38,7 @@ class ConversationView(Static):
         padding: 0 1;
     }
 
-    ConversationView MessageBubble {
+    ConversationView EntryBubble {
         margin: 1 0;
         padding: 0 1;
     }
@@ -154,6 +53,12 @@ class ConversationView(Static):
         border-left: tall $secondary;
     }
 
+    ConversationView .tool-msg,
+    ConversationView .system-msg {
+        background: $surface-lighten-1;
+        border-left: tall $panel;
+    }
+
     ConversationView .msg-role {
         margin-bottom: 0;
     }
@@ -162,23 +67,15 @@ class ConversationView(Static):
         margin-top: 0;
     }
 
-    ConversationView .msg-command-header {
-        background: $primary-background;
+    ConversationView .msg-status,
+    ConversationView .msg-error,
+    ConversationView .msg-tool {
         padding: 0 1;
         margin: 0;
     }
 
-    ConversationView .msg-command-output {
-        background: $surface;
-        padding: 0 1;
-        margin: 0;
-        color: $text-muted;
-        max-height: 20;
-        overflow-y: auto;
-    }
-
-    ConversationView .msg-file {
-        margin: 0;
+    ConversationView .msg-error {
+        color: $error;
     }
 
     ConversationView .command-collapsible,
@@ -191,67 +88,316 @@ class ConversationView(Static):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._scroll: VerticalScroll | None = None
-        self._current_thread_id: str | None = None
-        self._streaming_bubble: StreamingBubble | None = None
+        self._conversation: AgentConversationView | None = None
+        self._empty_text = "[dim]No Gatekeeper messages yet. Start planning below.[/dim]"
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            "[dim]No Gatekeeper messages yet. Start planning below.[/dim]",
-            id="empty-state",
-            markup=True,
-        )
+        yield Static(self._empty_text, id="empty-state", markup=True)
         self._scroll = VerticalScroll(id="conversation-scroll")
         self._scroll.display = False
         yield self._scroll
 
     @property
-    def current_thread_id(self) -> str | None:
-        """Return the id of the conversation currently displayed."""
+    def current_conversation_id(self) -> str | None:
+        """Return the active orchestrator conversation id."""
 
-        return self._current_thread_id
+        if self._conversation is None:
+            return None
+        return self._conversation.conversation_id
 
-    def show_thread(self, thread: ThreadInfo) -> None:
-        """Display the conversation for a thread."""
-        self._current_thread_id = thread.id
-        self._streaming_bubble = None
+    @property
+    def entry_count(self) -> int:
+        """Return the number of rendered conversation entries."""
 
-        empty_state = self.query_one("#empty-state", Static)
-        empty_state.display = False
+        if self._conversation is None:
+            return 0
+        return len(self._conversation.entries)
 
-        if self._scroll:
-            self._scroll.display = True
-            self._scroll.remove_children()
-            for turn in thread.turns:
-                if turn.items:
-                    self._scroll.mount(MessageBubble(turn))
-            self._scroll.scroll_end(animate=False)
+    def show_conversation(self, conversation: AgentConversationView | None) -> None:
+        """Display the supplied conversation view."""
 
-    def update_streaming_text(self, text: str) -> None:
-        """Update streaming text in real-time."""
-        if not self._scroll:
-            return
+        self._conversation = _clone_conversation(conversation)
+        self._render_once()
 
-        try:
-            empty_state = self.query_one("#empty-state", Static)
-            empty_state.display = False
-            self._scroll.display = True
-        except Exception:
-            pass
+    def ingest_stream_event(self, event: AgentStreamEvent) -> None:
+        """Incrementally apply one stream frame to the local view model."""
 
-        if self._streaming_bubble is None:
-            self._streaming_bubble = StreamingBubble(classes="assistant-msg")
-            self._scroll.mount(self._streaming_bubble)
-
-        self._streaming_bubble.update_text(text)
-        self._scroll.scroll_end(animate=False)
+        if self._conversation is None or self._conversation.conversation_id != event.conversation_id:
+            self._conversation = AgentConversationView(
+                conversation_id=event.conversation_id,
+                agent_ids=[],
+                task_ids=[],
+                active_turn_id=None,
+                entries=[],
+                updated_at=event.created_at,
+            )
+        _apply_stream_event(self._conversation, event)
+        self._render_once()
 
     def clear(self) -> None:
-        """Clear the conversation view."""
-        self._streaming_bubble = None
-        if self._scroll:
-            self._scroll.remove_children()
+        """Clear the rendered conversation."""
+
+        self._conversation = None
+        self._render_once()
+
+    def _render_once(self) -> None:
+        if not self.is_mounted:
+            return
+
         empty_state = self.query_one("#empty-state", Static)
-        empty_state.display = True
-        if self._scroll:
+        if self._scroll is None:
+            return
+
+        if self._conversation is None or not self._conversation.entries:
+            empty_state.update(self._empty_text)
+            empty_state.display = True
             self._scroll.display = False
-        self._current_thread_id = None
+            self._scroll.remove_children()
+            return
+
+        empty_state.display = False
+        self._scroll.display = True
+        self._scroll.remove_children()
+        for entry in self._conversation.entries:
+            if entry.text or entry.kind in {"status", "error", "tool_call"}:
+                self._scroll.mount(EntryBubble(entry))
+        self._scroll.scroll_end(animate=False)
+
+
+def _render_entry(entry: AgentConversationEntry) -> list[Static | Markdown | Collapsible]:
+    widgets: list[Static | Markdown | Collapsible] = []
+
+    if entry.kind == "thinking":
+        body = entry.text.strip() or "Thinking..."
+        widgets.append(
+            Collapsible(
+                Static(body, markup=False),
+                title="Thinking",
+                collapsed=True,
+                classes="reasoning-collapsible",
+            )
+        )
+        return widgets
+
+    if entry.kind == "tool_call":
+        title = _tool_title(entry)
+        body = _tool_body(entry)
+        if body:
+            widgets.append(
+                Collapsible(
+                    Static(body, markup=False, classes="msg-tool"),
+                    title=title,
+                    collapsed=True,
+                    classes="command-collapsible",
+                )
+            )
+        else:
+            widgets.append(Static(title, classes="msg-tool", markup=False))
+        return widgets
+
+    if entry.kind == "status":
+        widgets.append(Static(entry.text or "Status updated", classes="msg-status", markup=False))
+        return widgets
+
+    if entry.kind == "error":
+        widgets.append(Static(entry.text or "Runtime error", classes="msg-error", markup=False))
+        return widgets
+
+    if entry.role == "assistant":
+        widgets.append(Markdown(entry.text, classes="msg-content"))
+    else:
+        widgets.append(Static(entry.text, classes="msg-content", markup=False))
+    return widgets
+
+
+def _role_label(role: str) -> str:
+    return {
+        "user": "You",
+        "assistant": "Gatekeeper",
+        "tool": "Tool",
+        "system": "System",
+    }.get(role, "Message")
+
+
+def _tool_title(entry: AgentConversationEntry) -> str:
+    payload = entry.payload or {}
+    name = payload.get("tool_name") or payload.get("name") or entry.text or "tool"
+    name_text = str(name).strip() or "tool"
+    return f"$ {name_text}"
+
+
+def _tool_body(entry: AgentConversationEntry) -> str:
+    payload = entry.payload or {}
+    result = payload.get("result")
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    text = entry.text.strip()
+    title = _tool_title(entry).removeprefix("$ ").strip()
+    if text and text != title:
+        return text
+    return ""
+
+
+def _clone_conversation(conversation: AgentConversationView | None) -> AgentConversationView | None:
+    if conversation is None:
+        return None
+    return AgentConversationView(
+        conversation_id=conversation.conversation_id,
+        agent_ids=list(conversation.agent_ids),
+        task_ids=list(conversation.task_ids),
+        active_turn_id=conversation.active_turn_id,
+        entries=[
+            AgentConversationEntry(
+                role=entry.role,
+                kind=entry.kind,
+                turn_id=entry.turn_id,
+                text=entry.text,
+                payload=entry.payload,
+                started_at=entry.started_at,
+                finished_at=entry.finished_at,
+            )
+            for entry in conversation.entries
+        ],
+        updated_at=conversation.updated_at,
+    )
+
+
+def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamEvent) -> None:
+    if event.agent_id and event.agent_id not in conversation.agent_ids:
+        conversation.agent_ids.append(event.agent_id)
+    if event.task_id and event.task_id not in conversation.task_ids:
+        conversation.task_ids.append(event.task_id)
+    if event.type == "conversation.turn.started":
+        conversation.active_turn_id = event.turn_id
+    elif event.type == "conversation.turn.completed" and conversation.active_turn_id == event.turn_id:
+        conversation.active_turn_id = None
+    conversation.updated_at = event.created_at
+
+    entries = conversation.entries
+    if event.type == "conversation.user.message":
+        role = "system" if (event.payload or {}).get("role") == "system" else "user"
+        entries.append(
+            AgentConversationEntry(
+                role=role,
+                kind="message",
+                turn_id=event.turn_id,
+                text=event.text or "",
+                payload=event.payload,
+                started_at=event.created_at,
+                finished_at=event.created_at,
+            )
+        )
+        return
+
+    if event.type in {
+        "conversation.turn.started",
+        "conversation.turn.completed",
+        "conversation.request.opened",
+        "conversation.request.resolved",
+    }:
+        entries.append(
+            AgentConversationEntry(
+                role="system",
+                kind="status",
+                turn_id=event.turn_id,
+                text=event.text or _status_text(event.type),
+                payload=event.payload,
+                started_at=event.created_at,
+                finished_at=event.created_at,
+            )
+        )
+        return
+
+    if event.type == "conversation.runtime.error":
+        entries.append(
+            AgentConversationEntry(
+                role="system",
+                kind="error",
+                turn_id=event.turn_id,
+                text=event.text or "Runtime error",
+                payload=event.payload,
+                started_at=event.created_at,
+                finished_at=event.created_at,
+            )
+        )
+        return
+
+    role, kind = _entry_shape(event.type)
+    if role is None or kind is None:
+        return
+
+    if event.type.endswith(".delta"):
+        target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
+        if target is None:
+            entries.append(
+                AgentConversationEntry(
+                    role=role,
+                    kind=kind,
+                    turn_id=event.turn_id,
+                    text=event.text or "",
+                    payload=event.payload,
+                    started_at=event.created_at,
+                    finished_at=None,
+                )
+            )
+            return
+        target.text = f"{target.text}{event.text or ''}"
+        target.payload = event.payload or target.payload
+        return
+
+    target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
+    if target is None:
+        entries.append(
+            AgentConversationEntry(
+                role=role,
+                kind=kind,
+                turn_id=event.turn_id,
+                text=event.text or "",
+                payload=event.payload,
+                started_at=event.created_at,
+                finished_at=event.created_at,
+            )
+        )
+        return
+
+    if event.text and not (target.text == event.text or target.text.endswith(event.text)):
+        target.text = f"{target.text}{event.text}"
+    target.payload = event.payload or target.payload
+    target.finished_at = event.created_at
+
+
+def _status_text(event_type: str) -> str:
+    return {
+        "conversation.turn.started": "Turn started",
+        "conversation.turn.completed": "Turn completed",
+        "conversation.request.opened": "User input requested",
+        "conversation.request.resolved": "User input resolved",
+    }.get(event_type, event_type)
+
+
+def _entry_shape(event_type: str) -> tuple[str | None, str | None]:
+    if "assistant.message" in event_type:
+        return "assistant", "message"
+    if "assistant.thinking" in event_type:
+        return "assistant", "thinking"
+    if "tool_call" in event_type:
+        return "tool", "tool_call"
+    return None, None
+
+
+def _find_open_entry(
+    entries: list[AgentConversationEntry],
+    *,
+    role: str,
+    kind: str,
+    turn_id: str | None,
+) -> AgentConversationEntry | None:
+    for entry in reversed(entries):
+        if entry.role != role or entry.kind != kind:
+            continue
+        if entry.turn_id != turn_id:
+            continue
+        if entry.finished_at is None:
+            return entry
+    return None
+

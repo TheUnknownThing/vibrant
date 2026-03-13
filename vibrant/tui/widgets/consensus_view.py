@@ -1,8 +1,7 @@
-"""Consensus editor/viewer widget for the redesigned TUI."""
+"""Consensus editor/viewer widget for orchestrator-owned consensus state."""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Sequence
 
 from textual.app import ComposeResult
@@ -100,17 +99,14 @@ class ConsensusView(Static):
     class SaveRequested(Message):
         """Posted when the user wants to persist consensus edits."""
 
-        def __init__(self, document: ConsensusDocument, *, source_path: Path | None) -> None:
+        def __init__(self, document: ConsensusDocument) -> None:
             super().__init__()
             self.document = document
-            self.source_path = source_path
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._document: ConsensusDocument | None = None
         self._tasks: tuple[TaskInfo, ...] = ()
-        self._consensus_path: Path | None = None
-        self._raw_markdown = FALLBACK_CONSENSUS_MARKDOWN
         self._editable_markdown = EMPTY_EDITABLE_MARKDOWN
         self._last_synced_editable_markdown = EMPTY_EDITABLE_MARKDOWN
         self._latest_external_editable_markdown = EMPTY_EDITABLE_MARKDOWN
@@ -152,24 +148,16 @@ class ConsensusView(Static):
         document: ConsensusDocument | None,
         *,
         tasks: Sequence[TaskInfo] = (),
-        source_path: str | Path | None = None,
-        raw_markdown: str | None = None,
     ) -> None:
         """Refresh the component from the latest consensus document and roadmap tasks."""
 
         self._document = document
         self._tasks = tuple(tasks)
-        self._consensus_path = Path(source_path) if source_path is not None else None
-        if raw_markdown is not None:
-            self._raw_markdown = raw_markdown
-        elif self._consensus_path is not None:
-            self._raw_markdown = self._read_markdown_from_path(self._consensus_path)
-        elif document is not None:
-            self._raw_markdown = ConsensusWriter().render(document)
+        if document is not None:
+            incoming_editable_markdown = _extract_editable_markdown(document.context)
         else:
-            self._raw_markdown = FALLBACK_CONSENSUS_MARKDOWN
+            incoming_editable_markdown = EMPTY_EDITABLE_MARKDOWN
 
-        incoming_editable_markdown = _extract_editable_markdown(self._raw_markdown)
         if document is None:
             self._editable_markdown = EMPTY_EDITABLE_MARKDOWN
             self._last_synced_editable_markdown = EMPTY_EDITABLE_MARKDOWN
@@ -195,8 +183,6 @@ class ConsensusView(Static):
 
         self._document = None
         self._tasks = ()
-        self._consensus_path = None
-        self._raw_markdown = FALLBACK_CONSENSUS_MARKDOWN
         self._editable_markdown = EMPTY_EDITABLE_MARKDOWN
         self._last_synced_editable_markdown = EMPTY_EDITABLE_MARKDOWN
         self._latest_external_editable_markdown = EMPTY_EDITABLE_MARKDOWN
@@ -235,8 +221,8 @@ class ConsensusView(Static):
         """Return the full markdown represented by the current editor state."""
 
         if self._document is None:
-            return self._raw_markdown or FALLBACK_CONSENSUS_MARKDOWN
-        return _merge_document_with_editable_markdown(self._document, self.current_editable_markdown)
+            return FALLBACK_CONSENSUS_MARKDOWN
+        return ConsensusWriter().render(self._build_pending_document())
 
     def action_save_edits(self) -> None:
         """Post a save request for the currently edited consensus body."""
@@ -245,13 +231,8 @@ class ConsensusView(Static):
             self.app.notify("No consensus document is available to save.", severity="warning")
             return
 
-        try:
-            updated_document = self._build_pending_document()
-        except Exception as exc:
-            self.app.notify(f"Consensus markdown is invalid: {exc}", severity="error")
-            return
-
-        self.post_message(self.SaveRequested(updated_document, source_path=self._consensus_path))
+        updated_document = self._build_pending_document()
+        self.post_message(self.SaveRequested(updated_document))
 
     def action_revert_edits(self) -> None:
         """Discard local edits and restore the latest synced markdown body."""
@@ -280,8 +261,8 @@ class ConsensusView(Static):
     def _build_pending_document(self) -> ConsensusDocument:
         if self._document is None:
             raise RuntimeError("No consensus document is loaded")
-        merged_markdown = _merge_document_with_editable_markdown(self._document, self.current_editable_markdown)
-        return ConsensusWriter().parser.parse(merged_markdown)
+        normalized_context = _extract_editable_markdown(self.current_editable_markdown).rstrip("\n")
+        return self._document.model_copy(update={"context": normalized_context})
 
     def _refresh_content(self) -> None:
         self._metadata_text = _format_metadata(self._document, self._tasks, empty_message=self._empty_message)
@@ -319,7 +300,7 @@ class ConsensusView(Static):
             self._sync_status_text = "Unsaved local edits"
             status_class = "consensus-dirty"
         else:
-            self._sync_status_text = "Synced with `.vibrant/consensus.md`"
+            self._sync_status_text = "Synced with orchestrator consensus state"
             status_class = ""
 
         if not self.is_mounted:
@@ -332,20 +313,8 @@ class ConsensusView(Static):
         if status_class:
             status_widget.add_class(status_class)
 
-    @staticmethod
-    def _read_markdown_from_path(path: Path) -> str:
-        try:
-            return path.read_text(encoding="utf-8")
-        except OSError:
-            return FALLBACK_CONSENSUS_MARKDOWN
-
-
-
 def _count_completed_tasks(tasks: Sequence[TaskInfo]) -> int:
     return sum(1 for task in tasks if task.status in COMPLETED_TASK_STATUSES)
-
-
-
 def _preview_markdown(markdown_text: str) -> str:
     stripped = markdown_text.strip()
     if stripped:
@@ -367,17 +336,6 @@ def _extract_editable_markdown(markdown_text: str) -> str:
     if not text.strip():
         return EMPTY_EDITABLE_MARKDOWN
     return text + "\n"
-
-
-
-def _merge_document_with_editable_markdown(document: ConsensusDocument, editable_markdown: str) -> str:
-    rendered = ConsensusWriter().render(document)
-    prefix = rendered.split("<!-- META:END -->", maxsplit=1)[0] + "<!-- META:END -->\n"
-    body = _extract_editable_markdown(editable_markdown).rstrip("\n")
-    return f"{prefix}{body}\n"
-
-
-
 def _format_metadata(
     document: ConsensusDocument | None,
     tasks: Sequence[TaskInfo],

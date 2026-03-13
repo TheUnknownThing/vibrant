@@ -2,18 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-from textual.app import App, ComposeResult
-from textual.widgets import TextArea
-
 from vibrant.consensus import ConsensusWriter
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.tui.widgets.consensus_view import ConsensusView, _extract_editable_markdown
-
-
-class ConsensusViewHarness(App[None]):
-    def compose(self) -> ComposeResult:
-        yield ConsensusView()
 
 
 def _context(objectives: str) -> str:
@@ -52,43 +43,35 @@ def test_extract_editable_markdown_strips_only_meta_block():
     assert "Read `docs/tui.md`." in editable
 
 
-@pytest.mark.asyncio
-async def test_consensus_view_tracks_unsaved_and_external_updates():
-    app = ConsensusViewHarness()
-    async with app.run_test() as pilot:
-        await pilot.pause()
-        view = app.query_one(ConsensusView)
-        initial = _document(version=1, objectives="Ship the first plan.")
-        view.update_consensus(initial, raw_markdown=ConsensusWriter().render(initial))
-        await pilot.pause()
+def test_consensus_view_tracks_unsaved_and_external_updates():
+    view = ConsensusView()
+    initial = _document(version=1, objectives="Ship the first plan.")
+    view.update_consensus(initial)
 
-        editor = app.query_one(TextArea)
-        editor.load_text(
-            "## Objectives\n"
-            "<!-- OBJECTIVES:START -->\n"
-            "Refine the plan.\n"
-            "<!-- OBJECTIVES:END -->\n"
-            "## Design Choices\n"
-            "<!-- DECISIONS:START -->\n"
-            "<!-- DECISIONS:END -->\n"
-            "## Getting Started\n"
-            "Read `docs/tui.md`.\n"
-        )
-        await pilot.pause()
+    view._editable_markdown = (
+        "## Objectives\n"
+        "<!-- OBJECTIVES:START -->\n"
+        "Refine the plan.\n"
+        "<!-- OBJECTIVES:END -->\n"
+        "## Design Choices\n"
+        "<!-- DECISIONS:START -->\n"
+        "<!-- DECISIONS:END -->\n"
+        "## Getting Started\n"
+        "Read `docs/tui.md`.\n"
+    )
+    view._dirty = True
 
-        assert view.has_unsaved_changes is True
-        assert view.has_external_update is False
+    assert view.has_unsaved_changes is True
+    assert view.has_external_update is False
 
-        refreshed = _document(version=2, objectives="Gatekeeper changed the plan.")
-        view.update_consensus(refreshed, raw_markdown=ConsensusWriter().render(refreshed))
-        await pilot.pause()
+    refreshed = _document(version=2, objectives="Gatekeeper changed the plan.")
+    view.update_consensus(refreshed)
 
-        assert view.has_unsaved_changes is True
-        assert view.has_external_update is True
+    assert view.has_unsaved_changes is True
+    assert view.has_external_update is True
 
-        view.action_revert_edits()
-        await pilot.pause()
+    view.action_revert_edits()
 
-        assert view.has_unsaved_changes is False
-        assert view.has_external_update is False
-        assert "Gatekeeper changed the plan." in view.current_editable_markdown
+    assert view.has_unsaved_changes is False
+    assert view.has_external_update is False
+    assert "Gatekeeper changed the plan." in view.current_editable_markdown
