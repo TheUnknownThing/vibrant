@@ -103,6 +103,8 @@ def has_backend(target: Any, *names: str) -> bool:
 def serialize_value(value: Any) -> Any:
     """Convert dataclasses, enums, paths, and model-like objects to plain values."""
 
+    if hasattr(value, "model_dump_json"):
+        return serialize_value(value.model_dump_json())
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, Enum):
@@ -111,8 +113,6 @@ def serialize_value(value: Any) -> Any:
         return str(value)
     if is_dataclass(value):
         return {key: serialize_value(item) for key, item in asdict(value).items()}
-    if hasattr(value, "model_dump"):
-        return serialize_value(value.model_dump(mode="python"))
     if isinstance(value, Mapping):
         return {str(key): serialize_value(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
