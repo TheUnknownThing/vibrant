@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperTrigger
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
 
@@ -77,15 +77,15 @@ class FollowUpAdapter:
 
 
 def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: str) -> None:
-    record = AgentRecord(
-        identity={"agent_id": agent_id, "task_id": "gatekeeper-user_conversation", "type": AgentType.GATEKEEPER},
+    record = AgentRunRecord(
+        identity={"agent_id": agent_id, "task_id": "gatekeeper-user_conversation", "role": "gatekeeper"},
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
             provider_thread_id=thread_id,
             resume_cursor={"threadId": thread_id},
         ),
     )
-    agents_dir = project_root / ".vibrant" / "agents"
+    agents_dir = project_root / ".vibrant" / "agent-runs"
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / f"{agent_id}.json").write_text(record.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
@@ -125,6 +125,6 @@ async def test_start_answer_question_returns_gatekeeper_handle(tmp_path):
     )
     result = await handle.wait()
 
-    assert handle.agent_record.identity.type is AgentType.GATEKEEPER
+    assert handle.agent_record.identity.role == "gatekeeper"
     assert handle.request.trigger is GatekeeperTrigger.USER_CONVERSATION
     assert result.succeeded is True

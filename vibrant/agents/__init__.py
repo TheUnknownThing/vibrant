@@ -23,6 +23,16 @@ from .gatekeeper import (
     UPDATE_ROADMAP_MCP_TOOL,
 )
 from .merge_agent import MergeAgent
+from .role_results import (
+    CodeRoleResult,
+    GatekeeperRoleResult,
+    GenericRoleResult,
+    MergeRoleResult,
+    RoleResultPayload,
+    TestRoleResult,
+    parse_role_result,
+    serialize_role_result,
+)
 from .runtime import (
     AgentHandle,
     AgentRecordCallback,
@@ -53,6 +63,12 @@ __all__ = [
     "MARK_TASK_FOR_RETRY_MCP_TOOL",
     "MCP_TOOL_NAMES",
     "MergeAgent",
+    "CodeRoleResult",
+    "GatekeeperRoleResult",
+    "GenericRoleResult",
+    "MergeRoleResult",
+    "RoleResultPayload",
+    "TestRoleResult",
     "NormalizedRunResult",
     "ProviderResumeHandle",
     "PLANNING_COMPLETE_MCP_TOOL",
@@ -64,4 +80,6 @@ __all__ = [
     "SET_PENDING_QUESTIONS_MCP_TOOL",
     "UPDATE_CONSENSUS_MCP_TOOL",
     "UPDATE_ROADMAP_MCP_TOOL",
+    "parse_role_result",
+    "serialize_role_result",
 ]

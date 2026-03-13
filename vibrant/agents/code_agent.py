@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
 from vibrant.providers.registry import provider_transport
 
-from .base import AgentBase
+from .base import AgentBase, AgentRunResult
+from .role_results import RoleResultPayload, build_code_role_result
 
 if TYPE_CHECKING:
     from vibrant.models.task import TaskInfo
@@ -23,8 +24,25 @@ class CodeAgent(AgentBase):
     Interactive requests are auto-rejected.
     """
 
-    def get_agent_type(self) -> AgentType:
-        return AgentType.CODE
+    def get_agent_role(self) -> str:
+        return "code"
+
+    def build_role_result(
+        self,
+        *,
+        result: AgentRunResult,
+        agent_record: AgentRunRecord,
+        input_requests: list[object],
+    ) -> RoleResultPayload | None:
+        return build_code_role_result(
+            role=agent_record.identity.role,
+            transcript=result.transcript,
+            summary=agent_record.outcome.summary,
+            error=result.error,
+            exit_code=result.exit_code,
+            awaiting_input=agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT,
+            events=result.events,
+        )
 
     def build_agent_record(
         self,
@@ -33,8 +51,8 @@ class CodeAgent(AgentBase):
         worktree: GitWorktreeInfo,
         prompt: str,
         vibrant_dir: str | Path | None = None,
-    ) -> AgentRecord:
-        """Create an AgentRecord for a code agent run.
+    ) -> AgentRunRecord:
+        """Create an AgentRunRecord for a code agent run.
 
         This is the canonical factory for code agent records, extracted from
         the legacy ``AgentRegistry.create_code_agent_record``.
@@ -49,11 +67,11 @@ class CodeAgent(AgentBase):
             provider_kwargs["native_event_log"] = str(native_log)
             provider_kwargs["canonical_event_log"] = str(canonical_log)
 
-        return AgentRecord(
+        return AgentRunRecord(
             identity={
                 "agent_id": agent_id,
                 "task_id": task.id,
-                "type": AgentType.CODE,
+                "role": "code",
             },
             lifecycle={"status": AgentStatus.SPAWNING},
             context={

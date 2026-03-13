@@ -27,8 +27,8 @@ The `vibrant/agents/*` runtime and protocol code is intentionally unchanged.
   - workflow/session state
   - gatekeeper status
   - cross-cutting counters such as `total_agent_spawns`
-- `.vibrant/agents/*.json` / `AgentRecordStore`
-  - durable per-agent records
+- `.vibrant/agent-runs/*.json` / `AgentRecordStore`
+  - durable per-run records
   - provider thread metadata
   - latest persisted agent summaries/errors/status
 

@@ -54,7 +54,7 @@ vibrant/
 ├── models/
 │   ├── __init__.py
 │   ├── wire.py            # JSON-RPC models (from models.py)
-│   ├── agent.py           # AgentRecord, AgentType, AgentStatus
+│   ├── agent.py           # AgentRunRecord, AgentType, AgentStatus
 │   ├── task.py            # TaskInfo, TaskStatus, TaskLifecycle
 │   ├── consensus.py       # ConsensusPool model
 │   ├── state.py           # OrchestratorState model
@@ -131,14 +131,14 @@ Create `vibrant/config.py`:
 **[Spec §4.2, §4.3, §4.4]**
 
 Create Pydantic models for:
-- `AgentRecord` matching §4.3 JSON schema (agent_id, task_id, type, status, pid, branch, provider metadata, etc.)
+- `AgentRunRecord` matching §4.3 JSON schema (agent_id, task_id, type, status, pid, branch, provider metadata, etc.)
 - `OrchestratorState` matching §4.4 (session_id, active_agents, gatekeeper_status, pending_questions, etc.)
 - `TaskInfo` (id, title, acceptance_criteria, status per §5.3 lifecycle, branch, retry_count, max_retries, prompt, skills, dependencies)
 - `ConsensusDocument` (parsed representation of consensus.md sections)
 
 **Acceptance**:
 - Unit test: round-trip serialize/deserialize each model
-- Unit test: `AgentRecord` status transitions validated
+- Unit test: `AgentRunRecord` status transitions validated
 - Unit test: `TaskInfo` lifecycle state machine (pending→queued→in-progress→completed)
 
 ---

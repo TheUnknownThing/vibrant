@@ -9,7 +9,7 @@ import pytest
 
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, TaskProgressMessage, TaskStartedMessage, TextBlock
 
-from vibrant.models.agent import AgentRecord, AgentType
+from vibrant.models.agent import AgentRunRecord
 from vibrant.providers.base import RuntimeMode
 from vibrant.providers.claude.adapter import ClaudeProviderAdapter
 
@@ -116,7 +116,7 @@ class TestClaudeProviderAdapter:
             ),
         ]
 
-        agent = AgentRecord(identity={"agent_id": "agent-claude-1", "task_id": "task-claude-1", "type": AgentType.CODE})
+        agent = AgentRunRecord(identity={"agent_id": "agent-claude-1", "task_id": "task-claude-1", "role": "code"})
         events: list[dict[str, Any]] = []
         adapter = ClaudeProviderAdapter(client=client, cwd=str(tmp_path), agent_record=agent, on_canonical_event=events.append)
 
@@ -172,7 +172,7 @@ class TestClaudeProviderAdapter:
             )
         ]
 
-        agent = AgentRecord(identity={"agent_id": "agent-claude-2", "task_id": "task-claude-2", "type": AgentType.GATEKEEPER})
+        agent = AgentRunRecord(identity={"agent_id": "agent-claude-2", "task_id": "task-claude-2", "role": "gatekeeper"})
         events: list[dict[str, Any]] = []
         adapter = ClaudeProviderAdapter(
             client=client,

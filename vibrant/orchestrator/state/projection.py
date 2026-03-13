@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import (
     GatekeeperStatus,
@@ -14,12 +14,16 @@ from vibrant.models.state import (
     ProviderRuntimeState,
 )
 from vibrant.providers.base import CanonicalEvent
+from vibrant.orchestrator.agents.catalog import build_builtin_role_catalog
+
+
+_ROLE_CATALOG = build_builtin_role_catalog()
 
 
 def rebuild_derived_state(
     state: OrchestratorState,
     *,
-    agent_records: Iterable[AgentRecord],
+    agent_records: Iterable[AgentRunRecord],
     consensus: ConsensusDocument | None,
 ) -> None:
     active_agents: list[str] = []
@@ -29,9 +33,10 @@ def rebuild_derived_state(
     active_gatekeeper = False
 
     for record in agent_records:
-        if record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+        if record.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES:
             active_agents.append(record.identity.agent_id)
-            if record.identity.type is AgentType.GATEKEEPER:
+            role_spec = _ROLE_CATALOG.try_get(record.identity.role)
+            if role_spec is not None and role_spec.contributes_control_plane_status:
                 active_gatekeeper = True
 
         if record.lifecycle.status is AgentStatus.COMPLETED:
@@ -40,7 +45,7 @@ def rebuild_derived_state(
             failed_tasks.append(record.identity.task_id)
 
         provider_thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
-        if provider_thread_id or record.lifecycle.status not in AgentRecord.TERMINAL_STATUSES:
+        if provider_thread_id or record.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES:
             provider_runtime[record.identity.agent_id] = ProviderRuntimeState(
                 status=record.lifecycle.status.value,
                 provider_thread_id=provider_thread_id,

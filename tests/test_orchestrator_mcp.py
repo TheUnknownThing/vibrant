@@ -6,16 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from vibrant.config import RoadmapExecutionMode
-from vibrant.mcp.authz import (
-    MCP_ACCESS_SCOPE,
-    MCPAuthorizationError,
-    MCPPrincipal,
-    ORCHESTRATOR_WORKFLOW_WRITE_SCOPE,
-    TASKS_RUN_SCOPE,
-    orchestrator_agent_scopes,
-    orchestrator_gatekeeper_scopes,
-)
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord, AgentStatus
 from vibrant.models.state import OrchestratorState, OrchestratorStatus, QuestionStatus
 from vibrant.models.task import TaskStatus
 from vibrant.orchestrator import OrchestratorStateBackend
@@ -25,6 +16,17 @@ from vibrant.orchestrator.artifacts import ConsensusService
 from vibrant.orchestrator.artifacts import QuestionService
 from vibrant.orchestrator.artifacts import RoadmapService
 from vibrant.orchestrator.state import StateStore
+from vibrant.orchestrator.tasks.store import TaskStore
+from vibrant.orchestrator.tasks.workflow import TaskWorkflowService
+from vibrant.orchestrator.types import (
+    AgentInstanceSnapshot,
+    AgentRoleSnapshot,
+    AgentSnapshotIdentity,
+    AgentSnapshotOutcome,
+    AgentSnapshotProvider,
+    AgentSnapshotRuntime,
+    AgentSnapshotWorkspace,
+)
 from vibrant.project_init import initialize_project
 
 
@@ -34,14 +36,103 @@ class _StubGatekeeper:
 
 
 class _StubAgentManager:
-    async def wait_for_agent(self, agent_id: str, *, release_terminal: bool = True):
+    def __init__(self, state_store: StateStore | None = None) -> None:
+        self.state_store = state_store
+        self._roles = [
+            AgentRoleSnapshot(
+                role="code",
+                display_name="Code",
+                workflow_class="execution",
+                default_provider_kind="codex",
+                default_runtime_mode="workspace-write",
+                supports_interactive_requests=False,
+                persistent_thread=False,
+            ),
+            AgentRoleSnapshot(
+                role="gatekeeper",
+                display_name="Gatekeeper",
+                workflow_class="planning-control",
+                default_provider_kind="codex",
+                default_runtime_mode="read-only",
+                supports_interactive_requests=True,
+                persistent_thread=True,
+                question_source_role="gatekeeper",
+                contributes_control_plane_status=True,
+                ui_model_name="gatekeeper",
+            ),
+        ]
+
+    def get_role(self, role: str):
+        normalized = role.strip().lower()
+        for snapshot in self._roles:
+            if snapshot.role == normalized:
+                return snapshot
+        return None
+
+    def list_roles(self):
+        return list(self._roles)
+
+    def list_run_records(self, **kwargs):
+        if self.state_store is None:
+            return []
+        task_id = kwargs.get("task_id")
+        agent_id = kwargs.get("agent_id")
+        role = kwargs.get("role")
+        records = self.state_store.agent_records()
+        if task_id is not None:
+            records = [record for record in records if record.identity.task_id == task_id]
+        if agent_id is not None:
+            records = [record for record in records if record.identity.agent_id == agent_id]
+        if role is not None:
+            records = [record for record in records if record.identity.role == role.strip().lower()]
+        return records
+
+    def get_run_record(self, run_id: str):
+        if self.state_store is None:
+            return None
+        for record in self.state_store.agent_records():
+            if record.identity.run_id == run_id:
+                return record
+        return None
+
+    def get_instance_snapshot(self, agent_id: str):
+        if self.state_store is None:
+            return None
+        for record in self.state_store.agent_records():
+            if record.identity.agent_id == agent_id:
+                return _snapshot_from_record(record)
+        return None
+
+    def list_instance_snapshots(self, **kwargs):
+        if self.state_store is None:
+            return []
+        task_id = kwargs.get("task_id")
+        include_completed = kwargs.get("include_completed", True)
+        active_only = kwargs.get("active_only", False)
+        role = kwargs.get("role")
+
+        snapshots = [_snapshot_from_record(record) for record in self.state_store.agent_records()]
+        if task_id is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.task_id == task_id]
+        if role is not None:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.identity.role == role.strip().lower()]
+        if active_only:
+            snapshots = [snapshot for snapshot in snapshots if snapshot.runtime.active]
+        elif not include_completed:
+            snapshots = [snapshot for snapshot in snapshots if not snapshot.runtime.done or snapshot.runtime.awaiting_input]
+        return snapshots
+
+    def list_active_instance_snapshots(self):
+        return self.list_instance_snapshots(active_only=True)
+
+    async def wait_for_instance(self, agent_id: str, *, release_terminal: bool = True):
         return {
             "agent_id": agent_id,
             "state": "completed",
             "release_terminal": release_terminal,
         }
 
-    async def respond_to_request(
+    async def respond_to_instance_request(
         self,
         agent_id: str,
         request_id: int | str,
@@ -50,13 +141,53 @@ class _StubAgentManager:
         error=None,
     ):
         return {
-            "identity": {"agent_id": agent_id, "task_id": "task-1", "agent_type": "code"},
+            "identity": {"agent_id": agent_id, "task_id": "task-1", "role": "code"},
             "runtime": {"status": "running", "state": "running", "has_handle": True, "active": True, "done": False, "awaiting_input": False},
             "workspace": {"branch": "vibrant/task-1", "worktree_path": "/tmp/task-1"},
             "outcome": {"summary": None, "error": None, "output": None},
             "provider": {"thread_id": "thread-1", "thread_path": None, "resume_cursor": None, "native_event_log": None, "canonical_event_log": None},
             "request": {"request_id": str(request_id), "result": result, "error": error},
         }
+
+
+def _snapshot_from_record(record: AgentRunRecord) -> AgentInstanceSnapshot:
+    status = record.lifecycle.status.value
+    done = record.lifecycle.status not in {AgentStatus.RUNNING, AgentStatus.AWAITING_INPUT}
+    awaiting_input = record.lifecycle.status is AgentStatus.AWAITING_INPUT
+    return AgentInstanceSnapshot(
+        identity=AgentSnapshotIdentity(
+            agent_id=record.identity.agent_id,
+            task_id=record.identity.task_id,
+            role=record.identity.role,
+            run_id=record.identity.run_id,
+        ),
+        runtime=AgentSnapshotRuntime(
+            status=status,
+            state=status,
+            has_handle=False,
+            active=not done,
+            done=done,
+            awaiting_input=awaiting_input,
+            started_at=record.lifecycle.started_at,
+            finished_at=record.lifecycle.finished_at,
+        ),
+        workspace=AgentSnapshotWorkspace(
+            branch=record.context.branch,
+            worktree_path=record.context.worktree_path,
+        ),
+        outcome=AgentSnapshotOutcome(
+            summary=record.outcome.summary,
+            error=record.outcome.error,
+            output=None,
+        ),
+        provider=AgentSnapshotProvider(
+            thread_id=record.provider.provider_thread_id,
+            thread_path=record.provider.thread_path,
+            resume_cursor=record.provider.resume_cursor,
+            native_event_log=record.provider.native_event_log,
+            canonical_event_log=record.provider.canonical_event_log,
+        ),
+    )
 
 
 def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, QuestionService, Path]:
@@ -75,17 +206,21 @@ def _build_facade(tmp_path: Path) -> tuple[OrchestratorFacade, StateStore, Quest
         engine=engine,
         state_store=state_store,
         roadmap_service=roadmap_service,
+        roadmap_document=roadmap_service.document,
         consensus_service=consensus_service,
         question_service=question_service,
+        agent_manager=_StubAgentManager(state_store),
+        agent_output_service=SimpleNamespace(output_for_agent=lambda _agent_id: None),
+        workflow_service=SimpleNamespace(begin_execution_if_needed=lambda: state_store.transition_to(OrchestratorStatus.EXECUTING)),
         execution_mode=RoadmapExecutionMode.MANUAL,
     )
     return OrchestratorFacade(lifecycle), state_store, question_service, repo
 
 
 def _persist_agent_record(state_store: StateStore, *, agent_id: str, task_id: str, status: str = "completed") -> None:
-    record = AgentRecord.model_validate(
+    record = AgentRunRecord.model_validate(
         {
-            "identity": {"agent_id": agent_id, "task_id": task_id, "type": "code"},
+            "identity": {"agent_id": agent_id, "task_id": task_id, "role": "code"},
             "lifecycle": {"status": status},
             "context": {"branch": f"vibrant/{task_id}", "worktree_path": f"/tmp/{task_id}", "prompt_used": "Prompt"},
             "outcome": {"summary": "Implemented successfully." if status == "completed" else None},
@@ -114,6 +249,7 @@ def test_question_service_tracks_structured_records(tmp_path: Path) -> None:
 
     created = questions.ask("Should we ship the UI in v1?", source_agent_id="gatekeeper-1")
     assert created.question_id.startswith("question-")
+    assert created.source_role == "gatekeeper"
     assert state_store.state.pending_questions == ["Should we ship the UI in v1?"]
     assert state_store.state.questions[0].source_agent_id == "gatekeeper-1"
 
@@ -124,17 +260,17 @@ def test_question_service_tracks_structured_records(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_mcp_server_enforces_shared_scopes_and_mutates_state(tmp_path: Path) -> None:
+async def test_orchestrator_mcp_server_exposes_full_surface_and_mutates_state(tmp_path: Path) -> None:
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
 
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
-    agent = MCPPrincipal(scopes=orchestrator_agent_scopes(), subject_id="agent-task-1")
+
+    assert "questions.pending" in {definition.name for definition in server.list_resources()}
+    assert "roadmap_update_task" in {definition.name for definition in server.list_tools()}
 
     created = await server.call_tool(
         "roadmap_add_task",
-        principal=gatekeeper,
         task={
             "id": "task-1",
             "title": "Add MCP facade tests",
@@ -145,32 +281,27 @@ async def test_orchestrator_mcp_server_enforces_shared_scopes_and_mutates_state(
 
     question = await server.call_tool(
         "question_ask_user",
-        principal=gatekeeper,
         text="Should we expose workflow_pause to agents?",
     )
     assert question["text"] == "Should we expose workflow_pause to agents?"
 
-    pending = await server.read_resource("questions.pending", principal=gatekeeper)
+    pending = await server.read_resource("questions.pending")
     assert [item["text"] for item in pending] == ["Should we expose workflow_pause to agents?"]
 
-    fetched = await server.call_tool("task_get", principal=agent, task_id="task-1")
+    fetched = await server.call_tool("task_get", task_id="task-1")
     assert fetched["title"] == "Add MCP facade tests"
 
-    with pytest.raises(MCPAuthorizationError, match="roadmap_update_task"):
-        await server.call_tool(
-            "roadmap_update_task",
-            principal=agent,
-            task_id="task-1",
-            updates={"title": "Nope"},
-        )
+    updated = await server.call_tool(
+        "roadmap_update_task",
+        task_id="task-1",
+        title="Add broader MCP facade tests",
+    )
+    assert updated["title"] == "Add broader MCP facade tests"
 
-    with pytest.raises(MCPAuthorizationError, match="questions.pending"):
-        await server.read_resource("questions.pending", principal=agent)
-
-    paused = await server.call_tool("workflow_pause", principal=gatekeeper)
+    paused = await server.call_tool("workflow_pause")
     assert paused == {"status": "paused"}
 
-    workflow = await server.read_resource("workflow.status", principal=gatekeeper)
+    workflow = await server.read_resource("workflow.status")
     assert workflow == {"status": "paused"}
 
 
@@ -180,11 +311,9 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
     state_store.transition_to(OrchestratorStatus.PLANNING)
 
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
 
     updated_consensus = await server.call_tool(
         "vibrant.update_consensus",
-        principal=gatekeeper,
         status="planning",
         context="## Objectives\nShip MCP-driven orchestration.",
     )
@@ -192,7 +321,6 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 
     updated_roadmap = await server.call_tool(
         "vibrant.update_roadmap",
-        principal=gatekeeper,
         tasks=[
             {
                 "id": "task-1",
@@ -205,7 +333,6 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 
     pending = await server.call_tool(
         "vibrant.set_pending_questions",
-        principal=gatekeeper,
         questions=["Should retries stay automatic?"],
     )
     assert [item["text"] for item in pending if item["status"] == "pending"] == ["Should retries stay automatic?"]
@@ -213,12 +340,11 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 
     decision = await server.call_tool(
         "vibrant.request_user_decision",
-        principal=gatekeeper,
         question="Should we expose the new MCPs now?",
     )
     assert decision["text"] == "Should we expose the new MCPs now?"
 
-    transitioned = await server.call_tool("vibrant.end_planning_phase", principal=gatekeeper)
+    transitioned = await server.call_tool("vibrant.end_planning_phase")
     assert transitioned == {"status": "executing"}
 
 
@@ -226,12 +352,11 @@ async def test_orchestrator_mcp_server_supports_vibrant_gatekeeper_tools(tmp_pat
 async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: Path) -> None:
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
+    facade.orchestrator.task_workflow = TaskWorkflowService(task_store=TaskStore(state_store=state_store))
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
 
     await server.call_tool(
         "vibrant.update_roadmap",
-        principal=gatekeeper,
         tasks=[
             {
                 "id": "task-1",
@@ -244,7 +369,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
 
     accepted = await server.call_tool(
         "vibrant.review_task_outcome",
-        principal=gatekeeper,
         task_id="task-1",
         decision="accepted",
     )
@@ -252,7 +376,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
 
     await server.call_tool(
         "vibrant.update_roadmap",
-        principal=gatekeeper,
         tasks=[
             {
                 "id": "task-2",
@@ -266,7 +389,6 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
     )
     retried = await server.call_tool(
         "vibrant.mark_task_for_retry",
-        principal=gatekeeper,
         task_id="task-2",
         failure_reason="Needs a safer retry path",
         prompt="Retry with a safer implementation plan.",
@@ -274,18 +396,35 @@ async def test_orchestrator_mcp_server_review_tools_mutate_task_state(tmp_path: 
     assert retried["status"] == "queued"
     assert retried["prompt"] == "Retry with a safer implementation plan."
 
+    await server.call_tool(
+        "vibrant.update_roadmap",
+        tasks=[
+            {
+                "id": "task-3",
+                "title": "Reject unsafe implementation",
+                "acceptance_criteria": ["Rejected reviews stay distinguishable in history"],
+                "status": "completed",
+            }
+        ],
+    )
+    rejected = await server.call_tool(
+        "vibrant.review_task_outcome",
+        task_id="task-3",
+        decision="rejected",
+        failure_reason="Unsafe database migration plan",
+    )
+    assert rejected["status"] == "failed"
+    assert state_store.state.tasks["task-3"].reviews[-1].decision.value == "rejected"
+
 
 @pytest.mark.asyncio
-async def test_orchestrator_mcp_server_exposes_agent_and_event_reads(tmp_path: Path) -> None:
+async def test_orchestrator_mcp_server_exposes_instance_and_event_reads(tmp_path: Path) -> None:
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
-    agent = MCPPrincipal(scopes=orchestrator_agent_scopes(), subject_id="agent-task-1")
 
     await server.call_tool(
         "roadmap_add_task",
-        principal=gatekeeper,
         task={
             "id": "task-1",
             "title": "Inspect assignment surfaces",
@@ -303,15 +442,15 @@ async def test_orchestrator_mcp_server_exposes_agent_and_event_reads(tmp_path: P
         }
     )
 
-    assigned = await server.read_resource("task.assigned", principal=agent, task_id="task-1")
+    assigned = await server.read_resource("task.instances", task_id="task-1")
     assert assigned["task"]["id"] == "task-1"
-    assert assigned["latest_agent"]["identity"]["agent_id"] == "agent-task-1"
+    assert assigned["latest_instance"]["identity"]["agent_id"] == "agent-task-1"
 
-    status = await server.read_resource("agent.status", principal=agent, agent_id="agent-task-1")
+    status = await server.read_resource("instance.by_id", agent_id="agent-task-1")
     assert status["identity"]["task_id"] == "task-1"
     assert status["runtime"]["done"] is True
 
-    events = await server.read_resource("events.recent", principal=agent, task_id="task-1")
+    events = await server.read_resource("events.recent", task_id="task-1")
     assert len(events) == 1
     assert events[0]["type"] == "task.progress"
 
@@ -321,16 +460,9 @@ async def test_orchestrator_mcp_server_supports_safe_agent_tools(tmp_path: Path)
     facade, state_store, _questions, _repo = _build_facade(tmp_path)
     state_store.transition_to(OrchestratorStatus.PLANNING)
     server = OrchestratorMCPServer(facade)
-    gatekeeper = MCPPrincipal(scopes=orchestrator_gatekeeper_scopes(), subject_id="gatekeeper-1")
-    agent = MCPPrincipal(scopes=orchestrator_agent_scopes(), subject_id="agent-task-1")
-    runner = MCPPrincipal(
-        scopes=(MCP_ACCESS_SCOPE, TASKS_RUN_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
-        subject_id="operator-1",
-    )
 
     await server.call_tool(
         "roadmap_add_task",
-        principal=gatekeeper,
         task={
             "id": "task-1",
             "title": "Inspect tool surfaces",
@@ -339,35 +471,41 @@ async def test_orchestrator_mcp_server_supports_safe_agent_tools(tmp_path: Path)
     )
     _persist_agent_record(state_store, agent_id="agent-task-1", task_id="task-1")
 
-    agent_snapshot = await server.call_tool("agent_get", principal=agent, agent_id="agent-task-1")
-    assert agent_snapshot["identity"]["agent_id"] == "agent-task-1"
+    role_snapshot = await server.call_tool("role_get", role="code")
+    assert role_snapshot["role"] == "code"
 
-    agent_list = await server.call_tool("agent_list", principal=agent, task_id="task-1")
-    assert [item["identity"]["agent_id"] for item in agent_list] == ["agent-task-1"]
+    roles = await server.call_tool("role_list")
+    assert [item["role"] for item in roles] == ["code", "gatekeeper"]
 
-    agent_result = await server.call_tool("agent_result_get", principal=agent, agent_id="agent-task-1")
-    assert agent_result["summary"] == "Implemented successfully."
+    instance_snapshot = await server.call_tool("instance_get", agent_id="agent-task-1")
+    assert instance_snapshot["identity"]["agent_id"] == "agent-task-1"
 
-    async def _execute_next_task():
+    instance_list = await server.call_tool("instance_list", task_id="task-1")
+    assert [item["identity"]["agent_id"] for item in instance_list] == ["agent-task-1"]
+
+    run_list = await server.call_tool("run_list", task_id="task-1")
+    assert len(run_list) == 1
+
+    run_id = run_list[0]["identity"]["run_id"]
+    run_record = await server.call_tool("run_get", run_id=run_id)
+    assert run_record["outcome"]["summary"] == "Implemented successfully."
+
+    async def _run_next_task():
         return {"task_id": "task-1", "outcome": "accepted", "task_status": TaskStatus.ACCEPTED.value}
 
-    facade.orchestrator.execute_next_task = _execute_next_task
-    executed = await server.call_tool("workflow_execute_next_task", principal=runner)
+    facade.orchestrator.run_next_task = _run_next_task
+    executed = await server.call_tool("workflow_execute_next_task")
     assert executed == {"task_id": "task-1", "outcome": "accepted", "task_status": "accepted"}
 
     facade.orchestrator.agent_manager = _StubAgentManager()
-    waited = await server.call_tool("agent_wait", principal=agent, agent_id="agent-task-1")
+    waited = await server.call_tool("instance_wait", agent_id="agent-task-1")
     assert waited["state"] == "completed"
 
     responded = await server.call_tool(
-        "agent_respond_to_request",
-        principal=runner,
+        "instance_respond_to_request",
         agent_id="agent-task-1",
         request_id="req-1",
         result={"approved": True},
     )
     assert responded["request"]["request_id"] == "req-1"
     assert responded["request"]["result"] == {"approved": True}
-
-    with pytest.raises(MCPAuthorizationError, match="workflow_execute_next_task"):
-        await server.call_tool("workflow_execute_next_task", principal=agent)

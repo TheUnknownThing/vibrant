@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from typing import ClassVar
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TaskStatus(str, enum.Enum):
@@ -62,6 +62,7 @@ class TaskInfo(BaseModel):
     retry_count: int = 0
     max_retries: int = 3
     prompt: str | None = None
+    agent_role: str = "code"
     skills: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(
         default_factory=list,
@@ -82,6 +83,16 @@ class TaskInfo(BaseModel):
         if self.status == TaskStatus.ESCALATED and self.retry_count < self.max_retries:
             raise ValueError("escalated tasks must have exhausted retries")
         return self
+
+    @field_validator("agent_role", mode="before")
+    @classmethod
+    def normalize_agent_role(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if not normalized:
+                raise ValueError("agent_role must not be empty")
+            return normalized
+        return value
 
     def can_transition_to(self, next_status: TaskStatus) -> bool:
         """Return whether the task may move to ``next_status``."""

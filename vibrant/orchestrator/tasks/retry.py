@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from vibrant.agents.gatekeeper import GatekeeperRunResult
-from vibrant.models.agent import AgentRecord
+from vibrant.agents.role_results import RoleResultPayload
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.task import TaskInfo, TaskStatus
-from .git_manager import GitWorktreeInfo
 
-from ..types import TaskResult
-from .git_workspace import GitWorkspaceService
-from .review import ReviewService
 from ..artifacts.roadmap import RoadmapService
+from ..execution.git_manager import GitWorktreeInfo
+from ..execution.git_workspace import GitWorkspaceService
+from ..types import TaskResult
+from .review import ReviewService
 
 
 class RetryPolicyService:
@@ -31,11 +32,12 @@ class RetryPolicyService:
         self,
         *,
         task: TaskInfo,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         worktree: GitWorktreeInfo,
         events: list[dict[str, object]],
         reason: str,
         summary: str | None,
+        role_result: RoleResultPayload | None = None,
         prior_gatekeeper_result: GatekeeperRunResult | None = None,
         notify_gatekeeper_on_retry: bool,
     ) -> TaskResult:
@@ -64,4 +66,5 @@ class RetryPolicyService:
             events=events,
             summary=summary,
             error=reason,
+            role_result=role_result,
         )

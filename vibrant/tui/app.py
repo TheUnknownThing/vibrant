@@ -756,7 +756,7 @@ class VibrantApp(App):
 
         snapshot = orchestrator.snapshot()
         if agent_output is not None:
-            agent_output.sync_agents(snapshot.agent_records)
+            agent_output.sync_agents(snapshot.instances)
 
         consensus_document = snapshot.consensus
         consensus_path = snapshot.consensus_path

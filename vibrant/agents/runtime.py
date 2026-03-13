@@ -44,8 +44,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
+from vibrant.models.agent import AgentRunRecord, AgentStatus, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
+
+from .role_results import RoleResultPayload, serialize_role_result
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ class NormalizedRunResult:
     inspect adapter internals.
     """
 
-    agent_record: AgentRecord
+    agent_record: AgentRunRecord
     state: RunState
     transcript: str = ""
     summary: str | None = None
@@ -96,6 +98,7 @@ class NormalizedRunResult:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     turn_result: Any | None = None
+    role_result: RoleResultPayload | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -108,7 +111,7 @@ class NormalizedRunResult:
 
 # ── Callback type ────────────────────────────────────────────────────
 
-AgentRecordCallback = Callable[[AgentRecord], Any]
+AgentRecordCallback = Callable[[AgentRunRecord], Any]
 """Invoked by the runtime on every record mutation so the orchestrator
 can persist / broadcast without the runtime knowing about state stores."""
 
@@ -272,7 +275,7 @@ class AgentRuntime(Protocol):
     async def start(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str | None = None,
         resume_thread_id: str | None = None,
@@ -303,7 +306,7 @@ class AgentRuntime(Protocol):
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         provider_thread: ProviderThreadHandle,
         cwd: str | None = None,
@@ -361,7 +364,7 @@ class BaseAgentRuntime:
     async def start(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str | None = None,
         resume_thread_id: str | None = None,
@@ -378,7 +381,7 @@ class BaseAgentRuntime:
     async def resume_run(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         provider_thread: ProviderThreadHandle,
         cwd: str | None = None,
@@ -403,7 +406,7 @@ class BaseAgentRuntime:
     async def _launch(
         self,
         *,
-        agent_record: AgentRecord,
+        agent_record: AgentRunRecord,
         prompt: str,
         cwd: str | None,
         resume_thread_id: str | None,
@@ -425,7 +428,7 @@ class BaseAgentRuntime:
         # mutation without coupling to a specific store.
         original_callback = self._agent.on_agent_record_updated
 
-        def _bridge_callback(record: AgentRecord) -> None:
+        def _bridge_callback(record: AgentRunRecord) -> None:
             # Update handle state from the record status.
             _sync_handle_state(handle, record)
             # Forward to the original callback if set.
@@ -478,6 +481,22 @@ class BaseAgentRuntime:
                 if agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT:
                     state = RunState.AWAITING_INPUT
 
+                role_result = None
+                build_role_result = getattr(self._agent, "build_role_result", None)
+                if callable(build_role_result):
+                    try:
+                        role_result = build_role_result(
+                            result=run_result,
+                            agent_record=agent_record,
+                            input_requests=list(handle._input_requests),
+                        )
+                    except Exception:
+                        logger.exception("Failed to build role result for %s", agent_record.identity.role)
+                    else:
+                        if role_result is not None:
+                            agent_record.outcome.role_result = serialize_role_result(role_result)
+                            _bridge_callback(agent_record)
+
                 return NormalizedRunResult(
                     agent_record=agent_record,
                     state=state,
@@ -491,6 +510,7 @@ class BaseAgentRuntime:
                     started_at=agent_record.lifecycle.started_at,
                     finished_at=agent_record.lifecycle.finished_at,
                     turn_result=run_result.turn_result,
+                    role_result=role_result,
                 )
             except Exception as exc:
                 return NormalizedRunResult(
@@ -506,7 +526,7 @@ class BaseAgentRuntime:
             if not future.done():
                 future.set_result(result)
 
-        asyncio.create_task(_run_and_resolve(), name=f"agent-runtime-{agent_record.identity.agent_id}")
+        asyncio.create_task(_run_and_resolve(), name=f"agent-runtime-{agent_record.identity.run_id}")
         # Yield control so the task has a chance to start.
         await asyncio.sleep(0)
         return handle
@@ -515,7 +535,7 @@ class BaseAgentRuntime:
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _sync_handle_state(handle: AgentHandle, record: AgentRecord) -> None:
+def _sync_handle_state(handle: AgentHandle, record: AgentRunRecord) -> None:
     """Map AgentStatus to RunState on the handle."""
     mapping: dict[AgentStatus, RunState] = {
         AgentStatus.SPAWNING: RunState.STARTING,
