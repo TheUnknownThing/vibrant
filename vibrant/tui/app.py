@@ -385,6 +385,7 @@ class VibrantApp(App):
             self._refresh_gatekeeper_state()
         finally:
             self._gatekeeper_request_task = None
+            self._refresh_gatekeeper_state()
 
     def _roadmap_execution_mode(self) -> RoadmapExecutionMode:
         if self.orchestrator is None:

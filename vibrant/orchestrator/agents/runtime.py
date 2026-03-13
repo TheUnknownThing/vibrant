@@ -142,7 +142,7 @@ class AgentRuntimeService:
                 status=agent_record.lifecycle.status.value,
                 state=handle.state.value,
                 has_handle=True,
-                active=True,
+                active=not handle.done,
                 done=handle.done,
                 awaiting_input=handle.awaiting_input,
                 pid=agent_record.lifecycle.pid,

@@ -165,15 +165,15 @@ class GatekeeperRuntimeService:
             setattr(started_run.handle, "agent_instance", started_run.agent)
             setattr(started_run.handle, "request", request)
             setattr(started_run.handle, "prompt", prompt)
+            async def wait_for_result() -> GatekeeperRunResult:
+                callback = on_result or (lambda result: result)
+                return await self._forward_managed_result(agent=started_run.agent, callback=callback)
 
-            if on_result is not None:
-                future = asyncio.create_task(
-                    self._forward_managed_result(agent=started_run.agent, callback=on_result),
-                    name=f"gatekeeper-{request.trigger.value}-{started_run.agent_record.identity.run_id}",
-                )
-                self.track_future(future)
-
-            return started_run.handle
+            future = asyncio.create_task(
+                wait_for_result(),
+                name=f"gatekeeper-{request.trigger.value}-{started_run.agent_record.identity.run_id}",
+            )
+            return self.future_handle(future)
 
         start_run = getattr(self.gatekeeper, "start_run", None)
         if callable(start_run):
@@ -233,23 +233,7 @@ class GatekeeperRuntimeService:
                 request,
                 resume_latest_thread=resume_latest_thread,
             )
-            agent_instance = getattr(handle, "agent_instance", None)
-            if not isinstance(agent_instance, ManagedAgentInstance):
-                agent_record = getattr(handle, "agent_record", None)
-                if agent_record is None:
-                    raise RuntimeError("Managed Gatekeeper handle is missing agent instance context")
-                agent_instance = self._managed_instance(
-                    role=agent_record.identity.role,
-                    scope_type="project",
-                    scope_id="project",
-                )
-            execution_result = await agent_instance.wait_for_run()
-            result = execution_result.normalized_result
-            if result is None:
-                raise RuntimeError(
-                    f"Gatekeeper run {handle.agent_record.identity.run_id} did not produce a normalized result"
-                )
-            return result
+            return await handle.wait()
 
         run_gatekeeper = self.gatekeeper.run
         try:

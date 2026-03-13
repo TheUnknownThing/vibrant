@@ -330,7 +330,7 @@ def _block_from_run(run: AgentRunSnapshot, events: list[dict[str, Any]]) -> Mess
         event_type = str(event.get("type") or "")
         event_timestamp = _event_timestamp(event)
         if event_timestamp is not None:
-            last_timestamp = event_timestamp
+            last_timestamp = _prefer_message_timestamp(last_timestamp, event_timestamp)
 
         if event_type == "reasoning.summary.delta":
             delta = str(event.get("delta") or "")
@@ -438,7 +438,7 @@ def _overlay_output(
         message_id=message_id,
         role="assistant",
         parts=parts,
-        timestamp=output.updated_at or (block.timestamp if block is not None else None),
+        timestamp=_prefer_message_timestamp(block.timestamp if block is not None else None, output.updated_at),
     )
 
 
@@ -474,6 +474,14 @@ def _message_sort_key(block: MessageBlock) -> tuple[float, int, str]:
     timestamp = block.timestamp.timestamp() if block.timestamp is not None else 0.0
     role_rank = 0 if block.role == "user" else 1
     return (timestamp, role_rank, block.message_id)
+
+
+def _prefer_message_timestamp(current: datetime | None, candidate: datetime | None) -> datetime | None:
+    if current is None:
+        return candidate
+    if candidate is None:
+        return current
+    return candidate if candidate >= current else current
 
 
 def _render_question_summary(records: tuple[QuestionRecord, ...]) -> str:
