@@ -114,6 +114,11 @@ class PlanningScreen(Static):
         self._consensus_visible = visible
         consensus_view = self.query_one("#planning-consensus-panel", ConsensusView)
         if visible:
+            if consensus_view._orchestrator_facade is None:
+                self.notify("Consensus panel is unavailable until project initialization completes.", severity="warning")
+                self._consensus_visible = False
+                consensus_view.display = False
+                return
             consensus_view.load_document()
             consensus_view.assert_facade()
         consensus_view.display = visible

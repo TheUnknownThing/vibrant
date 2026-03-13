@@ -156,7 +156,7 @@ class VibrantApp(App):
 
         await self._stop_project_refresh_loop()
 
-    def action_open_settings(self) -> None:
+    async def action_open_settings(self) -> None:
         self.push_screen(SettingsPanel(self._settings), callback=self._on_settings_panel_dismissed)
 
     def _on_settings_panel_dismissed(self, result: AppSettings | None) -> None:
@@ -886,9 +886,11 @@ class VibrantApp(App):
 
     def _gatekeeper_history_matches_project(self, thread: ThreadInfo) -> bool:
         if thread.id == ChatPanel.GATEKEEPER_THREAD_ID:
-            return True
+            if not thread.cwd:
+                return False
+            return Path(thread.cwd).expanduser().resolve() == self._project_root
         if not thread.cwd:
-            return False
+            return True
         return Path(thread.cwd).expanduser().resolve() == self._project_root
 
     def _pending_gatekeeper_questions(self) -> list[str]:

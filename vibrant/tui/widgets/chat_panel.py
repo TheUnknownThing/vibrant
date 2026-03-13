@@ -239,8 +239,9 @@ class ChatPanel(Static):
         now = datetime.now(timezone.utc)
         created_at = min(timestamps, default=now)
         updated_at = max(timestamps, default=now)
+        thread_id = state.provider_thread_id or self.GATEKEEPER_THREAD_ID
         return ThreadInfo(
-            id=self.GATEKEEPER_THREAD_ID,
+            id=thread_id,
             codex_thread_id=state.provider_thread_id,
             title="Gatekeeper",
             status=ThreadStatus.IDLE,
