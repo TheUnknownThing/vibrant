@@ -24,8 +24,13 @@ CanonicalKnownEventType: TypeAlias = Literal[
     "session.state.changed",
     "thread.started",
     "turn.started",
+    "assistant.message.delta",
+    "assistant.message.completed",
     "content.delta",
     "reasoning.summary.delta",
+    "tool.call.started",
+    "tool.call.delta",
+    "tool.call.completed",
     "request.opened",
     "request.resolved",
     "user-input.requested",
@@ -49,6 +54,8 @@ class CanonicalEventEnvelope(TypedDict, total=False):
 
     type: Required[str]
     timestamp: Required[str]
+    event_id: NotRequired[str]
+    sequence: NotRequired[int]
     origin: NotRequired[CanonicalEventOrigin]
     provider: NotRequired[str]
     agent_id: NotRequired[str]
@@ -94,6 +101,44 @@ class ReasoningSummaryDeltaEvent(CanonicalEventEnvelope):
     delta: Required[str]
     turn_id: NotRequired[str]
     summary_index: NotRequired[int]
+
+
+class AssistantMessageDeltaEvent(CanonicalEventEnvelope):
+    type: Required[Literal["assistant.message.delta"]]
+    item_id: Required[str]
+    delta: Required[str]
+    turn_id: NotRequired[str]
+
+
+class AssistantMessageCompletedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["assistant.message.completed"]]
+    item_id: Required[str]
+    text: NotRequired[str]
+    turn_id: NotRequired[str]
+
+
+class ToolCallStartedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["tool.call.started"]]
+    item_id: Required[str]
+    tool_name: Required[str]
+    turn_id: NotRequired[str]
+    arguments: NotRequired[CanonicalPayload | str]
+
+
+class ToolCallDeltaEvent(CanonicalEventEnvelope):
+    type: Required[Literal["tool.call.delta"]]
+    item_id: Required[str]
+    delta: Required[str]
+    turn_id: NotRequired[str]
+
+
+class ToolCallCompletedEvent(CanonicalEventEnvelope):
+    type: Required[Literal["tool.call.completed"]]
+    item_id: Required[str]
+    tool_name: Required[str]
+    turn_id: NotRequired[str]
+    result: NotRequired[Any]
+    error: NotRequired[Any]
 
 
 class RequestOpenedEvent(CanonicalEventEnvelope):
@@ -175,8 +220,13 @@ CanonicalEvent: TypeAlias = (
     | SessionStateChangedEvent
     | ThreadStartedEvent
     | TurnStartedEvent
+    | AssistantMessageDeltaEvent
+    | AssistantMessageCompletedEvent
     | ContentDeltaEvent
     | ReasoningSummaryDeltaEvent
+    | ToolCallStartedEvent
+    | ToolCallDeltaEvent
+    | ToolCallCompletedEvent
     | RequestOpenedEvent
     | RequestResolvedEvent
     | UserInputRequestedEvent

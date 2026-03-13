@@ -1,192 +1,294 @@
-"""Framework-agnostic MCP server registry for orchestrator resources and tools."""
+"""In-process MCP server for the redesigned orchestrator surface."""
 
 from __future__ import annotations
 
-import inspect
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-from vibrant.mcp.authz import (
-    MCP_ACCESS_SCOPE,
+from .common import (
+    CONSENSUS_WRITE_SCOPE,
+    MCPNotFoundError,
     MCPPrincipal,
-    ORCHESTRATOR_CONSENSUS_READ_SCOPE,
-    ORCHESTRATOR_CONSENSUS_WRITE_SCOPE,
-    ORCHESTRATOR_QUESTIONS_READ_SCOPE,
-    ORCHESTRATOR_QUESTIONS_WRITE_SCOPE,
-    ORCHESTRATOR_WORKFLOW_READ_SCOPE,
-    ORCHESTRATOR_WORKFLOW_WRITE_SCOPE,
-    TASKS_READ_SCOPE,
-    TASKS_RUN_SCOPE,
-    TASKS_WRITE_SCOPE,
-    ensure_scopes,
-    has_scopes,
+    MCPResourceDefinition,
+    MCPToolDefinition,
+    QUESTIONS_WRITE_SCOPE,
+    READ_SCOPE,
+    REVIEW_WRITE_SCOPE,
+    ROADMAP_WRITE_SCOPE,
+    WORKFLOW_WRITE_SCOPE,
+    require_scopes,
+    serialize_value,
 )
-from vibrant.orchestrator.facade import OrchestratorFacade
-
-from .resources import ResourceHandlers
-from .tools_agents import AgentToolHandlers
-from .tools_gatekeeper import GatekeeperToolHandlers
-
-ToolHandler = Callable[..., dict[str, Any] | list[dict[str, Any]] | Awaitable[Any] | None]
-ResourceHandler = Callable[..., dict[str, Any] | list[dict[str, Any]] | Awaitable[Any] | None]
-
-_RESOURCE_SCOPES: dict[str, tuple[str, ...]] = {
-    "agent.status": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "consensus.current": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_READ_SCOPE),
-    "events.recent": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "questions.pending": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_READ_SCOPE),
-    "roadmap.current": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "task.assigned": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "task.by_id": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "workflow.status": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_READ_SCOPE),
-}
-
-_TOOL_SCOPES: dict[str, tuple[str, ...]] = {
-    "agent_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "agent_list": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "agent_result_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "agent_respond_to_request": (MCP_ACCESS_SCOPE, TASKS_RUN_SCOPE),
-    "agent_wait": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "consensus_get": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_READ_SCOPE),
-    "consensus_update": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_WRITE_SCOPE),
-    "question_ask_user": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
-    "question_resolve": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
-    "roadmap_add_task": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
-    "roadmap_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "roadmap_reorder_tasks": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
-    "roadmap_update_task": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
-    "task_get": (MCP_ACCESS_SCOPE, TASKS_READ_SCOPE),
-    "workflow_execute_next_task": (MCP_ACCESS_SCOPE, TASKS_RUN_SCOPE),
-    "workflow_pause": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
-    "workflow_resume": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
-    "vibrant.end_planning_phase": (MCP_ACCESS_SCOPE, ORCHESTRATOR_WORKFLOW_WRITE_SCOPE),
-    "vibrant.request_user_decision": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
-    "vibrant.set_pending_questions": (MCP_ACCESS_SCOPE, ORCHESTRATOR_QUESTIONS_WRITE_SCOPE),
-    "vibrant.review_task_outcome": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
-    "vibrant.mark_task_for_retry": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
-    "vibrant.update_consensus": (MCP_ACCESS_SCOPE, ORCHESTRATOR_CONSENSUS_WRITE_SCOPE),
-    "vibrant.update_roadmap": (MCP_ACCESS_SCOPE, TASKS_WRITE_SCOPE),
-}
-
-
-@dataclass(frozen=True, slots=True)
-class MCPResourceDefinition:
-    """Metadata for one orchestrator MCP resource."""
-
-    name: str
-    description: str
-    handler: ResourceHandler
-
-
-@dataclass(frozen=True, slots=True)
-class MCPToolDefinition:
-    """Metadata for one orchestrator MCP tool."""
-
-    name: str
-    description: str
-    handler: ToolHandler
+from .resources import OrchestratorMCPResources
+from .tools import OrchestratorMCPTools
 
 
 class OrchestratorMCPServer:
-    """Small in-process MCP surface over the orchestrator facade."""
+    """Typed tool/resource registry backed by orchestrator services."""
 
-    def __init__(self, facade: OrchestratorFacade) -> None:
-        self.facade = facade
-        self.resources = ResourceHandlers(facade)
-        self.gatekeeper_tools = GatekeeperToolHandlers(facade)
-        self.agent_tools = AgentToolHandlers(facade)
+    def __init__(self, backend: Any) -> None:
+        self.backend = backend
+        self.resources = OrchestratorMCPResources(backend)
+        self.tools = OrchestratorMCPTools(backend)
+        self._resource_defs = self._build_resources()
+        self._tool_defs = self._build_tools()
 
-        self._resources: dict[str, MCPResourceDefinition] = {
-            "agent.status": MCPResourceDefinition(
-                name="agent.status",
-                description="Read one agent snapshot or list agent snapshots.",
-                handler=self.resources.agent_status,
+    @staticmethod
+    def gatekeeper_principal() -> MCPPrincipal:
+        return MCPPrincipal(
+            principal_id="gatekeeper",
+            role="gatekeeper",
+            scopes=frozenset(
+                {
+                    READ_SCOPE,
+                    CONSENSUS_WRITE_SCOPE,
+                    ROADMAP_WRITE_SCOPE,
+                    QUESTIONS_WRITE_SCOPE,
+                    WORKFLOW_WRITE_SCOPE,
+                    REVIEW_WRITE_SCOPE,
+                }
             ),
-            "consensus.current": MCPResourceDefinition(
-                name="consensus.current",
-                description="Read the current consensus document.",
-                handler=self.resources.consensus_current,
+        )
+
+    def list_tools(self, *, principal: MCPPrincipal | None = None) -> list[dict[str, Any]]:
+        definitions = []
+        for definition in self._tool_defs.values():
+            if principal is not None and not principal.allows(*definition.required_scopes):
+                continue
+            definitions.append(
+                {
+                    "name": definition.name,
+                    "description": definition.description,
+                    "required_scopes": list(definition.required_scopes),
+                }
+            )
+        return definitions
+
+    def gatekeeper_tool_names(self) -> list[str]:
+        return list(self._tool_defs)
+
+    def gatekeeper_resource_names(self) -> list[str]:
+        return list(self._resource_defs)
+
+    def worker_tool_names(self, *, agent_type: str) -> list[str]:
+        del agent_type
+        return []
+
+    def worker_resource_names(self, *, agent_type: str) -> list[str]:
+        del agent_type
+        return list(self._resource_defs)
+
+    def list_resources(self, *, principal: MCPPrincipal | None = None) -> list[dict[str, Any]]:
+        definitions = []
+        for definition in self._resource_defs.values():
+            if principal is not None and not principal.allows(*definition.required_scopes):
+                continue
+            definitions.append(
+                {
+                    "name": definition.name,
+                    "description": definition.description,
+                    "required_scopes": list(definition.required_scopes),
+                }
+            )
+        return definitions
+
+    def gatekeeper_tool_names(self) -> list[str]:
+        principal = self.gatekeeper_principal()
+        return [item["name"] for item in self.list_tools(principal=principal)]
+
+    def gatekeeper_resource_names(self) -> list[str]:
+        principal = self.gatekeeper_principal()
+        return [item["name"] for item in self.list_resources(principal=principal)]
+
+    def worker_tool_names(self, *, agent_type: str) -> list[str]:
+        del agent_type
+        return []
+
+    def worker_resource_names(self, *, agent_type: str) -> list[str]:
+        del agent_type
+        return [item["name"] for item in self.list_resources(principal=self.gatekeeper_principal())]
+
+    async def call_tool(self, name: str, /, *, principal: MCPPrincipal | None = None, **kwargs: Any) -> Any:
+        definition = self._tool_defs.get(name)
+        if definition is None:
+            raise MCPNotFoundError(f"Unknown MCP tool: {name}")
+        require_scopes(principal, *definition.required_scopes)
+        result = definition.handler(**kwargs)
+        if hasattr(result, "__await__"):
+            result = await result
+        return serialize_value(result)
+
+    async def read_resource(self, name: str, /, *, principal: MCPPrincipal | None = None, **kwargs: Any) -> Any:
+        definition = self._resource_defs.get(name)
+        if definition is None:
+            raise MCPNotFoundError(f"Unknown MCP resource: {name}")
+        require_scopes(principal, *definition.required_scopes)
+        result = definition.handler(**kwargs)
+        if hasattr(result, "__await__"):
+            result = await result
+        return serialize_value(result)
+
+    def _build_resources(self) -> dict[str, MCPResourceDefinition]:
+        return {
+            "vibrant.get_consensus": MCPResourceDefinition(
+                name="vibrant.get_consensus",
+                description="Return the current orchestrator-owned consensus view.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_consensus,
             ),
-            "events.recent": MCPResourceDefinition(
-                name="events.recent",
-                description="Read recent orchestrator canonical events.",
-                handler=self.resources.events_recent,
+            "vibrant.get_roadmap": MCPResourceDefinition(
+                name="vibrant.get_roadmap",
+                description="Return the current roadmap view.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_roadmap,
             ),
-            "questions.pending": MCPResourceDefinition(
-                name="questions.pending",
-                description="Read unresolved user-facing orchestrator questions.",
-                handler=self.resources.questions_pending,
+            "vibrant.get_task": MCPResourceDefinition(
+                name="vibrant.get_task",
+                description="Return one roadmap task by id.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_task,
             ),
-            "roadmap.current": MCPResourceDefinition(
-                name="roadmap.current",
-                description="Read the current roadmap document.",
-                handler=self.resources.roadmap_current,
+            "vibrant.get_workflow_status": MCPResourceDefinition(
+                name="vibrant.get_workflow_status",
+                description="Return the authoritative workflow status.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_workflow_status,
             ),
-            "task.by_id": MCPResourceDefinition(
-                name="task.by_id",
-                description="Read one roadmap task by id.",
-                handler=self.resources.task_by_id,
+            "vibrant.list_pending_questions": MCPResourceDefinition(
+                name="vibrant.list_pending_questions",
+                description="List pending user decisions.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.list_pending_questions,
             ),
-            "task.assigned": MCPResourceDefinition(
-                name="task.assigned",
-                description="Read a task together with its related agents.",
-                handler=self.resources.task_assigned,
+            "vibrant.list_active_agents": MCPResourceDefinition(
+                name="vibrant.list_active_agents",
+                description="List active agent runtimes.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.list_active_agents,
             ),
-            "workflow.status": MCPResourceDefinition(
-                name="workflow.status",
-                description="Read the current orchestrator workflow status.",
-                handler=self.resources.workflow_status,
+            "vibrant.list_active_attempts": MCPResourceDefinition(
+                name="vibrant.list_active_attempts",
+                description="List active execution attempts.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.list_active_attempts,
+            ),
+            "vibrant.get_review_ticket": MCPResourceDefinition(
+                name="vibrant.get_review_ticket",
+                description="Return a review ticket by id.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_review_ticket,
+            ),
+            "vibrant.list_pending_review_tickets": MCPResourceDefinition(
+                name="vibrant.list_pending_review_tickets",
+                description="List unresolved review tickets.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.list_pending_review_tickets,
+            ),
+            "vibrant.list_recent_events": MCPResourceDefinition(
+                name="vibrant.list_recent_events",
+                description="Return recent orchestrator domain events.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.list_recent_events,
             ),
         }
-        self._tools: dict[str, MCPToolDefinition] = {
-            "agent_get": MCPToolDefinition("agent_get", "Read one agent snapshot by id.", self.agent_tools.agent_get),
-            "agent_list": MCPToolDefinition("agent_list", "List orchestrator agent snapshots.", self.agent_tools.agent_list),
-            "agent_result_get": MCPToolDefinition("agent_result_get", "Read the latest known result for one agent.", self.agent_tools.agent_result_get),
-            "agent_respond_to_request": MCPToolDefinition("agent_respond_to_request", "Answer a pending provider request for an existing agent.", self.agent_tools.agent_respond_to_request),
-            "agent_wait": MCPToolDefinition("agent_wait", "Wait for an existing agent to reach a result state.", self.agent_tools.agent_wait),
-            "consensus_get": MCPToolDefinition("consensus_get", "Read the current consensus document.", self.gatekeeper_tools.consensus_get),
-            "consensus_update": MCPToolDefinition("consensus_update", "Update orchestrator-owned consensus fields.", self.gatekeeper_tools.consensus_update),
-            "question_ask_user": MCPToolDefinition("question_ask_user", "Create a structured user-facing question.", self.gatekeeper_tools.question_ask_user),
-            "question_resolve": MCPToolDefinition("question_resolve", "Resolve a structured question record.", self.gatekeeper_tools.question_resolve),
-            "roadmap_add_task": MCPToolDefinition("roadmap_add_task", "Add a task to the roadmap.", self.gatekeeper_tools.roadmap_add_task),
-            "roadmap_get": MCPToolDefinition("roadmap_get", "Read the current roadmap document.", self.gatekeeper_tools.roadmap_get),
-            "roadmap_reorder_tasks": MCPToolDefinition("roadmap_reorder_tasks", "Reorder roadmap tasks by id.", self.gatekeeper_tools.roadmap_reorder_tasks),
-            "roadmap_update_task": MCPToolDefinition("roadmap_update_task", "Update a roadmap task definition.", self.gatekeeper_tools.roadmap_update_task),
-            "task_get": MCPToolDefinition("task_get", "Read one roadmap task by id.", self.agent_tools.task_get),
-            "workflow_execute_next_task": MCPToolDefinition("workflow_execute_next_task", "Dispatch and execute the next roadmap task according to orchestrator workflow rules.", self.agent_tools.workflow_execute_next_task),
-            "workflow_pause": MCPToolDefinition("workflow_pause", "Pause the workflow.", self.gatekeeper_tools.workflow_pause),
-            "workflow_resume": MCPToolDefinition("workflow_resume", "Resume the workflow.", self.gatekeeper_tools.workflow_resume),
-            "vibrant.end_planning_phase": MCPToolDefinition("vibrant.end_planning_phase", "Transition the orchestrator from planning into execution.", self.gatekeeper_tools.end_planning_phase),
-            "vibrant.request_user_decision": MCPToolDefinition("vibrant.request_user_decision", "Create one user-facing decision request for the Gatekeeper.", self.gatekeeper_tools.request_user_decision),
-            "vibrant.set_pending_questions": MCPToolDefinition("vibrant.set_pending_questions", "Replace the pending Gatekeeper question set.", self.gatekeeper_tools.set_pending_questions),
-            "vibrant.review_task_outcome": MCPToolDefinition("vibrant.review_task_outcome", "Record the Gatekeeper verdict for a task outcome.", self.gatekeeper_tools.review_task_outcome),
-            "vibrant.mark_task_for_retry": MCPToolDefinition("vibrant.mark_task_for_retry", "Update a task for retry and requeue or escalate it.", self.gatekeeper_tools.mark_task_for_retry),
-            "vibrant.update_consensus": MCPToolDefinition("vibrant.update_consensus", "Update orchestrator-owned consensus fields.", self.gatekeeper_tools.update_consensus),
-            "vibrant.update_roadmap": MCPToolDefinition("vibrant.update_roadmap", "Replace the roadmap document with a validated task list.", self.gatekeeper_tools.update_roadmap),
+
+    def _build_tools(self) -> dict[str, MCPToolDefinition]:
+        return {
+            "vibrant.update_consensus": MCPToolDefinition(
+                name="vibrant.update_consensus",
+                description="Update orchestrator-owned consensus context or append a decision.",
+                required_scopes=(CONSENSUS_WRITE_SCOPE,),
+                handler=self.tools.update_consensus,
+            ),
+            "vibrant.add_task": MCPToolDefinition(
+                name="vibrant.add_task",
+                description="Add a roadmap task with a full typed definition.",
+                required_scopes=(ROADMAP_WRITE_SCOPE,),
+                handler=self.tools.add_task,
+            ),
+            "vibrant.update_task_definition": MCPToolDefinition(
+                name="vibrant.update_task_definition",
+                description="Update the editable definition of a roadmap task.",
+                required_scopes=(ROADMAP_WRITE_SCOPE,),
+                handler=self.tools.update_task_definition,
+            ),
+            "vibrant.reorder_tasks": MCPToolDefinition(
+                name="vibrant.reorder_tasks",
+                description="Reorder roadmap tasks by task id.",
+                required_scopes=(ROADMAP_WRITE_SCOPE,),
+                handler=self.tools.reorder_tasks,
+            ),
+            "vibrant.request_user_decision": MCPToolDefinition(
+                name="vibrant.request_user_decision",
+                description="Open a user decision request through the host.",
+                required_scopes=(QUESTIONS_WRITE_SCOPE,),
+                handler=self.tools.request_user_decision,
+            ),
+            "vibrant.withdraw_question": MCPToolDefinition(
+                name="vibrant.withdraw_question",
+                description="Withdraw a pending user decision request.",
+                required_scopes=(QUESTIONS_WRITE_SCOPE,),
+                handler=self.tools.withdraw_question,
+            ),
+            "vibrant.end_planning_phase": MCPToolDefinition(
+                name="vibrant.end_planning_phase",
+                description="Transition the workflow from planning into execution.",
+                required_scopes=(WORKFLOW_WRITE_SCOPE,),
+                handler=self.tools.end_planning_phase,
+            ),
+            "vibrant.pause_workflow": MCPToolDefinition(
+                name="vibrant.pause_workflow",
+                description="Pause orchestrator workflow execution.",
+                required_scopes=(WORKFLOW_WRITE_SCOPE,),
+                handler=self.tools.pause_workflow,
+            ),
+            "vibrant.resume_workflow": MCPToolDefinition(
+                name="vibrant.resume_workflow",
+                description="Resume orchestrator workflow execution.",
+                required_scopes=(WORKFLOW_WRITE_SCOPE,),
+                handler=self.tools.resume_workflow,
+            ),
+            "vibrant.accept_review_ticket": MCPToolDefinition(
+                name="vibrant.accept_review_ticket",
+                description="Accept a review ticket and apply the merge/acceptance flow.",
+                required_scopes=(REVIEW_WRITE_SCOPE,),
+                handler=self.tools.accept_review_ticket,
+            ),
+            "vibrant.retry_review_ticket": MCPToolDefinition(
+                name="vibrant.retry_review_ticket",
+                description="Reject a review ticket and request a retry with explicit feedback.",
+                required_scopes=(REVIEW_WRITE_SCOPE,),
+                handler=self.tools.retry_review_ticket,
+            ),
+            "vibrant.escalate_review_ticket": MCPToolDefinition(
+                name="vibrant.escalate_review_ticket",
+                description="Escalate a review ticket for human intervention.",
+                required_scopes=(REVIEW_WRITE_SCOPE,),
+                handler=self.tools.escalate_review_ticket,
+            ),
+            # Transitional aliases
+            "vibrant.update_roadmap": MCPToolDefinition(
+                name="vibrant.update_roadmap",
+                description="Compatibility alias for replacing the roadmap document.",
+                required_scopes=(ROADMAP_WRITE_SCOPE,),
+                handler=self.tools.update_roadmap,
+            ),
+            "vibrant.set_pending_questions": MCPToolDefinition(
+                name="vibrant.set_pending_questions",
+                description="Compatibility alias for legacy pending-question synchronization.",
+                required_scopes=(QUESTIONS_WRITE_SCOPE,),
+                handler=self.tools.set_pending_questions,
+            ),
+            "vibrant.review_task_outcome": MCPToolDefinition(
+                name="vibrant.review_task_outcome",
+                description="Compatibility alias for legacy task-scoped review decisions.",
+                required_scopes=(REVIEW_WRITE_SCOPE,),
+                handler=self.tools.review_task_outcome,
+            ),
+            "vibrant.mark_task_for_retry": MCPToolDefinition(
+                name="vibrant.mark_task_for_retry",
+                description="Compatibility alias for legacy retry routing.",
+                required_scopes=(REVIEW_WRITE_SCOPE,),
+                handler=self.tools.mark_task_for_retry,
+            ),
         }
-
-    def list_resources(self, principal: MCPPrincipal) -> list[MCPResourceDefinition]:
-        return [definition for name, definition in self._resources.items() if has_scopes(principal.scopes, _RESOURCE_SCOPES[name])]
-
-    def list_tools(self, principal: MCPPrincipal) -> list[MCPToolDefinition]:
-        return [definition for name, definition in self._tools.items() if has_scopes(principal.scopes, _TOOL_SCOPES[name])]
-
-    async def read_resource(self, resource_name: str, *, principal: MCPPrincipal, **params: Any) -> Any:
-        definition = self._resources.get(resource_name)
-        if definition is None:
-            raise KeyError(f"Unknown orchestrator MCP resource: {resource_name}")
-        ensure_scopes(principal.scopes, _RESOURCE_SCOPES[resource_name], action=f"read resource {resource_name}")
-        result = definition.handler(**params)
-        if inspect.isawaitable(result):
-            return await result
-        return result
-
-    async def call_tool(self, tool_name: str, *, principal: MCPPrincipal, **params: Any) -> Any:
-        definition = self._tools.get(tool_name)
-        if definition is None:
-            raise KeyError(f"Unknown orchestrator MCP tool: {tool_name}")
-        ensure_scopes(principal.scopes, _TOOL_SCOPES[tool_name], action=f"call tool {tool_name}")
-        result = definition.handler(**params)
-        if inspect.isawaitable(result):
-            return await result
-        return result

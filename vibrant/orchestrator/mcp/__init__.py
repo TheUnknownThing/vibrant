@@ -1,13 +1,11 @@
-"""Typed MCP surface for the orchestrator control plane."""
+"""Typed MCP bridge for the redesigned orchestrator."""
 
-from vibrant.mcp.authz import MCPAuthorizationError, MCPPrincipal
+__all__ = ["OrchestratorMCPServer"]
 
-from .server import MCPResourceDefinition, MCPToolDefinition, OrchestratorMCPServer
 
-__all__ = [
-    "MCPAuthorizationError",
-    "MCPPrincipal",
-    "MCPResourceDefinition",
-    "MCPToolDefinition",
-    "OrchestratorMCPServer",
-]
+def __getattr__(name: str):
+    if name == "OrchestratorMCPServer":
+        from .server import OrchestratorMCPServer
+
+        return OrchestratorMCPServer
+    raise AttributeError(name)

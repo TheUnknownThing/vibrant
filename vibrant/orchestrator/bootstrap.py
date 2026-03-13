@@ -1,421 +1,509 @@
-"""Orchestrator bootstrap and composition."""
+"""Bootstrap and composition root for the redesigned orchestrator."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections import deque
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from vibrant.agents.code_agent import CodeAgent
-from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperAgent
-from vibrant.agents.utils import maybe_forward_event
-from vibrant.agents.merge_agent import MergeAgent
-from vibrant.agents.runtime import AgentRuntime, BaseAgentRuntime
+from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
-from vibrant.consensus import RoadmapDocument, RoadmapParser
-from vibrant.models.agent import AgentRecord, AgentType
-from vibrant.orchestrator.state.backend import OrchestratorStateBackend
+from vibrant.consensus.roadmap import RoadmapDocument
+from vibrant.models.agent import AgentRecord
+from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
+from vibrant.models.task import TaskInfo
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.registry import resolve_provider_adapter
 
-from .agents.manager import AgentManagementService
-from .agents.output_projection import AgentOutputProjectionService
-from .agents.registry import AgentRegistry
-from .agents.runtime import AgentRuntimeService
-from .agents.store import AgentRecordStore
-from .artifacts.consensus import ConsensusService
-from .artifacts.planning import PlanningService
-from .artifacts.questions import QuestionService
-from .artifacts.roadmap import RoadmapService
-from .artifacts.workflow import WorkflowService
-from .execution.git_workspace import GitWorkspaceService, scoped_worktree_root
-from .execution.prompts import PromptService
-from .execution.retry_policy import RetryPolicyService
-from .execution.review import ReviewService
-from .execution.service import TaskExecutionService
-from .gatekeeper_runtime import GatekeeperRuntimeService
-from .execution.dispatcher import TaskDispatcher
-from .execution.git_manager import GitManager
-from .state.store import StateStore
-from .types import TaskResult
-
-CanonicalEventCallback = Callable[[CanonicalEvent], Any]
-
-
-@dataclass(slots=True)
-class _RawEventSubscription:
-    handler: Any
-    agent_id: str | None = None
-    task_id: str | None = None
-    event_types: frozenset[str] | None = None
+from .binding import AgentSessionBindingService
+from .control_plane import OrchestratorControlPlane
+from .conversation import ConversationStore, ConversationStreamService
+from .execution.coordinator import ExecutionCoordinator
+from .gatekeeper import GatekeeperLifecycleService
+from .mcp import OrchestratorMCPServer
+from .review import ReviewControlService
+from .runtime import AgentRuntimeService
+from .stores import (
+    AgentRecordStore,
+    AttemptStore,
+    ConsensusStore,
+    QuestionStore,
+    ReviewTicketStore,
+    RoadmapStore,
+    WorkflowStateStore,
+)
+from .types import (
+    GatekeeperSessionSnapshot,
+    QuestionPriority,
+    QuestionRecord,
+    ReviewResolutionCommand,
+    ReviewResolutionRecord,
+    ReviewTicket,
+    TaskResult,
+    TaskState,
+    WorkflowSnapshot,
+    WorkflowStatus,
+)
+from .workflow import WorkflowPolicyService
+from .workspace import WorkspaceService
 
 
 @dataclass(slots=True)
 class Orchestrator:
-    """Concrete orchestrator root object with explicit service dependencies."""
+    """Composed orchestrator root."""
 
     project_root: Path
     vibrant_dir: Path
-    roadmap_path: Path
-    consensus_path: Path
-    skills_dir: Path
     config: VibrantConfig
-    state_backend: OrchestratorStateBackend
-    gatekeeper: Gatekeeper | Any
-    git_manager: GitManager
-    adapter_factory: Any
-    on_canonical_event: Any | None
-    agent_output_service: AgentOutputProjectionService
-    state_store: StateStore
-    agent_store: AgentRecordStore
-    roadmap_service: RoadmapService
-    consensus_service: ConsensusService
-    agent_registry: AgentRegistry
-    question_service: QuestionService
-    git_service: GitWorkspaceService
-    prompt_service: PromptService
-    workflow_service: WorkflowService
-    gatekeeper_runtime: GatekeeperRuntimeService
-    review_service: ReviewService
-    planning_service: PlanningService
+    workflow_state_store: WorkflowStateStore
+    attempt_store: AttemptStore
+    question_store: QuestionStore
+    consensus_store: ConsensusStore
+    roadmap_store: RoadmapStore
+    review_ticket_store: ReviewTicketStore
+    agent_record_store: AgentRecordStore
+    conversation_store: ConversationStore
+    conversation_stream: ConversationStreamService
     runtime_service: AgentRuntimeService
-    retry_service: RetryPolicyService
-    execution_service: TaskExecutionService
-    agent_manager: AgentManagementService
-    _config_holder: dict[str, VibrantConfig] = field(repr=False)
-    _raw_event_subscribers: list[_RawEventSubscription] = field(default_factory=list, repr=False)
+    workspace_service: WorkspaceService
+    workflow_policy: WorkflowPolicyService
+    review_control: ReviewControlService
+    execution_coordinator: ExecutionCoordinator
+    gatekeeper_lifecycle: GatekeeperLifecycleService
+    control_plane: OrchestratorControlPlane
+    mcp_server: OrchestratorMCPServer
+    session_binding: AgentSessionBindingService
+    gatekeeper: Gatekeeper
+    adapter_factory: Any
+    on_canonical_event: Any | None = None
+    _recent_events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=200), repr=False)
 
     @classmethod
     def load(
         cls,
         project_root: str | Path,
         *,
-        state_backend: OrchestratorStateBackend | None = None,
-        gatekeeper: Gatekeeper | Any | None = None,
-        git_manager: GitManager | None = None,
+        gatekeeper: Gatekeeper | None = None,
         adapter_factory: Any | None = None,
         on_canonical_event: Any | None = None,
-        agent_runtime: AgentRuntime | Any | None = None,
-    ) -> Orchestrator:
+        **_: Any,
+    ) -> "Orchestrator":
         root = find_project_root(project_root)
-        vibrant_dir = root / DEFAULT_CONFIG_DIR
-        roadmap_path = vibrant_dir / "roadmap.md"
-        consensus_path = vibrant_dir / "consensus.md"
-        skills_dir = vibrant_dir / "skills"
-
         ensure_project_files(root)
+        vibrant_dir = root / DEFAULT_CONFIG_DIR
         config = load_config(start_path=root)
-        config_holder = {"value": config}
-        backend = state_backend or OrchestratorStateBackend.load(root)
-        raw_event_subscribers: list[_RawEventSubscription] = []
-        agent_output_service = AgentOutputProjectionService()
-
-        async def handle_canonical_event(event: CanonicalEvent) -> None:
-            agent_output_service.ingest(event)
-            await _dispatch_raw_event_subscribers(raw_event_subscribers, event)
-            await maybe_forward_event(on_canonical_event, event)
-
-        resolved_gatekeeper = gatekeeper or Gatekeeper(
-            root,
-            on_canonical_event=on_canonical_event,
-        )
-        gatekeeper_agent = getattr(resolved_gatekeeper, "agent", None)
-        if gatekeeper_agent is not None:
-            gatekeeper_agent.on_canonical_event = handle_canonical_event
-        resolved_git_manager = git_manager or GitManager(
-            repo_root=root,
-            worktree_root=scoped_worktree_root(root, config.worktree_directory),
-        )
         resolved_adapter_factory = adapter_factory or resolve_provider_adapter(config.provider_kind)
 
-        state_store = StateStore(backend)
-        agent_store = AgentRecordStore(
-            vibrant_dir=vibrant_dir,
-            state_store=state_store,
-        )
-        state_store.bind_agent_store(agent_store)
-        roadmap_service = RoadmapService(roadmap_path, project_name=root.name)
-        consensus_service = ConsensusService(consensus_path, state_store=state_store)
-        agent_registry = AgentRegistry(agent_store=agent_store, vibrant_dir=vibrant_dir)
-        question_service = QuestionService(
-            state_store=state_store,
-            gatekeeper=resolved_gatekeeper,
-        )
-        git_service = GitWorkspaceService(project_root=root, git_manager=resolved_git_manager)
-        prompt_service = PromptService(
-            skills_dir=skills_dir,
-            roadmap_parser=roadmap_service.parser,
-            consensus_service=consensus_service,
-        )
-        workflow_service = WorkflowService(
-            state_store=state_store,
-            roadmap_service=roadmap_service,
-            consensus_service=consensus_service,
-        )
-
-        runtime_factory = agent_runtime
-        if runtime_factory is None:
-            runtime_factory = _build_default_agent_runtime_factory(
-                project_root=root,
-                config_getter=lambda: config_holder["value"],
-                gatekeeper=resolved_gatekeeper,
-                adapter_factory=resolved_adapter_factory,
-                on_canonical_event=handle_canonical_event,
-                agent_registry=agent_registry,
-            )
-
-        runtime_service = AgentRuntimeService(
-            agent_registry=agent_registry,
-            agent_runtime=runtime_factory,
-        )
-        gatekeeper_runtime = GatekeeperRuntimeService(
+        workflow_state_store = WorkflowStateStore(vibrant_dir / "state.json")
+        attempt_store = AttemptStore(vibrant_dir / "attempts.json")
+        question_store = QuestionStore(vibrant_dir / "questions.json")
+        consensus_store = ConsensusStore(vibrant_dir / "consensus.md", project_name=root.name)
+        roadmap_store = RoadmapStore(vibrant_dir / "roadmap.md", project_name=root.name)
+        review_ticket_store = ReviewTicketStore(vibrant_dir / "reviews.json")
+        agent_record_store = AgentRecordStore(vibrant_dir / "agents")
+        conversation_store = ConversationStore(vibrant_dir)
+        conversation_stream = ConversationStreamService(conversation_store)
+        runtime_service = AgentRuntimeService()
+        workspace_service = WorkspaceService(
             project_root=root,
-            state_store=state_store,
-            roadmap_service=roadmap_service,
-            workflow_service=workflow_service,
+            worktree_root=config.worktree_directory,
+        )
+        workflow_policy = WorkflowPolicyService(
+            state_store=workflow_state_store,
+            roadmap_store=roadmap_store,
+            attempt_store=attempt_store,
+            question_store=question_store,
+            agent_store=agent_record_store,
+        )
+        review_control = ReviewControlService(
+            review_ticket_store=review_ticket_store,
+            workflow_policy=workflow_policy,
+            roadmap_store=roadmap_store,
+            workspace_service=workspace_service,
+            attempt_store=attempt_store,
+        )
+        execution_coordinator = ExecutionCoordinator(
+            project_root=root,
+            config=config,
+            consensus_store=consensus_store,
+            roadmap_store=roadmap_store,
+            attempt_store=attempt_store,
+            agent_store=agent_record_store,
+            workspace_service=workspace_service,
+            runtime_service=runtime_service,
+            conversation_stream=conversation_stream,
+            workflow_policy=workflow_policy,
+            adapter_factory=resolved_adapter_factory,
+        )
+        resolved_gatekeeper = gatekeeper or Gatekeeper(root)
+        gatekeeper_lifecycle = GatekeeperLifecycleService(
+            root,
+            runtime_service=runtime_service,
+            conversation_service=conversation_stream,
             gatekeeper=resolved_gatekeeper,
-            agent_registry=agent_registry,
-            runtime_service=runtime_service,
+            session_loader=lambda: workflow_state_store.load().gatekeeper_session,
+            session_saver=workflow_state_store.update_gatekeeper_session,
+            on_record_updated=agent_record_store.upsert,
         )
-        question_service.answer_runner = gatekeeper_runtime.answer_question
-        review_service = ReviewService(
-            gatekeeper=resolved_gatekeeper,
-            state_store=state_store,
-            roadmap_service=roadmap_service,
-            git_service=git_service,
-            gatekeeper_runner=gatekeeper_runtime.run_request,
-        )
-        planning_service = PlanningService(
-            state_store=state_store,
-            question_service=question_service,
-            gatekeeper_runtime=gatekeeper_runtime,
-            roadmap_service=roadmap_service,
-            workflow_service=workflow_service,
-        )
-        retry_service = RetryPolicyService(
-            roadmap_service=roadmap_service,
-            review_service=review_service,
-            git_service=git_service,
-        )
-        execution_service = TaskExecutionService(
-            state_store=state_store,
-            roadmap_service=roadmap_service,
-            workflow_service=workflow_service,
-            git_service=git_service,
-            prompt_service=prompt_service,
-            agent_registry=agent_registry,
-            runtime_service=runtime_service,
-            review_service=review_service,
-            retry_service=retry_service,
-        )
-        agent_manager = AgentManagementService(
-            agent_registry=agent_registry,
-            runtime_service=runtime_service,
-            execution_service=execution_service,
-            output_service=agent_output_service,
+        control_plane = OrchestratorControlPlane(
+            workflow_state_store=workflow_state_store,
+            question_store=question_store,
+            attempt_store=attempt_store,
+            agent_store=agent_record_store,
+            gatekeeper_lifecycle=gatekeeper_lifecycle,
+            conversation_stream=conversation_stream,
+            workflow_policy=workflow_policy,
+            roadmap_store=roadmap_store,
+            review_control=review_control,
         )
 
         orchestrator = cls(
             project_root=root,
             vibrant_dir=vibrant_dir,
-            roadmap_path=roadmap_path,
-            consensus_path=consensus_path,
-            skills_dir=skills_dir,
             config=config,
-            state_backend=backend,
+            workflow_state_store=workflow_state_store,
+            attempt_store=attempt_store,
+            question_store=question_store,
+            consensus_store=consensus_store,
+            roadmap_store=roadmap_store,
+            review_ticket_store=review_ticket_store,
+            agent_record_store=agent_record_store,
+            conversation_store=conversation_store,
+            conversation_stream=conversation_stream,
+            runtime_service=runtime_service,
+            workspace_service=workspace_service,
+            workflow_policy=workflow_policy,
+            review_control=review_control,
+            execution_coordinator=execution_coordinator,
+            gatekeeper_lifecycle=gatekeeper_lifecycle,
+            control_plane=control_plane,
+            mcp_server=None,  # type: ignore[arg-type]
+            session_binding=None,  # type: ignore[arg-type]
             gatekeeper=resolved_gatekeeper,
-            git_manager=resolved_git_manager,
             adapter_factory=resolved_adapter_factory,
             on_canonical_event=on_canonical_event,
-            agent_output_service=agent_output_service,
-            state_store=state_store,
-            agent_store=agent_store,
-            roadmap_service=roadmap_service,
-            consensus_service=consensus_service,
-            agent_registry=agent_registry,
-            question_service=question_service,
-            git_service=git_service,
-            prompt_service=prompt_service,
-            workflow_service=workflow_service,
-            gatekeeper_runtime=gatekeeper_runtime,
-            review_service=review_service,
-            planning_service=planning_service,
-            runtime_service=runtime_service,
-            retry_service=retry_service,
-            execution_service=execution_service,
-            agent_manager=agent_manager,
-            _config_holder=config_holder,
-            _raw_event_subscribers=raw_event_subscribers,
         )
+        orchestrator.mcp_server = OrchestratorMCPServer(orchestrator)
+        orchestrator.session_binding = AgentSessionBindingService(mcp_server=orchestrator.mcp_server)
+        runtime_service.subscribe_canonical_events(orchestrator._record_runtime_event)
+        runtime_service.subscribe_canonical_events(conversation_stream.ingest_canonical)
         orchestrator.refresh()
         return orchestrator
 
     @property
-    def roadmap_parser(self) -> RoadmapParser:
-        return self.roadmap_service.parser
+    def roadmap_path(self) -> Path:
+        return self.roadmap_store.path
 
     @property
-    def roadmap_document(self) -> RoadmapDocument | None:
-        return self.roadmap_service.document
-
-    @property
-    def dispatcher(self) -> TaskDispatcher | None:
-        return self.roadmap_service.dispatcher
+    def consensus_path(self) -> Path:
+        return self.consensus_store.path
 
     @property
     def execution_mode(self) -> RoadmapExecutionMode:
         return self.config.execution_mode
 
     @property
+    def binding_service(self) -> AgentSessionBindingService:
+        return self.session_binding
+
+    @property
     def gatekeeper_busy(self) -> bool:
-        return self.gatekeeper_runtime.busy
+        return self.gatekeeper_lifecycle.busy
+
+    @property
+    def binding_service(self) -> AgentSessionBindingService:
+        return self.session_binding
 
     def refresh(self) -> RoadmapDocument:
         self.config = load_config(start_path=self.project_root)
-        self._config_holder["value"] = self.config
-        self.state_store.refresh()
-        return self.roadmap_service.reload(
-            project_name=self.project_root.name,
-            concurrency_limit=self.state_store.state.concurrency_limit,
-        )
+        return self.roadmap_store.load()
 
-    async def start_gatekeeper_message(self, text: str) -> Any:
-        return await self.planning_service.start_message(text)
+    async def submit_user_message(self, text: str):
+        return await self.control_plane.submit_user_message(text)
 
-    async def submit_gatekeeper_message(self, text: str) -> Any:
-        return await self.planning_service.submit_message(text)
+    async def answer_user_decision(self, question_id: str, answer: str):
+        return await self.control_plane.answer_user_decision(question_id, answer)
 
-    async def answer_pending_question(self, answer: str, *, question: str | None = None) -> Any:
-        return await self.question_service.answer(answer, question=question)
+    async def start_execution(self) -> WorkflowSnapshot:
+        self.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
+        self.consensus_store.set_status_projection(ConsensusStatus.EXECUTING)
+        return self.control_plane.snapshot()
+
+    async def pause_workflow(self) -> WorkflowSnapshot:
+        self.workflow_state_store.update_workflow_status(WorkflowStatus.PAUSED)
+        self.consensus_store.set_status_projection(ConsensusStatus.PAUSED)
+        return self.control_plane.snapshot()
+
+    async def resume_workflow(self) -> WorkflowSnapshot:
+        self.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
+        self.consensus_store.set_status_projection(ConsensusStatus.EXECUTING)
+        return self.control_plane.snapshot()
+
+    async def restart_gatekeeper(self, reason: str | None = None) -> GatekeeperSessionSnapshot:
+        return await self.control_plane.restart_gatekeeper(reason)
+
+    async def stop_gatekeeper(self) -> GatekeeperSessionSnapshot:
+        return await self.control_plane.stop_gatekeeper()
 
     async def run_until_blocked(self) -> list[TaskResult]:
-        self.refresh()
-        return await self.agent_manager.execute_until_blocked()
+        results: list[TaskResult] = []
+        while True:
+            result = await self.run_next_task()
+            if result is None:
+                break
+            results.append(result)
+            if result.outcome in {"awaiting_user", "review_pending", "failed"}:
+                break
+        return results
 
     async def run_next_task(self) -> TaskResult | None:
-        self.refresh()
-        return await self.agent_manager.execute_next_task()
-
-    async def _publish_raw_event(self, event: CanonicalEvent) -> None:
-        await _dispatch_raw_event_subscribers(self._raw_event_subscribers, event)
-
-    def subscribe_raw_events(
-        self,
-        handler: Any,
-        *,
-        agent_id: str | None = None,
-        task_id: str | None = None,
-        event_types: list[str] | tuple[str, ...] | set[str] | None = None,
-    ) -> Callable[[], None]:
-        normalized_event_types = None
-        if event_types is not None:
-            normalized_event_types = frozenset(
-                event_type.strip()
-                for event_type in event_types
-                if isinstance(event_type, str) and event_type.strip()
+        leases = self.workflow_policy.select_next(limit=1)
+        if not leases:
+            self.workflow_policy.maybe_complete()
+            return None
+        lease = leases[0]
+        attempt = await self.execution_coordinator.start_attempt(lease)
+        completion = await self.execution_coordinator.await_attempt_completion(attempt.attempt_id)
+        if completion.status == "awaiting_input":
+            return TaskResult(
+                task_id=completion.task_id,
+                outcome="awaiting_user",
+                summary=completion.summary,
+                error=completion.error,
             )
-        subscription = _RawEventSubscription(
-            handler=handler,
-            agent_id=agent_id,
-            task_id=task_id,
-            event_types=normalized_event_types,
+
+        workspace = self.workspace_service.get_workspace(task_id=completion.task_id, workspace_id=completion.workspace_ref)
+        diff = self.workspace_service.collect_review_diff(workspace)
+        self.review_control.create_ticket(completion, diff)
+        return TaskResult(
+            task_id=completion.task_id,
+            outcome="review_pending",
+            summary=completion.summary,
+            error=completion.error,
+            worktree_path=workspace.path,
         )
-        self._raw_event_subscribers.append(subscription)
 
-        def unsubscribe() -> None:
-            try:
-                self._raw_event_subscribers.remove(subscription)
-            except ValueError:
-                return
+    def snapshot(self) -> WorkflowSnapshot:
+        return self.control_plane.snapshot()
 
-        return unsubscribe
+    def list_recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
+        return list(self._recent_events)[-limit:]
+
+    def get_consensus_document(self) -> ConsensusDocument | None:
+        return self.consensus_store.load()
+
+    def get_roadmap(self) -> RoadmapDocument:
+        return self.roadmap_store.load()
+
+    def get_task(self, task_id: str) -> TaskInfo | None:
+        return self.roadmap_store.get_task(task_id)
+
+    def get_workflow_status(self) -> WorkflowStatus:
+        return self.workflow_state_store.load().workflow_status
+
+    def list_agent_records(self) -> list[AgentRecord]:
+        return self.agent_record_store.list()
+
+    def list_active_agents(self) -> list[AgentRecord]:
+        return self.agent_record_store.list_active()
+
+    def list_active_attempts(self):
+        return self.attempt_store.list_active()
+
+    def get_review_ticket(self, ticket_id: str) -> ReviewTicket | None:
+        return self.review_control.get_ticket(ticket_id)
+
+    def list_pending_review_tickets(self) -> list[ReviewTicket]:
+        return self.review_control.list_pending()
+
+    def request_user_decision(
+        self,
+        text: str,
+        *,
+        priority: QuestionPriority = QuestionPriority.BLOCKING,
+        blocking_scope: str = "planning",
+        task_id: str | None = None,
+        source_agent_id: str | None = None,
+        source_role: str = "gatekeeper",
+        source_conversation_id: str | None = None,
+        source_turn_id: str | None = None,
+    ) -> QuestionRecord:
+        return self.question_store.create(
+            text=text,
+            priority=priority,
+            source_role=source_role,
+            source_agent_id=source_agent_id,
+            source_conversation_id=source_conversation_id,
+            source_turn_id=source_turn_id,
+            blocking_scope=blocking_scope,
+            task_id=task_id,
+        )
+
+    def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionRecord:
+        return self.question_store.withdraw(question_id, reason=reason)
+
+    def update_consensus(
+        self,
+        *,
+        context: str | None = None,
+        status: str | None = None,
+    ) -> ConsensusDocument:
+        if context is not None:
+            document = self.consensus_store.update_context(context)
+        else:
+            document = self.consensus_store.load() or ConsensusDocument(project=self.project_root.name)
+        if status is not None:
+            document.status = ConsensusStatus(status.upper())
+            document = self.consensus_store.write(document)
+        return document
+
+    def append_decision(self, **kwargs: Any) -> ConsensusDocument:
+        return self.consensus_store.append_decision(**kwargs)
+
+    def add_task(self, task: TaskInfo, *, index: int | None = None):
+        self.roadmap_store.add_task(task, index=index)
+        created = self.roadmap_store.get_task(task.id)
+        if created is None:
+            raise KeyError(task.id)
+        return created
+
+    def update_task_definition(self, task_id: str, **patch: Any):
+        return self.roadmap_store.update_task_definition(task_id, **patch)
+
+    def reorder_tasks(self, task_ids: list[str]):
+        return self.roadmap_store.reorder_tasks(task_ids)
+
+    def replace_roadmap(self, *, tasks: list[TaskInfo], project: str | None = None):
+        return self.roadmap_store.replace(tasks=tasks, project=project or self.project_root.name)
+
+    def end_planning_phase(self):
+        self.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
+        self.consensus_store.set_status_projection(ConsensusStatus.EXECUTING)
+        return self.control_plane.snapshot()
+
+    def accept_review_ticket(self, ticket_id: str) -> ReviewResolutionRecord:
+        return self.review_control.resolve(ticket_id, ReviewResolutionCommand(decision="accept"))
+
+    def retry_review_ticket(
+        self,
+        ticket_id: str,
+        *,
+        failure_reason: str,
+        prompt_patch: str | None = None,
+        acceptance_patch: list[str] | None = None,
+    ) -> ReviewResolutionRecord:
+        return self.review_control.resolve(
+            ticket_id,
+            ReviewResolutionCommand(
+                decision="retry",
+                failure_reason=failure_reason,
+                prompt_patch=prompt_patch,
+                acceptance_patch=acceptance_patch,
+            ),
+        )
+
+    def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> ReviewResolutionRecord:
+        return self.review_control.resolve(
+            ticket_id,
+            ReviewResolutionCommand(decision="escalate", failure_reason=reason),
+        )
+
+    def set_pending_questions(
+        self,
+        questions: list[str],
+        *,
+        source_agent_id: str | None = None,
+        source_role: str = "gatekeeper",
+    ) -> list[QuestionRecord]:
+        existing_pending = {record.text: record for record in self.question_store.list_pending()}
+        requested = {question.strip() for question in questions if question.strip()}
+
+        for text, record in existing_pending.items():
+            if text not in requested:
+                self.question_store.withdraw(record.question_id, reason="Legacy pending-question sync removed it")
+
+        created: list[QuestionRecord] = []
+        for text in requested:
+            existing = existing_pending.get(text)
+            if existing is not None:
+                created.append(existing)
+                continue
+            created.append(
+                self.question_store.create(
+                    text=text,
+                    priority=QuestionPriority.BLOCKING,
+                    source_role=source_role,
+                    source_agent_id=source_agent_id,
+                    source_conversation_id=None,
+                    source_turn_id=None,
+                    blocking_scope="planning",
+                    task_id=None,
+                )
+            )
+        return created
+
+    def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None):
+        review_kind = decision.strip().lower()
+        active_attempt = self.attempt_store.get_active_by_task(task_id)
+        if active_attempt is None:
+            raise KeyError(f"No active attempt for task: {task_id}")
+
+        if review_kind in {"accept", "accepted"}:
+            self.workflow_policy.mark_task_accepted(task_id=task_id, attempt_id=active_attempt.attempt_id)
+            return self.roadmap_store.get_task(task_id)
+        if review_kind in {"retry", "rejected", "needs_changes"}:
+            self.workflow_policy.requeue_task(task_id=task_id, attempt_id=active_attempt.attempt_id)
+            return self.roadmap_store.get_task(task_id)
+        if review_kind in {"escalate", "escalated"}:
+            self.workflow_policy.mark_task_escalated(task_id=task_id, attempt_id=active_attempt.attempt_id)
+            return self.roadmap_store.get_task(task_id)
+        raise ValueError(f"Unsupported review decision: {decision}")
+
+    def mark_task_for_retry(
+        self,
+        task_id: str,
+        *,
+        failure_reason: str,
+        prompt: str | None = None,
+        acceptance_criteria: list[str] | None = None,
+    ):
+        patch: dict[str, Any] = {}
+        if prompt is not None:
+            patch["prompt"] = prompt
+        if acceptance_criteria is not None:
+            patch["acceptance_criteria"] = acceptance_criteria
+        if patch:
+            self.roadmap_store.update_task_definition(task_id, patch)
+        active_attempt = self.attempt_store.get_active_by_task(task_id)
+        if active_attempt is not None:
+            self.workflow_policy.requeue_task(task_id=task_id, attempt_id=active_attempt.attempt_id)
+        return self.roadmap_store.record_task_state(task_id, TaskState.READY, failure_reason=failure_reason)
+
+    async def _record_runtime_event(self, event: CanonicalEvent) -> None:
+        self._recent_events.append(dict(event))
+        if self.on_canonical_event is not None:
+            result = self.on_canonical_event(event)
+            if inspect.isawaitable(result):
+                await result
 
 
 def create_orchestrator(
     project_root: str | Path,
     *,
-    state_backend: OrchestratorStateBackend | None = None,
-    gatekeeper: Gatekeeper | Any | None = None,
-    git_manager: GitManager | None = None,
+    gatekeeper: Gatekeeper | None = None,
     adapter_factory: Any | None = None,
     on_canonical_event: Any | None = None,
-    agent_runtime: AgentRuntime | Any | None = None,
+    **kwargs: Any,
 ) -> Orchestrator:
     """Build a fully wired orchestrator for one project."""
 
     return Orchestrator.load(
         project_root,
-        state_backend=state_backend,
         gatekeeper=gatekeeper,
-        git_manager=git_manager,
         adapter_factory=adapter_factory,
         on_canonical_event=on_canonical_event,
-        agent_runtime=agent_runtime,
+        **kwargs,
     )
-
-
-def _build_default_agent_runtime_factory(
-    *,
-    project_root: Path,
-    config_getter: Callable[[], VibrantConfig],
-    gatekeeper: Gatekeeper | Any,
-    adapter_factory: Any | None,
-    on_canonical_event: CanonicalEventCallback | None,
-    agent_registry: AgentRegistry,
-):
-    def _build(agent_record: AgentRecord) -> AgentRuntime:
-        config = config_getter()
-        if agent_record.identity.type is AgentType.GATEKEEPER and isinstance(gatekeeper, Gatekeeper):
-            gatekeeper_agent = gatekeeper.agent
-            agent = GatekeeperAgent(
-                project_root,
-                gatekeeper_agent.config,
-                adapter_factory=gatekeeper_agent.adapter_factory,
-                on_canonical_event=on_canonical_event,
-                on_agent_record_updated=agent_registry.make_record_callback(),
-                timeout_seconds=gatekeeper_agent.timeout_seconds,
-            )
-        elif agent_record.identity.type is AgentType.MERGE:
-            agent = MergeAgent(
-                project_root,
-                config,
-                adapter_factory=adapter_factory or resolve_provider_adapter(config.provider_kind),
-                on_canonical_event=on_canonical_event,
-                on_agent_record_updated=agent_registry.make_record_callback(),
-            )
-        else:
-            agent = CodeAgent(
-                project_root,
-                config,
-                adapter_factory=adapter_factory or resolve_provider_adapter(config.provider_kind),
-                on_canonical_event=on_canonical_event,
-                on_agent_record_updated=agent_registry.make_record_callback(),
-            )
-        return BaseAgentRuntime(agent)
-
-    return _build
-
-
-async def _dispatch_raw_event_subscribers(
-    subscribers: list[_RawEventSubscription],
-    event: CanonicalEvent,
-) -> None:
-    for subscription in tuple(subscribers):
-        if not _raw_event_matches(subscription, event):
-            continue
-        await maybe_forward_event(subscription.handler, event)
-
-
-def _raw_event_matches(subscription: _RawEventSubscription, event: CanonicalEvent) -> bool:
-    if subscription.agent_id is not None and event.get("agent_id") != subscription.agent_id:
-        return False
-    if subscription.task_id is not None and event.get("task_id") != subscription.task_id:
-        return False
-    if subscription.event_types is not None and str(event.get("type") or "") not in subscription.event_types:
-        return False
-    return True
-
-
-__all__ = ["Orchestrator", "create_orchestrator"]

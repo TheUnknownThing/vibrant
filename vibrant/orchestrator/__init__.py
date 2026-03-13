@@ -1,24 +1,29 @@
-"""Orchestration engine components."""
+"""Redesigned orchestrator package."""
 
-from .bootstrap import Orchestrator, create_orchestrator
-from .execution.dispatcher import TaskDispatcher
-from .execution.git_manager import GitManager
-from .facade import OrchestratorFacade, OrchestratorSnapshot
-from .mcp import OrchestratorMCPServer
-from .agents.output_projection import AgentOutputProjectionService
-from .state.backend import OrchestratorStateBackend
-from .types import TaskResult, OrchestratorAgentSnapshot
+from .types import OrchestratorAgentSnapshot, TaskResult
 
 __all__ = [
-    "TaskResult",
-    "GitManager",
-    "AgentOutputProjectionService",
     "Orchestrator",
-    "OrchestratorFacade",
     "OrchestratorAgentSnapshot",
+    "OrchestratorFacade",
     "OrchestratorMCPServer",
     "OrchestratorSnapshot",
-    "OrchestratorStateBackend",
-    "TaskDispatcher",
+    "TaskResult",
     "create_orchestrator",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"Orchestrator", "create_orchestrator"}:
+        from .bootstrap import Orchestrator, create_orchestrator
+
+        return {"Orchestrator": Orchestrator, "create_orchestrator": create_orchestrator}[name]
+    if name in {"OrchestratorFacade", "OrchestratorSnapshot"}:
+        from .facade import OrchestratorFacade, OrchestratorSnapshot
+
+        return {"OrchestratorFacade": OrchestratorFacade, "OrchestratorSnapshot": OrchestratorSnapshot}[name]
+    if name == "OrchestratorMCPServer":
+        from .mcp import OrchestratorMCPServer
+
+        return OrchestratorMCPServer
+    raise AttributeError(name)

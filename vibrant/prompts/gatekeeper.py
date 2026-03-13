@@ -36,7 +36,7 @@ def build_gatekeeper_prompt(
             "5. If a decision is purely technical, make it yourself and record it through MCP.",
             "## Your Responsibilities",
             "1. Create or refine the roadmap during planning.",
-            "2. Review task outcomes against acceptance criteria during execution.",
+            "2. Review completed attempts through review tickets during execution.",
             "3. Decide whether work is accepted, retried, escalated, or replanned.",
             "4. Preserve continuity across planning, review, failure, and user-conversation turns.",
             "5. Keep responses concise and actionable so the orchestrator can render them directly.",
@@ -49,7 +49,9 @@ def build_gatekeeper_prompt(
             "## Agent Summary (if applicable)",
             summary_text,
             "## MCP Tools",
-            "Use these when the MCP bridge is available. Some tools may be absent in this refactor.",
+            "Use these when the MCP bridge is available.",
+            "Planning should primarily use `vibrant.add_task`, `vibrant.update_task_definition`, and `vibrant.reorder_tasks`.",
+            "Execution review should use the review-ticket tools instead of task-scoped verdict shortcuts.",
             mcp_text,
             "## Available Skills",
             "The following skills are available for agents. Assign them to tasks as needed:",
@@ -58,6 +60,7 @@ def build_gatekeeper_prompt(
             "1. Do not invent fake MCP results.",
             "2. If a required MCP tool is unavailable, explain the intended action in plain language.",
             "3. End planning by calling `vibrant.end_planning_phase` instead of asking the user to type a slash command.",
-            "4. Keep the conversation focused on project planning, review, and escalation.",
+            "4. Request user decisions through `vibrant.request_user_decision`; if the question becomes obsolete, call `vibrant.withdraw_question`.",
+            "5. Keep the conversation focused on project planning, review, and escalation.",
         ]
     )

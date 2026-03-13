@@ -1,9 +1,11 @@
 # Project Vibrant — Specification Document
-> **Version**: 1.1.1
-> **Date**: 2026-03-08
+> **Version**: 1.2.0
+> **Date**: 2026-03-13
 > **Author**: Spec-Driven Development Architect
 > **Status**: APPROVED
+
 ---
+
 ## Table of Contents
 0. [Changelog](#0-changelog)
 1. [Executive Summary](#1-executive-summary)
@@ -22,620 +24,666 @@
 14. [v1 Scope & Non-Goals](#14-v1-scope--non-goals)
 15. [Acceptance Criteria](#15-acceptance-criteria)
 16. [Glossary](#16-glossary)
+
 ---
+
 ## 0. Changelog
 
+- **1.2.0** (2026-03-13): Replaced the legacy result-parsing orchestrator model with the command-driven redesign. The orchestrator now owns all durable state under `.vibrant/`, the Gatekeeper mutates state only through typed MCP tools, execution is attempt-centric, processed conversation history is orchestrator-owned, and workflow state is authoritative over consensus metadata.
 - **1.1.1** (2026-03-08): Corrected the Codex app-server protocol details.
 - **1.1.0** (2026-03-07): Updated the Codex integration design.
 - **1.0.0** (2026-03-07): Initial draft.
 
 ---
+
 ## 1. Executive Summary
-**Vibrant** is a terminal-based management control plane for orchestrating autonomous coding agents. It is *not* an IDE — it is an **Air Traffic Control** system for agentic software development.
-Vibrant enables a single human operator to **propose a project**, collaborate with a Gatekeeper agent to **form a structured plan**, and then **delegate execution** to a fleet of Codex CLI agents that self-validate and self-correct. The Gatekeeper — itself an agent process — guards a **Consensus Pool** (a versioned Markdown document) that serves as the single source of truth for project state, decisions, and progress.
+
+**Vibrant** is a terminal-based control plane for orchestrating autonomous coding agents. It is not an IDE. It is an orchestrator that manages agent lifecycle, durable project state, workflow execution, review, and operator interaction.
+
+Vibrant enables one human operator to propose a project, collaborate with a **Gatekeeper** agent to produce or revise a roadmap, and then delegate implementation to scoped worker agents. The central architectural rule is that the **orchestrator owns every durable artifact under `.vibrant/`**. The Gatekeeper owns planning and review decisions, but it expresses those decisions only through **typed MCP commands** issued to the orchestrator.
+
+The design intentionally separates:
+
+- **authority**: who decides
+- **persistence**: who writes files
+- **runtime control**: who spawns, resumes, interrupts, and stops agents
+- **conversation history**: what the TUI reads and what provider logs are used for
+
+This turns the orchestrator from a result-parsing runtime into a **command-driven control plane**.
+
 ### Key Value Proposition
+
 | Current Gap | Vibrant Solution |
 |---|---|
-| Single agents degrade after ~1 hour due to context limits | Multi-agent pipeline with just-in-time context loading; each agent is short-lived and scoped |
-| No supervision → garbage code in long-running tasks | Gatekeeper validates every task output; modifies plan on failure |
-| "Coarse-grained vibe coding" (manual human verification) | Agent-driven self-validation (unit tests + e2e test agents) |
-| No structured plan → agents drift from objectives | Consensus Pool is the immutable contract; Gatekeeper enforces adherence |
+| Single long-lived agents degrade under context pressure | Multi-agent execution with short-lived, scoped workers |
+| Runtime output is ambiguous or lossy | Typed orchestrator state plus canonical runtime events and durable conversation frames |
+| Planning and review drift without strong authority boundaries | Gatekeeper owns decisions; orchestrator owns durable state and workflow transitions |
+| Provider logs are hard to use as UI history | Orchestrator-owned conversation stream and history store back the TUI directly |
+
 ### Target Platform
-- Linux-like environments (Linux, WSL)
-- Python ≥ 3.11 with [Rich](https://github.com/Textualize/rich) / [Textual](https://github.com/Textualize/textual) for TUI
+
+- Linux-like environments including Linux and WSL
+- Python >= 3.11
+- Textual / Rich for the TUI
+- Codex CLI as the initial provider backend
+
 ---
+
 ## 2. Design Philosophy
+
 ### 2.1 Everything Is an Agent
-Every non-trivial operation — coding, testing, merge-conflict resolution, e2e validation — is performed by a spawned agent process. The Vibrant core is an **orchestrator**, not an executor.
-### 2.2 Consensus as Contract
-The Consensus Pool is a structured Markdown document that records:
-- Outline of project for new agents to read (What they need to know to get started)
-- Design choices made by gatekeeper or user
-- Active goals and assignments
-No agent may deviate from the consensus. The Gatekeeper is the sole writer (except for User overrides via Gatekeeper mediation) of the pool, and the pool is kept short and readable by the Gatekeeper.
-When a new agent is spawned, the consensus pool is always read as context.
-### 2.3 Just-in-Time Context
-Agents are loaded with only the context they need for their specific task. Skills (text files) and project files are injected at spawn time, not preloaded.
-### 2.4 Human-in-the-Loop, Not Human-in-the-Way
-The pipeline runs autonomously. The user is only interrupted for **high-level decisions** (product direction, architecture pivots). Technical questions are resolved by the Gatekeeper. The Gatekeeper decides what questions are important to the user (design choices, not implementation details).
-### 2.5 Roadmap for Iterative Development
-When the project is initiated, the Gatekeeper creates a structured plan called the Roadmap. The roadmap outlines the tasks needed to complete the project, and the Gatekeeper updates it as tasks are completed or if re-planning is needed. The active step guides the prompts given to the sub-agents.
+
+All non-trivial work is performed by agent processes. Code execution, validation, merge conflict resolution, and Gatekeeper planning/review are agent-driven. The Python process remains an orchestrator, not an executor of project tasks.
+
+### 2.2 Orchestrator-Owned Durable State
+
+The orchestrator is the sole writer for durable project state under `.vibrant/`, including:
+
+- workflow session state
+- roadmap persistence
+- consensus persistence
+- question records
+- attempt records
+- review tickets
+- agent records
+- conversation history
+
+The Gatekeeper does not mutate files directly and does not update state by prose output. It issues commands. The orchestrator validates, persists, and publishes those changes.
+
+### 2.3 Typed Mutation Path
+
+The Gatekeeper controls planning, review, pause/resume, and user-question requests only through typed MCP tools. The orchestrator must not infer authoritative decisions from:
+
+- free-form Gatekeeper text
+- roadmap diffs
+- task summaries
+- provider-native transcripts
+
+Typed commands are the authority path.
+
+### 2.4 Consensus as Contract, Workflow as Authority
+
+The consensus pool remains the shared project contract for new agents: goals, decisions, current context, and onboarding guidance. However, **workflow state is authoritative in orchestrator state**, not in `consensus.md`. If workflow status is mirrored into consensus metadata, that value is a **one-way projection** from the workflow state machine.
+
+### 2.5 Just-in-Time Context
+
+Agents receive only the project files, skills, and roadmap context needed for the current task. The orchestrator assembles prompts and capability bindings at spawn time.
+
+### 2.6 Human-in-the-Loop, Not Human-in-the-Way
+
+The user is interrupted only for high-level product, UX, or architecture decisions. Technical decisions are Gatekeeper-owned unless they require escalation. User answers are host-owned: the orchestrator records, routes, and resolves them.
+
 ---
+
 ## 3. System Architecture
-### 3.1 High-Level Architecture Diagram
+
+### 3.1 High-Level Architecture
+
 ```
-┌──────────────────────────────────────────────────────────┐
-│                       VIBRANT TUI                        │
-│  ┌─────────┐ ┌──────────────┐ ┌───────────┐ ┌────────┐   │
-│  │  Plan   │ │ Agent Output │ │ Consensus │ │  Chat  │   │
-│  │  Tree   │ │   Streams    │ │   Pool    │ │  Q&A   │   │
-│  │  (A)    │ │    (B)       │ │   (C)     │ │  (D)   │   │
-│  └─────────┘ └──────────────┘ └───────────┘ └────────┘   │
-└────────────────────────┬─────────────────────────────────┘
-                         │
-              ┌──────────▼──────────┐
-              │    Orchestrator     │
-              │    (Python Core)    │
-              │                     │
-              │  ┌───────────────┐  │
-              │  │  Gatekeeper   │  │  ← Spawned Codex CLI agent
-              │  │  (Agent)      │  │
-              │  └───────┬───────┘  │
-              │          │          │
-              │  ┌───────▼───────┐  │
-              │  │ Task Dispatch │  │
-              │  │   Engine      │  │
-              │  └───────┬───────┘  │
-              └──────────┼──────────┘
-                         │
-          ┌──────────────┼──────────────┐
-          │              │              │
-   ┌──────▼──────┐ ┌────▼─────┐ ┌──────▼──────┐
-   │ Code Agent  │ │ Code     │ │ Test Agent  │
-   │ (Codex CLI) │ │ Agent N  │ │ (Codex CLI) │
-   │ worktree/1  │ │ wt/N     │ │ worktree/T  │
-   └─────────────┘ └──────────┘ └─────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                          VIBRANT TUI                         │
+│  roadmap │ conversations │ consensus │ review/questions │ logs │
+└───────────────────────────────┬──────────────────────────────┘
+                                │
+                    ┌───────────▼───────────┐
+                    │  Orchestrator Control │
+                    │        Plane          │
+                    └───────────┬───────────┘
+                                │
+         ┌──────────────────────┼──────────────────────┐
+         │                      │                      │
+ ┌───────▼────────┐   ┌─────────▼──────────┐   ┌──────▼──────────┐
+ │ Gatekeeper     │   │ Workflow / Review  │   │ Conversation /  │
+ │ Lifecycle      │   │ / Execution Policy │   │ Runtime Event   │
+ │ + MCP Binding  │   │ + Workspace        │   │ Projection      │
+ └───────┬────────┘   └─────────┬──────────┘   └──────┬──────────┘
+         │                      │                      │
+   ┌─────▼─────┐         ┌──────▼──────┐       ┌──────▼──────┐
+   │ Gatekeeper│         │ Worker/Test │       │ Provider     │
+   │ Agent     │         │ /Merge      │       │ Adapters     │
+   └───────────┘         └─────────────┘       └──────────────┘
 ```
+
 ### 3.2 Component Overview
-Note: In the first iteration we will only implement for codex cli, but please design with extensibility in mind for future agent types.
+
 | Component | Type | Responsibility |
 |---|---|---|
-| **Orchestrator** | Python process (long-running) | Lifecycle management, TUI rendering, state persistence, provider session management, process spawning |
-| **Gatekeeper** | Spawned Codex CLI agent | Plan management, agent output evaluation, consensus updates, user escalation |
-| **Code Agent** | Spawned Codex CLI agent | Execute a single task from the plan in an isolated git worktree |
-| **Test Agent** | Spawned Codex CLI agent | Run test suites (unit, e2e) against agent output; read-only access |
-| **Merge Agent** | Spawned Codex CLI agent | Resolve merge conflicts when integrating agent branches |
-| **Codex Provider Adapter** | Orchestrator subservice | Launches `codex app-server`, manages JSON-RPC session/thread lifecycle, and normalizes provider events |
-| **Consensus Pool** | Markdown file (`.vibrant/consensus.md`) | Versioned source of truth for plan, decisions, and progress |
-| **Provider Event Logs** | NDJSON files under `.vibrant/logs/providers/` | Native and canonical runtime event audit trail for debugging and recovery |
-| **Skill Store** | Directory of text files (`.vibrant/skills/`) | Just-in-time loadable skill definitions |
-### 3.3 Process Hierarchy
-Here is an example of coordination between components during a project run:
-```
-vibrant (Python)
-├── gatekeeper (codex CLI, spawned on-demand)
-├── agent-task-001 (codex CLI, isolated worktree)
-├── agent-task-002 (codex CLI, isolated worktree)
-├── agent-test-001 (codex CLI, read-only)
-└── agent-merge-001 (codex CLI, on conflict)
-```
+| **Orchestrator Control Plane** | Python service | Global workflow coordination, user routing, conversation recording, event publication, snapshots and subscriptions |
+| **Agent Session Binding** | Python service | Assign role-scoped MCP capabilities to Gatekeeper, workers, validators, and merge agents |
+| **Gatekeeper Lifecycle** | Python service | Spawn, resume, interrupt, stop, and restart the Gatekeeper using generic runtime handles |
+| **Workflow Policy** | Python service | Task eligibility, leases, task-state transitions, blocking rules, completion detection |
+| **Execution Coordinator** | Python service | Attempt creation, workspace prep, prompt assembly, worker runtime, validation orchestration, artifact collection |
+| **Review Control** | Python service | Review ticket creation, resolution, merge follow-up, retry/escalation routing |
+| **Runtime Service** | Python service | Generic start/resume/wait/interrupt/kill for all agents plus canonical runtime event publication |
+| **Conversation Stream** | Python service | TUI-facing conversation frames, durable history, subscriptions, replay, recovery |
+| **Workspace Service** | Python service | Worktree creation, reset, diff collection, merge, discard |
+| **Gatekeeper** | Agent process | Planning and review decisions issued through typed MCP calls |
+| **Workers / Validators / Merge Agents** | Agent processes | Task execution, validation, merge conflict resolution with no control-plane authority |
+
+### 3.3 Authority Model
+
+| Role | Owns Decisions? | Writes `.vibrant/` State? | Controls Workflow? |
+|---|---|---|---|
+| **Orchestrator** | No product decisions, yes system transitions | Yes | Yes |
+| **Gatekeeper** | Yes, for planning/review/escalation | No, only through MCP tools | Indirectly, through typed commands |
+| **Workers** | No | No | No |
+
 ---
+
 ## 4. Data Model & Storage
+
 ### 4.1 Directory Structure
-All Vibrant state lives in `.vibrant/` at the project root. This directory is committed to git, providing natural version control.
+
+All orchestrator-owned state lives under `.vibrant/` at the project root.
+
 ```
 <project-root>/
 ├── .vibrant/
-│   ├── .gitignore                # Ignore logs, imported conversations, and other generated artifacts
-│   ├── vibrant.toml              # Project-level configuration
-│   ├── roadmap.md                # Project-level roadmap
-│   ├── consensus.md              # The Consensus Pool (plan + decisions + progress)
-│   ├── consensus.history/        # Snapshot archive (auto-generated)
-│   │   ├── consensus.2026-03-07T22-00-00.md
-│   │   └── consensus.2026-03-07T23-15-00.md
-│   ├── skills/                   # Skill definition files
-│   │   ├── gui-design.md
-│   │   ├── testing-strategy.md
-│   │   └── ...
-│   ├── agents/                   # Agent run records, including provider resume metadata
-│   │   ├── agent-task-001.json
-│   │   ├── agent-task-002.json
-│   │   └── ...
-│   ├── conversations/            # Imported conversation snapshots / optional fallback artifacts
-│   │   ├── gatekeeper-session-001.jsonl
-│   │   └── agent-task-001.jsonl
-│   ├── prompts/                  # Generated prompt templates
-│   │   └── ...
-│   ├── logs/
-│   │   └── providers/
-│   │       ├── native/           # Raw provider events / stderr-oriented diagnostics
-│   │       └── canonical/        # Normalized runtime events used by Vibrant
-│   └── state.json                # Orchestrator runtime state (durable)
-└── ... (project source code)
-```
-### 4.2 Consensus Pool Format (`consensus.md`)
-The consensus pool is a structured Markdown file with machine-parseable sections delimited by HTML comments for reliable parsing.
-```markdown
-# Consensus Pool — Project {name}
-<!-- META:START -->
-- **Project**: {name}
-- **Created**: {ISO 8601 timestamp}
-- **Last Updated**: {ISO 8601 timestamp}
-- **Version**: {integer, auto-incremented on every write}
-- **Status**: PLANNING | EXECUTING | PAUSED | COMPLETED | FAILED
-<!-- META:END -->
-## Objectives
-<!-- OBJECTIVES:START -->
-{Free-form markdown describing the high-level project goals.}
-<!-- OBJECTIVES:END -->
-## Design Choices
-<!-- DECISIONS:START -->
-### Decision {n}: {title}
-- **Date**: {ISO 8601}
-- **Made By**: `gatekeeper` | `user`
-- **Context**: {why this decision was needed}
-- **Resolution**: {what was decided}
-- **Impact**: {what tasks/plan items were affected}
-<!-- DECISIONS:END -->
-## Getting Started
-Simple, straightforward instructions for a new agent to get up to speed and start contributing. This is the "onboarding doc" for agents. Prefer links instead of embedding large amounts of context.
-```
-### 4.3 Agent Record Format (`agents/agent-task-001.json`)
-```json
-{
-  "agent_id": "agent-task-001",
-  "task_id": "task-001",
-  "type": "code | test | merge | gatekeeper",
-  "status": "spawning | connecting | running | awaiting_input | completed | failed | killed",
-  "pid": 12345,
-  "branch": "vibrant/task-001",
-  "worktree_path": "/tmp/vibrant-worktrees/task-001",
-  "started_at": "2026-03-07T22:00:00Z",
-  "finished_at": "2026-03-07T22:25:00Z",
-  "exit_code": 0,
-  "provider": {
-    "kind": "codex",
-    "transport": "app-server-json-rpc",
-    "runtime_mode": "full-access",
-    "provider_thread_id": "thread_abc123",
-    "resume_cursor": {"threadId": "thread_abc123"},
-    "native_event_log": ".vibrant/logs/providers/native/agent-task-001.ndjson",
-    "canonical_event_log": ".vibrant/logs/providers/canonical/agent-task-001.ndjson"
-  },
-  "summary": "...(~500 words from agent)...",
-  "prompt_used": "...",
-  "skills_loaded": ["gui-design", "testing-strategy"],
-  "retry_count": 0,
-  "max_retries": 3,
-  "error": null
-}
-```
-### 4.4 Orchestrator State (`state.json`)
-```json
-{
-  "session_id": "uuid",
-  "started_at": "ISO8601",
-  "status": "running | paused | completed",
-  "active_agents": ["agent-task-001", "agent-task-003"],
-  "gatekeeper_status": "idle | running | awaiting_user",
-  "pending_questions": ["Q1", "Q3"],
-  "last_consensus_version": 14,
-  "concurrency_limit": 4,
-  "provider_runtime": {
-    "agent-task-001": {
-      "status": "ready",
-      "provider_thread_id": "thread_abc123"
-    }
-  },
-  "completed_tasks": ["task-001", "task-002"],
-  "failed_tasks": [],
-  "total_agent_spawns": 7
-}
-```
----
-## 5. Core Workflows
-### 5.1 End-to-End Workflow (Happy Path)
-```
-┌──────────┐     ┌────────────┐     ┌──────────────┐     ┌──────────────┐
-│  User    │     │ Gatekeeper │     │ Orchestrator │     │ Code Agents  │
-│ (Human)  │     │ (Agent)    │     │ (Python)     │     │ (Codex)      │
-└────┬─────┘     └─────┬──────┘     └──────┬───────┘     └──────┬───────┘
-     │                 │                   │                    │
-     │  1. Proposal    │                   │                    │
-     │────────────────▶│                   │                    │
-     │                 │                   │                    │
-     │  2. Questions   │                   │                    │
-     │◀────────────────│                   │                    │
-     │                 │                   │                    │
-     │  3. Answers     │                   │                    │
-     │────────────────▶│                   │                    │
-     │                 │                   │                    │
-     │  4. Draft Plan  │                   │                    │
-     │◀────────────────│                   │                    │
-     │                 │                   │                    │
-     │  5. Approve/Edit│                   │                    │
-     │────────────────▶│                   │                    │
-     │                 │                   │                    │
-     │                 │  6. Write         │                    │
-     │                 │  consensus.md     │                    │
-     │                 │  roadmap.md       │                    │
-     │                 │─────────────────▶ │                    │
-     │                 │                   │                    │
-     │                 │                   │  7. Spawn agents   │
-     │                 │                   │───────────────────▶│
-     │                 │                   │                    │
-     │                 │                   │  8. Task complete  │
-     │                 │                   │◀───────────────────│
-     │                 │                   │   (+ 500w summary) │
-     │                 │                   │                    │
-     │                 │  9. Evaluate      │                    │
-     │                 │◀─────────────────│                    │
-     │                 │                   │                    │
-     │                 │  10. Verdict +    │                    │
-     │                 │  consensus update │                    │
-     │                 │─────────────────▶│                    │
-     │                 │                   │                    │
-     │                 │                   │  11. Next task...  │
-     │                 │                   │───────────────────▶│
-     │                 │                   │                    │
-```
-### 5.2 Workflow States (Orchestrator State Machine)
-```
-                    ┌──────────┐
-                    │  INIT    │
-                    └────┬─────┘
-                         │ user provides proposal
-                         ▼
-                    ┌──────────┐
-              ┌─────│ PLANNING │◀────────────────────┐
-              │     └────┬─────┘                     │
-              │          │ plan approved              │
-              │          ▼                            │
-              │     ┌───────────┐                     │
-              │     │ EXECUTING │──── gatekeeper      │
-              │     └─────┬─────┘    deems re-plan ───┘
-              │           │                  needed
-              │           │ all tasks done
-              │           ▼
-              │     ┌───────────┐
-              │     │ VALIDATING│
-              │     └─────┬─────┘
-              │           │
-              │     ┌─────▼─────┐     ┌──────────┐
-              │     │ COMPLETED │     │  PAUSED  │
-              │     └───────────┘     └──────────┘
-              │                            ▲
-              └────── user pauses ─────────┘
-```
-### 5.3 Task Lifecycle
-```
-pending → queued → in-progress → completed → [gatekeeper: accepted]
-                        │                         │
-                        │ (failure)               │ (rejected)
-                        ▼                         ▼
-                      failed ──→ [gatekeeper prompts with lesson learnt from failure ] ──→ queued (retry)
-                        │
-                        │ (max retries exceeded)
-                        ▼
-                    escalated ──→ [user notified]
-```
----
-## 6. Component Specifications
-### 6.1 Orchestrator (`vibrant/orchestrator.py`)
-The Orchestrator is the core Python process. It is the only long-running process.
-**Responsibilities:**
-1. Parse and manage `consensus.md`
-2. Maintain `state.json` (durable across restarts)
-3. Spawn/kill agent subprocesses (Codex CLI)
-4. Monitor agent lifecycle (PID tracking, exit codes)
-5. Route completed task summaries to the Gatekeeper
-6. Render the TUI via Textual
-7. Handle user input (approval, Q&A responses, consensus review)
-8. Enforce concurrency limits
-9. Manage git worktrees (create/cleanup)
-## 7. TUI Specification
-See the tui redesign guide in `docs/tui.md`.
-### 8.4 Canonical Runtime Event Model
-Codex's stable app-server surface currently exposes notifications and requests such as:
-- `sessionConfigured`
-- `thread/started`
-- `turn/started`
-- `item/started`
-- `item/completed`
-- `item/agentMessage/delta`
-- `turn/completed`
-- `error`
-- server-initiated JSON-RPC requests such as `item/tool/requestUserInput`, `item/commandExecution/requestApproval`, and `item/fileChange/requestApproval`
-
-Codex may also emit supplementary native notifications under `codex/event/*`. Vibrant should capture those in the native provider log as best-effort diagnostics, but the canonical layer should normalize everything into a stable internal event vocabulary, including at minimum:
-- `session.started`
-- `session.state.changed`
-- `thread.started`
-- `turn.started`
-- `content.delta`
-- `request.opened`
-- `request.resolved`
-- `user-input.requested`
-- `user-input.resolved`
-- `task.progress`
-- `task.completed`
-- `turn.completed`
-- `runtime.error`
-
-Each canonical event should use the same dict-backed envelope regardless of backend:
-- required: `type`, `timestamp`
-- optional common routing fields: `origin`, `provider`, `agent_id`, `task_id`, `provider_thread_id`
-- optional provider escape hatch: `provider_payload`
-
-Known event-specific top-level fields should stay provider-neutral. In particular:
-- `thread.started`: `resumed`, optional `thread_path`, optional `thread`
-- `turn.started` / `turn.completed` / `task.completed`: `turn_id`, optional `turn_status`, optional `turn`
-- `content.delta`: `item_id`, `turn_id`, `delta`
-- `reasoning.summary.delta`: `item_id`, `turn_id`, `delta`, optional `summary_index`
-- `task.progress`: `item`, optional `turn_id`, optional `item_type`, optional `text`
-- `request.opened`: `request_id`, `request_kind`, `method`, optional `params`
-- `request.resolved`: `request_id`, `request_kind`, `method`, optional `result`, optional `error`, optional `error_message`
-- `user-input.requested` / `user-input.resolved`: the request fields above, plus orchestrator-generated question fields when applicable
-- `runtime.error`: optional `error`, optional `error_code`, optional `error_message`
-
-Backend-specific wire payloads should not introduce new top-level canonical keys unless they are intended to become part of the shared contract. Extra provider detail belongs in `provider_payload`.
-
-These canonical events drive:
-- Panel B live output rendering
-- task progress updates in the TUI
-- Gatekeeper evaluation inputs
-- crash recovery / resume logic
-- observability and audit logs
-
-Raw stdout/stderr remains useful for debugging, but it is not the primary integration contract.
-### 8.5 Session Persistence, Resume, and Requests
-Vibrant should persist provider-session bindings durably:
-- `provider_thread_id` (the primary Codex resume handle)
-- `thread.path` / rollout-path metadata when available
-- Vibrant-managed replay cursor or last-seen native/canonical sequence metadata, if maintained
-- runtime mode and approval policy
-- current status
-- last known active turn / task metadata
-- log file paths
-
-On restart:
-1. Reconstruct active agents from `state.json` and `.vibrant/agents/*.json`.
-2. Re-launch `codex app-server` for any recoverable in-flight agent.
-3. Attempt `thread/resume` using `provider_thread_id` as the primary key.
-4. If resume fails with a recoverable “missing thread / unknown thread” class of error, mark the session stale, fall back to a fresh session, and route the decision to the Gatekeeper.
-5. Use rollout-path metadata or reconstructed history only as explicit fallback strategies when the provider supports them.
-
-If Codex emits approval or user-input requests, Vibrant must do two things:
-1. Record them as structured canonical request events.
-2. Respond to the server with a JSON-RPC response payload; these are server-initiated requests, not fire-and-forget notifications.
-### 8.6 Logging & Conversation Artifacts
-Vibrant should retain two best-effort NDJSON log streams per agent:
-1. **Native provider log** — close to Codex runtime JSON messages plus stderr diagnostics.
-2. **Canonical provider log** — normalized events consumed by Vibrant.
-
-Operational notes:
-- Logs should live under `.vibrant/logs/providers/` and be safe to rotate or cap.
-- The native log should preserve raw JSON-RPC requests, responses, notifications, server-initiated requests, parse failures, and plain stderr lines.
-- Imported JSONL conversation history from `~/.codex/` is still useful as a fallback or debugging artifact, but it is no longer the primary source of truth for task outcomes.
-- Final summaries should be extracted from canonical completion events or the final assistant message, then copied into the agent record.
----
-## 9. Gatekeeper Specification
-### 9.1 Nature
-The Gatekeeper is **itself a Codex CLI agent process**, spawned by the Orchestrator. It is not a direct LLM API call — it is a full Codex session with file system access to the `.vibrant/` directory.
-### 9.2 Gatekeeper Invocation Triggers
-The Gatekeeper is invoked (spawned) when:
-| Trigger | Context Provided |
-|---|---|
-| **Project start** | User proposal → Gatekeeper creates initial plan |
-| **Task completion** | Agent summary + diff → Gatekeeper evaluates |
-| **Task failure** | Error logs + agent output → Gatekeeper re-plans |
-| **Max retries exceeded** | Failure history → Gatekeeper escalates or pivots |
-| **User requests conversation** | User message → Gatekeeper responds and updates consensus |
-### 9.3 Gatekeeper Prompt Template
-```
-You are the Gatekeeper for Project {name}. You are the sole authority over the project plan.
-## Your Responsibilities
-1. Evaluate agent output against the plan's acceptance criteria.
-2. Update .vibrant/consensus.md when tasks are completed or when the plan needs adjustment.
-3. If an agent failed, analyze the failure and modify the task's prompt or acceptance criteria.
-4. If you encounter a high-level decision (product direction, UX, architecture), ask the user
-   by adding a question to the Questions section of consensus.md with priority "blocking".
-5. If the decision is purely technical, make it yourself and log it in the Decisions section.
-## Current Consensus
-{contents of .vibrant/consensus.md}
-## Trigger
-{trigger_type}: {trigger_description}
-## Agent Summary (if applicable)
-{agent_summary}
-## Rules
-1. Always update consensus.md directly — it is the source of truth.
-2. Increment the version number in META on every update.
-3. Never remove completed decisions from the log.
-4. When re-planning a failed task, keep the failure history in Gatekeeper Notes.
-5. You have read/write access to the .vibrant/ directory ONLY.
-## Available Skills
-The following skills are available for agents. Assign them to tasks as needed:
-{list of skill names and descriptions from .vibrant/skills/}
-```
----
-## 10. Consensus-Driven Workflow
-### 10.1 Consensus Update Rules
-The Consensus Pool may be updated under these conditions:
-| # | Trigger | Who Updates | How |
-|---|---|---|---|
-| 1 | Project start | Gatekeeper | Creates initial `consensus.md` from user proposal |
-| 2 | Task completion | Gatekeeper | Updates task status, writes verdict, adjusts plan |
-| 3 | Task failure | Gatekeeper | Modifies task prompt, updates retry count, logs decision |
-| 4 | User intervention | Gatekeeper (after user input) | User tells Gatekeeper what to change; Gatekeeper writes |
-| 5 | Re-planning | Gatekeeper | Adds/removes/reorders tasks based on emergent needs |
-### 10.2 Consensus Versioning
-1. Every write to `consensus.md` increments the `Version` field in META.
-2. Before overwriting, the Orchestrator copies the current `consensus.md` to `consensus.history/consensus.{ISO8601}.md`.
-3. `.vibrant/` itself should remain committed, but `.vibrant/.gitignore` should exclude imported conversations, provider logs, and other generated or sensitive artifacts from git history.
----
-## 11. Validation & Self-Correction
-### 11.1 Validation Pipeline
-After a code agent completes a task:
-```
-Code Agent completes
-        │
-        ▼
-Orchestrator collects canonical runtime events + final turn outcome
-        │
-        ├── `turn.completed` / `runtime.error` indicates immediate failure path when applicable
-        │
-        ▼
-Spawn Test Agent (if required in roadmap.md, on same branch/worktree, read-only)
-        │
-        ├── Run unit tests (`pytest`, `npm test`, etc.)
-        ├── Run linter / type checker (if configured)
-        ├── (if GUI project) Spawn e2e test agent (browser/computer-use)
-        │
-        ▼
-Test Agent reports results
-        │
-        ▼
-Forward to Gatekeeper:
-  - Code Agent summary / `task.completed` payload
-  - Canonical provider event log excerpt
-  - Test Agent results
-  - Git diff
-        │
-        ▼
-Gatekeeper evaluates → verdict
-```
-### 11.2 Test Agent Specifics
-- In the first iteration, test agents are not allowed to work concurrently with code agents to eliminate the complexity of code agents writing to the working directory while test agents are running. 
-- Test agents are spawned in the same worktree as the code agent, but with a read-only advisory prompt.
-- Test agents use the same `codex app-server` provider path as code agents so validation benefits from the same structured runtime events and recovery semantics.
-- Test agent prompt includes the project's test commands (from `vibrant.toml`).
-### 11.3 Rollback
-On task failure:
-1. The agent's branch is reset to its starting commit (`git reset --hard`).
-2. The worktree is cleaned.
-3. The Gatekeeper logs the failure and its analysis in `Gatekeeper Notes`.
-4. A new attempt uses a revised prompt written by the Gatekeeper.
----
-## 12. Git Workflow & Isolation
-### 12.1 Branch Strategy
-```
-main (protected — only merged into by Orchestrator)
-├── vibrant/task-001  (worktree 1)
-├── vibrant/task-002  (worktree 2)
-├── vibrant/task-003  (worktree 3)
+│   ├── .gitignore
+│   ├── vibrant.toml
+│   ├── roadmap.md
+│   ├── consensus.md
+│   ├── consensus.history/
+│   ├── attempts.json
+│   ├── questions.json
+│   ├── reviews.json
+│   ├── state.json
+│   ├── skills/
+│   ├── agents/
+│   │   └── *.json
+│   ├── conversations/
+│   │   ├── manifests/
+│   │   └── frames/
+│   ├── prompts/
+│   └── logs/
+│       └── providers/
+│           ├── native/
+│           └── canonical/
 └── ...
 ```
-### 12.2 Worktree Management
-1. **Creation**: Before spawning a code agent, the Orchestrator creates a git worktree:
-   ```bash
-   git worktree add /tmp/vibrant-worktrees/task-001 -b vibrant/task-001
-   ```
-2. **Cleanup**: After a task is merged or abandoned:
-   ```bash
-   git worktree remove /tmp/vibrant-worktrees/task-001
-   git branch -d vibrant/task-001
-   ```
-3. **Location**: Worktrees are created in a temporary directory (configurable, default: `/tmp/vibrant-worktrees/`).
-### 12.3 Merge Process
-1. After Gatekeeper accepts a task, the Orchestrator attempts `git merge vibrant/task-xxx` into `main`.
-2. If conflicts occur:
-   - A **Merge Agent** is spawned with the conflict markers as context.
-   - The Merge Agent resolves conflicts and commits.
-   - The Gatekeeper validates the merge resolution.
-3. If the Merge Agent fails, the conflict is escalated to the user.
-### 12.4 Ordering
-Tasks with dependencies are merged in dependency order. Independent tasks can be merged in any order, with conflict resolution as needed.
+
+### 4.2 Workflow State (`state.json`)
+
+`state.json` stores only non-derivable workflow/session facts. It must not be used as a grab-bag for projections that can be reconstructed elsewhere.
+
+Persisted facts:
+
+- `session_id`
+- `started_at`
+- `workflow_status`
+- `concurrency_limit`
+- `gatekeeper_session`
+- `total_agent_spawns`
+
+Do not persist:
+
+- active agent lists
+- pending questions
+- derived conversation history
+- consensus version mirrors
+- provider-runtime maps that can be recovered from agent records
+
+### 4.3 Roadmap and Task State
+
+`roadmap.md` remains the durable, human-readable task plan. The roadmap store owns:
+
+- task creation
+- task definition updates
+- definition versions
+- task ordering
+- task state projection
+
+Task lifecycle authority lives in workflow policy, not in arbitrary callers patching statuses.
+
+### 4.4 Consensus Store
+
+`consensus.md` remains human-readable and versioned. The orchestrator writes it in response to typed MCP commands such as consensus updates or appended decisions. The Gatekeeper never writes the file directly.
+
+### 4.5 Question Store (`questions.json`)
+
+Question records are stable, durable objects with:
+
+- stable `question_id`
+- routing metadata
+- source conversation and turn references
+- blocking scope
+- resolution or withdrawal status
+
+Question resolution is host-owned.
+
+### 4.6 Attempt Store (`attempts.json`)
+
+Execution is **attempt-centric**. Each worker attempt persists:
+
+- attempt identity
+- task identity
+- frozen task-definition version
+- workspace id
+- worker / validator / merge agent ids
+- conversation id
+- lifecycle status
+- timestamps
+
+Attempt state is separate from roadmap task state.
+
+### 4.7 Review Ticket Store (`reviews.json`)
+
+Review tickets are attempt-scoped, not task-singletons. Accept/retry/escalate decisions resolve the ticket and then drive workflow transitions or merge follow-up.
+
+### 4.8 Agent Records (`agents/*.json`)
+
+Agent records remain the durable source of truth for per-agent lifecycle, provider resume metadata, log paths, and summary/error data.
+
+### 4.9 Conversation Store
+
+The TUI must read orchestrator-owned conversation frames, not provider-native transcripts. Conversation history is durable and replayable. Provider logs remain fallback/debug artifacts only.
+
 ---
+
+## 5. Core Workflows
+
+### 5.1 Planning Flow
+
+1. The user submits a proposal.
+2. The control plane records the host message into the Gatekeeper conversation history.
+3. The Gatekeeper lifecycle service starts or resumes the Gatekeeper session.
+4. The Gatekeeper reads roadmap, consensus, questions, and workflow state through MCP resources.
+5. The Gatekeeper issues typed MCP commands to update roadmap, consensus, or open/withdraw questions.
+6. Stores persist changes immediately.
+7. The control plane updates snapshots and TUI subscriptions.
+8. Planning ends only when the Gatekeeper explicitly calls the semantic planning completion command.
+
+### 5.2 Execution Flow
+
+1. Workflow policy selects ready tasks and leases them.
+2. Execution coordinator freezes the task-definition version and prepares a workspace.
+3. A code agent is spawned for one attempt.
+4. Runtime canonical events are published and projected into conversation frames.
+5. Validation runs, if required, before review begins.
+6. Execution coordinator returns an `AttemptCompletion`.
+7. Workflow policy moves the task into `review_pending`.
+8. Review control creates an attempt-scoped review ticket.
+9. The Gatekeeper reads the review ticket through MCP and explicitly accepts, retries, or escalates it.
+10. Review control applies the decision and drives merge follow-up when needed.
+
+### 5.3 User-Question Flow
+
+1. The Gatekeeper requests a user decision through a typed MCP tool.
+2. The question store persists a stable record with routing metadata.
+3. Workflow policy blocks the affected path.
+4. The user answers through the host UI.
+5. The control plane records the answer in conversation history, resolves the question, and forwards the answer into the active Gatekeeper session.
+
+### 5.4 Recovery Flow
+
+1. Stores load durable facts on startup.
+2. Conversation history is rebuilt from stored frames.
+3. Agent records supply resume metadata and log paths.
+4. The orchestrator attempts provider-thread resume where possible.
+5. Missing or stale provider threads are treated as runtime recovery failures, not as implicit control-plane decisions.
+
+---
+
+## 6. Component Specifications
+
+### 6.1 Orchestrator Control Plane
+
+Responsibilities:
+
+1. Own the workflow state machine.
+2. Route user chat, user answers, and workflow commands.
+3. Record host-originated conversation entries before agent submission.
+4. Publish canonical runtime events to subscribers.
+5. Coordinate Gatekeeper lifecycle, workflow policy, execution, review, and completion detection.
+
+It must not parse markdown directly, manage worktrees directly, or infer decisions from text output.
+
+### 6.2 Agent Session Binding
+
+This service binds role-scoped MCP capability sets to agent sessions. It keeps authorization and provider binding metadata out of Gatekeeper lifecycle and worker execution code.
+
+### 6.3 Gatekeeper Lifecycle
+
+This service owns only Gatekeeper runtime lifecycle:
+
+- start / resume
+- submit message
+- interrupt active turn
+- stop or restart session
+- publish session snapshots
+
+It does not apply workflow transitions or persist roadmap/consensus/question mutations directly.
+
+### 6.4 MCP Control Surface
+
+The MCP layer is the authoritative mutation path for the Gatekeeper.
+
+Required read resources:
+
+- consensus
+- roadmap
+- task
+- workflow status
+- pending questions
+- active agents
+- active attempts
+- review ticket lookup
+- recent domain events
+
+Required write tools:
+
+- update consensus
+- add task
+- update task definition
+- reorder tasks
+- request user decision
+- withdraw question
+- end planning phase
+- pause workflow
+- resume workflow
+- accept review ticket
+- retry review ticket
+- escalate review ticket
+
+### 6.5 Workflow Policy
+
+Workflow policy owns:
+
+- dispatch eligibility
+- dependency blocking
+- task-state transitions
+- task acceptance/requeue/escalation
+- workflow completion detection
+
+Task state and attempt state remain separate.
+
+### 6.6 Execution Coordinator
+
+Execution coordinator owns:
+
+- workspace preparation
+- prompt/context assembly
+- attempt creation
+- worker runtime
+- validation orchestration
+- artifact collection
+
+It does not decide retry, escalation, or acceptance.
+
+### 6.7 Review Control
+
+Review control owns asynchronous review ticket lifecycle and resolution. It is the single authority that applies accept/retry/escalate review decisions and coordinates merge follow-up.
+
+### 6.8 Runtime
+
+Runtime is the generic agent mechanism shared by Gatekeeper and workers. It must expose:
+
+- start
+- resume
+- wait
+- interrupt
+- kill
+- canonical event subscriptions
+
+Runtime publishes canonical events only. It does not shape TUI conversation history.
+
+### 6.9 Conversation Stream
+
+Conversation stream owns:
+
+- durable TUI-facing conversation frames
+- replay and rebuild
+- live subscriptions
+- canonical-event to conversation-frame projection
+
+Provider logs are not the primary conversation-history source.
+
+### 6.10 Compatibility Constraints
+
+The redesign requires a migration layer while first-party consumers move to the new model.
+
+Rules:
+
+1. Public facade and MCP compatibility must be resolved before removing first-party entry points.
+2. Compatibility aliases may exist temporarily, but they must route into the new semantic command handlers.
+3. The redesign must not reintroduce legacy authority paths such as free-form review inference or direct Gatekeeper file writes.
+
+---
+
+## 7. TUI Specification
+
+See `docs/tui.md` for the UI layout and interaction design.
+
+Contractual notes for the redesign:
+
+- The TUI consumes orchestrator snapshots, review/question projections, and processed conversation frames.
+- The TUI must not treat provider-native logs as its primary chat history.
+- The TUI may expose provider logs and canonical logs as observability/debug views.
+
+---
+
+## 8. Agent Integration — OpenAI Codex CLI
+
+### 8.1 Provider Role
+
+Codex CLI remains the initial agent backend. The orchestrator owns session and thread lifecycle and records normalized canonical events regardless of provider-native wire format.
+
+### 8.2 Canonical Runtime Event Contract
+
+Every canonical event must carry:
+
+- `event_id`
+- `sequence`
+- `type`
+- `timestamp`
+
+Routing fields may include:
+
+- `origin`
+- `provider`
+- `agent_id`
+- `task_id`
+- `provider_thread_id`
+
+Required lifecycle coverage:
+
+- assistant message delta + completion
+- assistant thinking summary delta + completion
+- tool call started + delta + completion
+- request opened + resolved
+- turn started + completed
+- runtime error
+
+Raw hidden reasoning must not enter canonical events or stored conversation history. Only user-facing or summary-level reasoning is allowed.
+
+### 8.3 Provider Logs
+
+Provider logs remain useful for debugging and recovery fallback, but they are not the TUI contract and they are not the control-plane source of truth.
+
+---
+
+## 9. Gatekeeper Specification
+
+### 9.1 Nature
+
+The Gatekeeper is a long-lived Codex agent process managed by the orchestrator. It is a planning and review authority, not a file-writing authority.
+
+### 9.2 Allowed Responsibilities
+
+The Gatekeeper may:
+
+- create or revise the roadmap
+- update consensus context and decisions
+- request or withdraw user questions
+- resolve review tickets by explicit accept/retry/escalate commands
+- request workflow pause/resume transitions
+
+The Gatekeeper may not:
+
+- write `.vibrant/` files directly
+- mutate workflow state by prose output
+- resolve user answers itself
+- control worker lifecycle directly
+
+### 9.3 Prompt Expectations
+
+The Gatekeeper prompt must instruct the agent to:
+
+1. read project state through MCP resources
+2. express durable changes through typed MCP tools
+3. keep natural-language output informational only
+4. request user intervention only for high-level decisions
+
+---
+
+## 10. Consensus-Driven Workflow
+
+### 10.1 Consensus Role
+
+The consensus pool is the durable project contract for new agents. It should remain short, readable, and onboarding-oriented.
+
+It records:
+
+- objectives
+- design decisions
+- current context
+- active plan guidance
+
+### 10.2 Consensus Update Rules
+
+1. The orchestrator writes `consensus.md`.
+2. The Gatekeeper updates consensus only by typed MCP commands.
+3. Every write increments the consensus version and snapshots the prior file into `consensus.history/`.
+4. Workflow status in consensus metadata, if retained, is a one-way projection from workflow state.
+5. There must be no two-way auto-sync loop between consensus status and workflow state.
+
+---
+
+## 11. Validation & Self-Correction
+
+### 11.1 Validation Pipeline
+
+Validation is part of execution orchestration, not of review inference.
+
+Pipeline:
+
+1. Code agent attempt completes.
+2. Validation agents run when required.
+3. Execution coordinator returns an `AttemptCompletion` with validation evidence.
+4. Review control opens a ticket.
+5. Gatekeeper explicitly resolves the ticket through typed review tools.
+
+### 11.2 Retry and Escalation
+
+Retry is review-driven and attempt-scoped. A retry creates a new attempt against a versioned task definition. Escalation blocks the task until user or Gatekeeper action resolves it.
+
+---
+
+## 12. Git Workflow & Isolation
+
+### 12.1 Workspace Model
+
+The workspace service owns:
+
+- prepare task workspace
+- collect review diff
+- reset workspace
+- merge task result
+- discard workspace
+
+### 12.2 Merge Process
+
+1. Accepted work is merged by the orchestrator.
+2. Merge conflicts create merge follow-up handling through review control and merge agents.
+3. Merge failure is modeled as a review/control-plane event, not as an implicit text verdict.
+
+---
+
 ## 13. Error Handling & Resilience
-### 13.1 Process Crash Recovery
-1. **Orchestrator crash**: On restart, the Orchestrator reads `state.json`, `.vibrant/agents/*.json`, and `consensus.md` to reconstruct state. For in-flight agents with persisted `resume_cursor` metadata, it re-launches `codex app-server` and attempts `thread/resume` before deciding whether the task must be retried.
-2. **Agent crash**: Treated as task failure unless the provider thread can be resumed cleanly. The Gatekeeper receives the crash details, canonical runtime log excerpt, and resume outcome before deciding whether to retry.
-3. **Gatekeeper crash**: Orchestrator re-spawns the Gatekeeper with the same context and, if available, the same persisted provider-thread metadata.
-### 13.2 State Durability
-- `state.json` is written atomically (write to temp file, then `os.rename`).
-- `consensus.md` is written atomically with the same pattern.
-- Agent record updates in `.vibrant/agents/` are written atomically so provider resume metadata is never partially persisted.
-- Provider event logs are best-effort observability artifacts; they should flush frequently, but the canonical persisted state remains the source of truth.
-- File locks prevent concurrent writes.
-### 13.3 Timeout Handling
-- Each agent has a configurable timeout (default: 25 minutes).
-- If an agent exceeds its timeout, the Orchestrator sends `SIGTERM`, waits 10 seconds, then `SIGKILL`.
-- The task is marked as `failed` with reason `timeout`.
+
+### 13.1 Recovery
+
+On restart, the orchestrator reconstructs durable state from:
+
+- workflow state store
+- roadmap and consensus stores
+- attempt store
+- question store
+- review ticket store
+- agent records
+- conversation manifests and frames
+
+Provider logs may be replayed only as explicit fallback when conversation history is incomplete.
+
+### 13.2 Durability Rules
+
+- durable stores must be written atomically
+- agent records must preserve provider resume metadata safely
+- provider logs are best-effort observability artifacts
+- control-plane facts must not be derived from lossy provider output
+
 ---
+
 ## 14. v1 Scope & Non-Goals
+
 ### 14.1 In Scope (v1)
+
 | Feature | Details |
 |---|---|
-| TUI with 4-panel layout | Textual-based, panels A/B/C/D as specified |
-| Orchestrator core | Process management, state persistence, git worktree management |
-| Codex CLI integration | `codex app-server` session lifecycle, JSON-RPC transport, canonical runtime event normalization, and optional conversation import |
-| Gatekeeper (as Codex agent) | Plan creation, evaluation, re-planning, escalation |
-| Consensus Pool | Structured Markdown, versioned, parseable |
-| Self-validation | Unit test agent (configurable command) |
-| Self-correction | Gatekeeper re-prompts on failure, up to max retries |
-| Git isolation | Branch-per-task, worktrees, automated merge |
-| Provider observability logs | Native + canonical NDJSON logs per agent |
-| E2E testing with computer-use agent | Real E2E testing based on real interaction with computer |
-| Merge conflict resolution agent | Agent-based conflict resolution |
-| Durable state | Resume after crash/restart, including persisted provider thread metadata |
-| Linux/WSL support | Primary target platform |
+| Orchestrator control plane | Workflow coordination, durable state ownership, agent lifecycle |
+| Codex CLI integration | Runtime/session management, canonical event normalization |
+| Gatekeeper MCP control | Typed planning/review/user-question mutation path |
+| Attempt-centric execution | Task leasing, frozen task definitions, validation before review |
+| Durable conversation history | TUI-facing conversation frames owned by orchestrator |
+| Review tickets | Attempt-scoped accept/retry/escalate decisions |
+| Workspace isolation | Worktrees, diff collection, merge/discard/reset |
+| TUI integration | Snapshot reads, conversation subscriptions, observability panels |
+
 ### 14.2 Non-Goals (v1)
+
 | Feature | Rationale |
 |---|---|
-| Claude Code / other agent providers | v1 supports Codex CLI only; architecture allows future providers |
-| Web UI / GUI | TUI only for v1 |
-| Multi-user collaboration | Single operator for v1 |
-| Sandboxing / isolation | Agents run with full user permissions for v1 |
-| Remote agent execution | All agents run locally |
-| Plugin system | Skills system covers extensibility for v1 |
-| Cloud deployment | Local-only |
-### 14.3 Future Considerations (Post-v1)
-- Multi-provider support (Claude Code, custom agents)
-- Web dashboard alongside TUI
-- Distributed agent execution (SSH-spawned agents on remote machines)
-- DAG-based task scheduling with critical path analysis
-- Self-evolution mode (Vibrant modifying its own codebase)
+| Multi-provider support | Future work; Codex CLI only in v1 |
+| Gatekeeper direct file writes | Explicitly removed by design |
+| Provider-native logs as chat history | Explicitly removed by design |
+| Free-form control inference | Explicitly removed by design |
+| Multi-user collaboration | Single operator in v1 |
+
 ---
+
 ## 15. Acceptance Criteria
-### 15.1 Core Acceptance Tests
+
 | # | Test | Pass Condition |
 |---|---|---|
-| AC-01 | **TUI launches** | `vibrant` command starts the TUI with all 4 panels visible |
-| AC-02 | **Proposal → Plan** | User types a proposal; Gatekeeper produces a plan in `consensus.md` |
-| AC-03 | **Plan approval** | User reviews and approves the plan; status transitions to EXECUTING |
-| AC-04 | **Agent spawn** | Orchestrator launches a `codex app-server` session for an agent in an isolated worktree and opens or resumes a provider thread |
-| AC-05 | **Real-time output** | Canonical provider events and assistant text deltas stream in Panel B in real-time |
-| AC-06 | **Task completion** | A `task.completed` / final assistant outcome is captured, summarized, and forwarded to Gatekeeper |
-| AC-07 | **Gatekeeper evaluation** | Gatekeeper reads the summary, validation results, and relevant runtime events, then writes a verdict to consensus |
-| AC-08 | **Self-correction** | On task failure, Gatekeeper modifies prompt and re-queues |
-| AC-09 | **User escalation** | Gatekeeper asks a blocking question; TUI alerts user in Panel D |
-| AC-10 | **Merge** | Completed task branch is merged into main |
-| AC-11 | **Merge conflict** | Conflict triggers Merge Agent; resolution is validated by Gatekeeper |
-| AC-12 | **Consensus versioning** | Each consensus update increments version; history is preserved |
-| AC-13 | **Crash recovery** | Kill Orchestrator; restart; active sessions resume via stored provider-thread metadata when possible, otherwise they are safely re-queued |
-| AC-14 | **Conversation viewing** | User can switch between agent conversation histories and provider event logs |
-| AC-15 | **User ↔ Gatekeeper chat** | User can converse with Gatekeeper to adjust plan |
-| AC-16 | **Provider observability** | Native and canonical NDJSON logs are written per agent and remain inspectable after completion |
+| AC-01 | **Durable state authority** | All durable orchestrator state under `.vibrant/` is written by the orchestrator, not by agent file edits |
+| AC-02 | **Typed Gatekeeper mutation path** | Gatekeeper changes roadmap, consensus, review state, and questions only through typed MCP tools |
+| AC-03 | **Planning flow** | User proposal produces roadmap and consensus updates through the control plane and persisted stores |
+| AC-04 | **Attempt-centric execution** | Each execution attempt persists its own attempt record with frozen task-definition version |
+| AC-05 | **Validation before review** | Review tickets are created only after execution and validation evidence are available |
+| AC-06 | **Review authority** | Accept/retry/escalate decisions are explicit review commands, not inferred from text output |
+| AC-07 | **Conversation ownership** | TUI conversation history is rebuilt from orchestrator-owned frames rather than provider logs |
+| AC-08 | **Workflow authority split** | Workflow state remains authoritative even if consensus metadata includes projected status |
+| AC-09 | **Crash recovery** | Restart reconstructs workflow, questions, attempts, review tickets, and conversation history from durable stores |
+| AC-10 | **Compatibility path** | First-party facade/MCP consumers can migrate without relying on legacy text-based authority paths |
+
 ---
+
 ## 16. Glossary
+
 | Term | Definition |
 |---|---|
-| **Agent** | A spawned Codex CLI process that performs a specific task autonomously |
-| **Canonical Runtime Event** | A normalized provider event emitted by Vibrant regardless of provider-specific wire format |
-| **Code Agent** | An agent that writes or modifies code for a specific task |
-| **Consensus Pool** | The `.vibrant/consensus.md` file; single source of truth for project state |
-| **Gatekeeper** | A specialized agent that manages the plan, evaluates agent output, and mediates user communication |
-| **Merge Agent** | An agent spawned specifically to resolve git merge conflicts |
-| **Orchestrator** | The core Python process that manages the lifecycle of all agents, provider sessions, and the TUI |
-| **Provider Thread** | The durable Codex thread identifier stored so a session can be resumed after restart |
-| **Plan** | The ordered list of tasks in the roadmap.md file, each with prompts and acceptance criteria |
-| **Task** | A discrete unit of work in the plan, assigned to a single agent |
-| **Test Agent** | An agent that runs validation (tests, linting) against code agent output |
-| **Verdict** | The Gatekeeper's judgment on whether a task's output meets its acceptance criteria |
-| **Worktree** | A git worktree providing an isolated working directory for an agent |
+| **Attempt** | One concrete execution attempt for a task, with its own workspace, conversation, and validation evidence |
+| **Canonical Runtime Event** | A provider-neutral runtime event with stable identity and replay-safe ordering |
+| **Consensus Pool** | The orchestrator-owned `consensus.md` artifact that summarizes project context and decisions |
+| **Control Plane** | The orchestrator subsystem that coordinates workflow, routing, and durable state transitions |
+| **Conversation Frame** | A processed, durable, TUI-facing conversation event derived from host input or canonical runtime events |
+| **Gatekeeper** | The planning/review agent that issues typed MCP commands instead of writing files directly |
+| **Review Ticket** | An attempt-scoped review object that the Gatekeeper resolves explicitly |
+| **Workflow State** | The authoritative orchestrator lifecycle state persisted separately from consensus metadata |
+| **Workspace Service** | The subsystem that prepares, resets, diffs, merges, and discards task workspaces |
+
 ---
+
 > **End of Specification Document**
 >
-> This document is the source of truth for Project Vibrant v1. All implementation work
-> should reference this spec. Changes to the spec require incrementing the version number
-> and noting the change in a changelog section.
+> This document is the source of truth for the redesigned orchestrator architecture.

@@ -30,20 +30,30 @@ from .runtime import AgentHandle, BaseAgentRuntime, NormalizedRunResult
 
 PLANNING_COMPLETE_MCP_TOOL = "vibrant.end_planning_phase"
 REQUEST_USER_DECISION_MCP_TOOL = "vibrant.request_user_decision"
-SET_PENDING_QUESTIONS_MCP_TOOL = "vibrant.set_pending_questions"
-REVIEW_TASK_OUTCOME_MCP_TOOL = "vibrant.review_task_outcome"
-MARK_TASK_FOR_RETRY_MCP_TOOL = "vibrant.mark_task_for_retry"
+WITHDRAW_QUESTION_MCP_TOOL = "vibrant.withdraw_question"
 UPDATE_CONSENSUS_MCP_TOOL = "vibrant.update_consensus"
-UPDATE_ROADMAP_MCP_TOOL = "vibrant.update_roadmap"
+ADD_TASK_MCP_TOOL = "vibrant.add_task"
+UPDATE_TASK_DEFINITION_MCP_TOOL = "vibrant.update_task_definition"
+REORDER_TASKS_MCP_TOOL = "vibrant.reorder_tasks"
+PAUSE_WORKFLOW_MCP_TOOL = "vibrant.pause_workflow"
+RESUME_WORKFLOW_MCP_TOOL = "vibrant.resume_workflow"
+ACCEPT_REVIEW_TICKET_MCP_TOOL = "vibrant.accept_review_ticket"
+RETRY_REVIEW_TICKET_MCP_TOOL = "vibrant.retry_review_ticket"
+ESCALATE_REVIEW_TICKET_MCP_TOOL = "vibrant.escalate_review_ticket"
 
 MCP_TOOL_NAMES = (
     PLANNING_COMPLETE_MCP_TOOL,
     REQUEST_USER_DECISION_MCP_TOOL,
-    SET_PENDING_QUESTIONS_MCP_TOOL,
-    REVIEW_TASK_OUTCOME_MCP_TOOL,
-    MARK_TASK_FOR_RETRY_MCP_TOOL,
+    WITHDRAW_QUESTION_MCP_TOOL,
     UPDATE_CONSENSUS_MCP_TOOL,
-    UPDATE_ROADMAP_MCP_TOOL,
+    ADD_TASK_MCP_TOOL,
+    UPDATE_TASK_DEFINITION_MCP_TOOL,
+    REORDER_TASKS_MCP_TOOL,
+    PAUSE_WORKFLOW_MCP_TOOL,
+    RESUME_WORKFLOW_MCP_TOOL,
+    ACCEPT_REVIEW_TICKET_MCP_TOOL,
+    RETRY_REVIEW_TICKET_MCP_TOOL,
+    ESCALATE_REVIEW_TICKET_MCP_TOOL,
 )
 
 GatekeeperRunHandle = AgentHandle
