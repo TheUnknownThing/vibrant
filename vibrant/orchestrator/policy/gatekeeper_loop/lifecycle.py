@@ -112,12 +112,9 @@ class GatekeeperLifecycleService:
         self._persist_run(agent_record)
 
         conversation_id = session.conversation_id or f"gatekeeper-{uuid4().hex[:12]}"
-        self.conversation_service.bind_agent(
+        self.conversation_service.bind_run(
             conversation_id=conversation_id,
-            agent_id=instance.identity.agent_id,
             run_id=agent_record.identity.run_id,
-            task_id=None,
-            provider_thread_id=session.provider_thread_id,
         )
 
         provider_thread = None
@@ -243,9 +240,9 @@ class GatekeeperLifecycleService:
             self._persist()
             return
 
-        self._session.provider_thread_id = result.provider_thread_id
-        self._session.resumable = bool(result.provider_thread_id)
-        self._session.run_id = result.agent_record.identity.run_id
+        self._session.provider_thread_id = result.provider_thread.thread_id
+        self._session.resumable = bool(result.provider_thread.thread_id)
+        self._session.run_id = result.run_id
         self._session.updated_at = utc_now()
         if result.awaiting_input:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.AWAITING_USER
@@ -328,7 +325,11 @@ class GatekeeperLifecycleService:
         instance = self.instance_store.get(run_record.identity.agent_id)
         if instance is None:
             return
-        instance.mark_run_updated(run_record)
+        instance.mark_run_updated(
+            agent_id=run_record.identity.agent_id,
+            run_id=run_record.identity.run_id,
+            status=run_record.lifecycle.status,
+        )
         self.instance_store.upsert(instance)
 
     def _persist(self) -> None:

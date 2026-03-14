@@ -30,9 +30,16 @@ def test_agent_record_status_transition_guardrails():
 
 
 def test_agent_record_drops_legacy_task_id_from_run_identity():
-    record = AgentRecord(identity={"agent_id": "agent-legacy", "task_id": "task-legacy", "type": AgentType.CODE})
+    record = AgentRecord(
+        identity={
+            "run_id": "run-legacy",
+            "agent_id": "agent-legacy",
+            "task_id": "task-legacy",
+            "type": AgentType.CODE,
+        }
+    )
 
-    assert record.identity.run_id == "agent-legacy"
+    assert record.identity.run_id == "run-legacy"
     assert record.identity.role == AgentType.CODE.value
     assert "task_id" not in record.identity.model_dump()
 

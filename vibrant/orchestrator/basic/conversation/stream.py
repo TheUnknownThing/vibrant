@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping
 from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
 
 from vibrant.providers.base import CanonicalEvent
 
-from ...types import (
-    AgentConversationEntry,
-    AgentConversationView,
-    AgentStreamCallback,
-    AgentStreamEvent,
-    StreamSubscription,
-    utc_now,
-)
+from ...types import AgentConversationEntry, AgentConversationView, AgentStreamCallback, AgentStreamEvent, StreamSubscription, utc_now
 from .store import ConversationStore
 
 
@@ -38,36 +31,22 @@ class ConversationStreamService:
         self.store = store
         self._subscribers: dict[str, list[AgentStreamCallback]] = {}
         self._run_conversations: dict[str, str] = {}
-        self._run_tasks: dict[str, str] = {}
-        self._agent_conversations: dict[str, str] = {}
         for manifest in self.store.list_manifests():
             for run_id in manifest.run_ids:
                 self._run_conversations[run_id] = manifest.conversation_id
-            self._run_tasks.update(manifest.run_task_ids)
-            for agent_id in manifest.agent_ids:
-                self._agent_conversations[agent_id] = manifest.conversation_id
 
-    def bind_agent(
+    def bind_run(
         self,
         *,
         conversation_id: str,
-        agent_id: str,
-        run_id: str | None,
-        task_id: str | None,
-        provider_thread_id: str | None = None,
+        run_id: str,
     ) -> None:
-        self.store.bind_agent(
+        manifest = self.store.bind_run(
             conversation_id=conversation_id,
-            agent_id=agent_id,
             run_id=run_id,
-            task_id=task_id,
-            provider_thread_id=provider_thread_id,
         )
-        if run_id:
-            self._run_conversations[run_id] = conversation_id
-            if task_id:
-                self._run_tasks[run_id] = task_id
-        self._agent_conversations[agent_id] = conversation_id
+        for manifest_run_id in manifest.run_ids:
+            self._run_conversations[manifest_run_id] = conversation_id
 
     def record_host_message(
         self,
@@ -116,9 +95,7 @@ class ConversationStreamService:
             self._apply_frame(entries, frame)
         return AgentConversationView(
             conversation_id=conversation_id,
-            agent_ids=list(manifest.agent_ids),
             run_ids=list(manifest.run_ids),
-            task_ids=list(manifest.task_ids),
             active_turn_id=manifest.active_turn_id,
             entries=entries,
             updated_at=manifest.updated_at,
@@ -166,9 +143,6 @@ class ConversationStreamService:
         run_id = event.get("run_id")
         if isinstance(run_id, str) and run_id:
             return self._run_conversations.get(run_id)
-        agent_id = event.get("agent_id")
-        if isinstance(agent_id, str) and agent_id:
-            return self._agent_conversations.get(agent_id)
         return None
 
     def _project_event_types(self, event: CanonicalEvent) -> list[tuple[str, str | None, Mapping[str, Any] | None]]:
@@ -216,7 +190,7 @@ class ConversationStreamService:
             sequence=self.store.allocate_sequence(conversation_id),
             agent_id=_coerce_text(event, "agent_id"),
             run_id=run_id,
-            task_id=self._resolve_task_id(conversation_id=conversation_id, run_id=run_id, event=event),
+            task_id=None,
             turn_id=turn_id if isinstance(turn_id, str) else None,
             item_id=item_id if isinstance(item_id, str) else None,
             type=event_type,  # type: ignore[arg-type]
@@ -224,19 +198,6 @@ class ConversationStreamService:
             payload=payload,
             created_at=_coerce_text(event, "timestamp") or utc_now(),
         )
-
-    def _resolve_task_id(self, *, conversation_id: str, run_id: str | None, event: CanonicalEvent) -> str | None:
-        event_task_id = _coerce_text(event, "task_id")
-        if event_task_id:
-            return event_task_id
-        if run_id:
-            task_id = self._run_tasks.get(run_id)
-            if task_id:
-                return task_id
-        manifest = self.store.manifest(conversation_id)
-        if manifest is not None and len(manifest.task_ids) == 1:
-            return manifest.task_ids[0]
-        return None
 
     def _apply_frame(self, entries: list[AgentConversationEntry], frame: AgentStreamEvent) -> None:
         if frame.type == "conversation.user.message":

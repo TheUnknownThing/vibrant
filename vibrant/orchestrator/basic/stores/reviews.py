@@ -96,7 +96,7 @@ class ReviewTicketStore:
                     ticket_id=str(payload.get("ticket_id") or ticket_id),
                     task_id=str(payload["task_id"]),
                     attempt_id=str(payload["attempt_id"]),
-                    run_id=str(payload.get("run_id") or payload["agent_id"]),
+                    run_id=str(payload["run_id"]),
                     review_kind=_normalize_review_kind(payload.get("review_kind", "task_result")),
                     conversation_id=_optional_string(payload.get("conversation_id")),
                     status=ReviewTicketStatus(str(payload.get("status", ReviewTicketStatus.PENDING.value))),

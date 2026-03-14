@@ -41,15 +41,6 @@ class GatekeeperUserLoop:
             pending_question = require_pending_question(self.artifacts.question_store.get(question_id), question_id)
         prepared = build_user_submission_request(text, pending_question)
 
-        if session.agent_id:
-            self.conversations.bind_agent(
-                conversation_id=conversation_id,
-                agent_id=session.agent_id,
-                run_id=session.run_id,
-                task_id=None,
-                provider_thread_id=session.provider_thread_id,
-            )
-
         self.conversations.record_host_message(
             conversation_id=conversation_id,
             role="user",

@@ -10,11 +10,9 @@ def test_conversation_stream_rebuilds_processed_history(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     stream = ConversationStreamService(store)
 
-    stream.bind_agent(
+    stream.bind_run(
         conversation_id="gatekeeper-1",
-        agent_id="gatekeeper-a",
         run_id="gatekeeper-run-1",
-        task_id=None,
     )
     stream.record_host_message(conversation_id="gatekeeper-1", role="user", text="Plan the refactor")
     stream.ingest_canonical(
@@ -51,11 +49,9 @@ def test_conversation_stream_rebuilds_processed_history(tmp_path: Path) -> None:
 def test_conversation_stream_subscriptions_receive_replay(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     stream = ConversationStreamService(store)
-    stream.bind_agent(
+    stream.bind_run(
         conversation_id="conv-1",
-        agent_id="agent-1",
         run_id="run-1",
-        task_id="task-1",
     )
     stream.record_host_message(conversation_id="conv-1", role="user", text="hello")
 
@@ -77,3 +73,60 @@ def test_conversation_stream_subscriptions_receive_replay(tmp_path: Path) -> Non
 
     assert seen[0] == "conversation.user.message"
     assert seen[-1] == "conversation.runtime.error"
+
+
+def test_conversation_stream_rebuild_clears_completed_active_turn(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".vibrant")
+    stream = ConversationStreamService(store)
+    stream.bind_run(
+        conversation_id="conv-1",
+        run_id="run-1",
+    )
+
+    stream.ingest_canonical(
+        {
+            "type": "turn.started",
+            "agent_id": "agent-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "timestamp": "2026-03-13T00:00:00Z",
+            "event_id": "evt-start",
+        }
+    )
+    stream.ingest_canonical(
+        {
+            "type": "turn.completed",
+            "agent_id": "agent-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "timestamp": "2026-03-13T00:00:01Z",
+            "event_id": "evt-end",
+        }
+    )
+
+    view = stream.rebuild("conv-1")
+
+    assert view is not None
+    assert view.active_turn_id is None
+
+
+def test_conversation_stream_ignores_agent_only_events_without_run_binding(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".vibrant")
+    stream = ConversationStreamService(store)
+    stream.bind_run(
+        conversation_id="conv-1",
+        run_id="run-1",
+    )
+
+    projected = stream.ingest_canonical(
+        {
+            "type": "assistant.message.delta",
+            "agent_id": "agent-1",
+            "delta": "This should not attach without a run id.",
+            "turn_id": "turn-2",
+            "timestamp": "2026-03-13T00:00:02Z",
+            "event_id": "evt-agent-only",
+        }
+    )
+
+    assert projected == []

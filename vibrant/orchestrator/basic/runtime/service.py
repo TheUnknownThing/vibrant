@@ -136,13 +136,18 @@ class AgentRuntimeService:
         result = await live_run.handle.wait()
         provider_thread = result.provider_thread
         execution_result = RuntimeExecutionResult(
-            agent_record=result.agent_record,
+            run_id=result.run_id,
+            agent_id=result.agent_id,
+            role=result.role,
+            status=result.status,
             events=list(live_run.events),
             summary=result.summary,
             error=result.error,
             turn_result=result.turn_result,
             state=result.state,
             awaiting_input=result.awaiting_input,
+            provider_kind=result.provider_kind,
+            provider_events_ref=result.provider_events_ref,
             provider_thread_id=provider_thread.thread_id,
             provider_thread_path=provider_thread.thread_path,
             provider_resume_cursor=provider_thread.resume_cursor,
@@ -246,7 +251,6 @@ class AgentRuntimeService:
         normalized.setdefault("agent_id", agent_record.identity.agent_id)
         normalized.setdefault("run_id", agent_record.identity.run_id)
         normalized.setdefault("role", agent_record.identity.role)
-        normalized.pop("task_id", None)
         normalized.setdefault("provider", agent_record.provider.kind)
         normalized.setdefault("origin", "provider")
         normalized.setdefault("timestamp", normalized.get("timestamp"))

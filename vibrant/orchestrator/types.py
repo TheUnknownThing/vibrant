@@ -9,7 +9,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
-from vibrant.models.agent import AgentRunRecord
+from vibrant.models.agent import AgentStatus
 from vibrant.models.task import TaskStatus
 from vibrant.providers.base import CanonicalEvent
 
@@ -254,9 +254,7 @@ class AgentConversationEntry:
 @dataclass(slots=True)
 class AgentConversationView:
     conversation_id: str
-    agent_ids: list[str]
     run_ids: list[str]
-    task_ids: list[str]
     active_turn_id: str | None
     entries: list[AgentConversationEntry]
     updated_at: str | None
@@ -303,13 +301,18 @@ class RuntimeHandleSnapshot:
 
 @dataclass(slots=True)
 class RuntimeExecutionResult:
-    agent_record: AgentRunRecord
+    run_id: str
+    agent_id: str
+    role: str
+    status: AgentStatus
     events: list[CanonicalEvent] = field(default_factory=list)
     summary: str | None = None
     error: str | None = None
     turn_result: Any | None = None
     state: RunState | None = None
     awaiting_input: bool = False
+    provider_kind: str = "codex"
+    provider_events_ref: str | None = None
     provider_thread_id: str | None = None
     provider_thread_path: str | None = None
     provider_resume_cursor: dict[str, Any] | None = None
@@ -468,7 +471,6 @@ class TaskResult:
     task_id: str | None
     outcome: str
     task_status: TaskStatus | None = None
-    agent_record: AgentRunRecord | None = None
     gatekeeper_result: NormalizedRunResult | None = None
     merge_result: MergeOutcome | None = None
     events: list[CanonicalEvent] = field(default_factory=list)

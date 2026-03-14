@@ -67,11 +67,9 @@ class ExecutionCoordinator:
         self._persist_run(agent_record)
 
         conversation_id = f"attempt-{attempt.attempt_id}"
-        self.conversation_stream.bind_agent(
+        self.conversation_stream.bind_run(
             conversation_id=conversation_id,
-            agent_id=instance.identity.agent_id,
             run_id=agent_record.identity.run_id,
-            task_id=lease.task_id,
         )
         self.conversation_stream.record_host_message(
             conversation_id=conversation_id,
@@ -116,7 +114,7 @@ class ExecutionCoordinator:
             summary=runtime_result.summary,
             error=runtime_result.error,
             conversation_ref=attempt.conversation_id,
-            provider_events_ref=runtime_result.agent_record.provider.canonical_event_log,
+            provider_events_ref=runtime_result.provider_events_ref,
         )
         return completion
 
@@ -125,5 +123,9 @@ class ExecutionCoordinator:
         instance = self.agent_instance_store.get(run_record.identity.agent_id)
         if instance is None:
             return
-        instance.mark_run_updated(run_record)
+        instance.mark_run_updated(
+            agent_id=run_record.identity.agent_id,
+            run_id=run_record.identity.run_id,
+            status=run_record.lifecycle.status,
+        )
         self.agent_instance_store.upsert(instance)

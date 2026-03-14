@@ -17,21 +17,15 @@ class ConversationCapability:
     store: ConversationStore
     stream: ConversationStreamService
 
-    def bind_agent(
+    def bind_run(
         self,
         *,
         conversation_id: str,
-        agent_id: str,
-        run_id: str | None,
-        task_id: str | None,
-        provider_thread_id: str | None = None,
+        run_id: str,
     ) -> None:
-        self.stream.bind_agent(
+        self.stream.bind_run(
             conversation_id=conversation_id,
-            agent_id=agent_id,
             run_id=run_id,
-            task_id=task_id,
-            provider_thread_id=provider_thread_id,
         )
 
     def record_host_message(

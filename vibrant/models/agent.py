@@ -251,6 +251,15 @@ class AgentExecutionContext(BaseModel):
     prompt_used: str | None = None
     skills_loaded: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_context(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data.pop("task_id", None)
+        return data
+
 
 class AgentOutcome(BaseModel):
     """Terminal outcome metadata for one agent run."""
@@ -284,13 +293,11 @@ class AgentInstanceRecord(BaseModel):
     latest_run_id: str | None = None
     active_run_id: str | None = None
 
-    def mark_run_updated(self, run: "AgentRunRecord") -> None:
-        if run.identity.agent_id != self.identity.agent_id:
+    def mark_run_updated(self, *, agent_id: str, run_id: str, status: AgentStatus) -> None:
+        if agent_id != self.identity.agent_id:
             raise ValueError("run does not belong to this agent instance")
-        self.latest_run_id = run.identity.run_id
-        self.active_run_id = (
-            run.identity.run_id if run.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES else None
-        )
+        self.latest_run_id = run_id
+        self.active_run_id = run_id if status not in AgentRunRecord.TERMINAL_STATUSES else None
         self.updated_at = datetime.now(timezone.utc)
 
 
@@ -310,10 +317,6 @@ class AgentRunIdentity(BaseModel):
         if not isinstance(value, dict):
             return value
         data = dict(value)
-        run_id = data.get("run_id")
-        legacy_agent_id = data.get("agent_id")
-        if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(legacy_agent_id, str) and legacy_agent_id:
-            data["run_id"] = legacy_agent_id
         data.pop("task_id", None)
         if "role" not in data:
             legacy_type = data.get("type")

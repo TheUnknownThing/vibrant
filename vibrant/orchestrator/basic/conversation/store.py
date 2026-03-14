@@ -14,11 +14,7 @@ from ...types import AgentStreamEvent, utc_now
 @dataclass(slots=True)
 class ConversationManifest:
     conversation_id: str
-    agent_ids: list[str] = field(default_factory=list)
     run_ids: list[str] = field(default_factory=list)
-    task_ids: list[str] = field(default_factory=list)
-    run_task_ids: dict[str, str] = field(default_factory=dict)
-    provider_thread_id: str | None = None
     active_turn_id: str | None = None
     updated_at: str = field(default_factory=utc_now)
     next_sequence: int = 1
@@ -35,26 +31,18 @@ class ConversationStore:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.frames_dir.mkdir(parents=True, exist_ok=True)
 
-    def bind_agent(
+    def bind_run(
         self,
         *,
         conversation_id: str,
-        agent_id: str,
-        run_id: str | None,
-        task_id: str | None,
-        provider_thread_id: str | None = None,
+        run_id: str,
     ) -> ConversationManifest:
+        normalized_run_id = run_id.strip()
+        if not normalized_run_id:
+            raise ValueError("bind_run() requires a non-empty run_id")
         manifest = self._ensure_manifest(conversation_id)
-        if agent_id not in manifest.agent_ids:
-            manifest.agent_ids.append(agent_id)
-        if run_id and run_id not in manifest.run_ids:
-            manifest.run_ids.append(run_id)
-        if task_id and task_id not in manifest.task_ids:
-            manifest.task_ids.append(task_id)
-        if run_id and task_id:
-            manifest.run_task_ids[run_id] = task_id
-        if provider_thread_id:
-            manifest.provider_thread_id = provider_thread_id
+        if normalized_run_id not in manifest.run_ids:
+            manifest.run_ids.append(normalized_run_id)
         manifest.updated_at = utc_now()
         self._save_manifest(manifest)
         return manifest
@@ -70,16 +58,12 @@ class ConversationStore:
     def append_frame(self, event: AgentStreamEvent) -> AgentStreamEvent:
         manifest = self._ensure_manifest(event.conversation_id)
         manifest.updated_at = event.created_at
-        if event.agent_id and event.agent_id not in manifest.agent_ids:
-            manifest.agent_ids.append(event.agent_id)
         if event.run_id and event.run_id not in manifest.run_ids:
             manifest.run_ids.append(event.run_id)
-        if event.task_id and event.task_id not in manifest.task_ids:
-            manifest.task_ids.append(event.task_id)
-        if event.run_id and event.task_id:
-            manifest.run_task_ids[event.run_id] = event.task_id
-        if event.turn_id is not None:
+        if event.type == "conversation.turn.started":
             manifest.active_turn_id = event.turn_id
+        elif event.type == "conversation.turn.completed" and manifest.active_turn_id == event.turn_id:
+            manifest.active_turn_id = None
         self._save_manifest(manifest)
 
         payload = asdict(event)
@@ -106,10 +90,16 @@ class ConversationStore:
         raw = self._index().get(conversation_id)
         if raw is None:
             return None
-        return ConversationManifest(**raw)
+        return _manifest_from_raw(raw)
 
     def list_manifests(self) -> list[ConversationManifest]:
-        return [ConversationManifest(**payload) for payload in self._index().values()]
+        manifests: list[ConversationManifest] = []
+        for payload in self._index().values():
+            try:
+                manifests.append(_manifest_from_raw(payload))
+            except ValueError:
+                continue
+        return manifests
 
     def update_active_turn(self, conversation_id: str, turn_id: str | None) -> ConversationManifest:
         manifest = self._ensure_manifest(conversation_id)
@@ -139,3 +129,25 @@ class ConversationStore:
 
     def _frames_path(self, conversation_id: str) -> Path:
         return self.frames_dir / f"{conversation_id}.jsonl"
+
+
+def _manifest_from_raw(raw: dict[str, Any]) -> ConversationManifest:
+    payload = dict(raw)
+    binding_ids = _string_list(payload.get("binding_ids"))
+    run_ids = _string_list(payload.get("run_ids"))
+    payload["run_ids"] = run_ids or binding_ids
+    payload.pop("binding_kind", None)
+    payload.pop("binding_ids", None)
+    payload.pop("agent_ids", None)
+    payload.pop("task_ids", None)
+    payload.pop("run_task_ids", None)
+    payload.setdefault("active_turn_id", None)
+    payload.setdefault("updated_at", utc_now())
+    payload.setdefault("next_sequence", 1)
+    return ConversationManifest(**payload)
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]

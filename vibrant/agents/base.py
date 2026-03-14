@@ -130,7 +130,6 @@ class AgentBase(ABC):
         event.setdefault("agent_id", agent_record.identity.agent_id)
         event.setdefault("run_id", agent_record.identity.run_id)
         event.setdefault("role", agent_record.identity.role)
-        event.pop("task_id", None)
         return event
 
     def extract_summary(
