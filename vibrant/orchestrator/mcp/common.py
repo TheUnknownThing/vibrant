@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
@@ -103,8 +104,10 @@ def has_backend(target: Any, *names: str) -> bool:
 def serialize_value(value: Any) -> Any:
     """Convert dataclasses, enums, paths, and model-like objects to plain values."""
 
+    if hasattr(value, "model_dump"):
+        return serialize_value(value.model_dump(mode="json"))
     if hasattr(value, "model_dump_json"):
-        return serialize_value(value.model_dump_json())
+        return serialize_value(json.loads(value.model_dump_json()))
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, Enum):
@@ -120,4 +123,3 @@ def serialize_value(value: Any) -> Any:
     if isinstance(value, Iterable) and not isinstance(value, (str, bytes, bytearray)):
         return [serialize_value(item) for item in value]
     return value
-

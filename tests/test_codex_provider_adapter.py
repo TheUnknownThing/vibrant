@@ -9,12 +9,21 @@ from typing import Any
 
 import pytest
 
-from vibrant.models.agent import AgentRunRecord
+from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.wire import JsonRpcNotification
 from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 from vibrant.providers.codex.client import CodexClientError
 from vibrant.providers.invocation import ProviderInvocationPlan
+
+
+def _make_agent_record(
+    *,
+    agent_id: str,
+    task_id: str,
+    agent_type: AgentType = AgentType.CODE,
+) -> AgentRecord:
+    return AgentRecord(identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type})
 
 
 class FakeCodexClient:
@@ -106,7 +115,7 @@ class TestCodexProviderAdapter:
                 "rolloutPath": ".codex/threads/thread_abc123/rollout.jsonl",
             }
         }
-        agent = AgentRunRecord(identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"})
+        agent = _make_agent_record(agent_id="agent-task-001", task_id="task-001")
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=client, agent_record=agent, on_canonical_event=events.append)
 
@@ -441,7 +450,7 @@ async def test_codex_app_server_handshake_integration(tmp_path: Path):
     if not codex_binary:
         pytest.skip("codex CLI is not available")
 
-    agent = AgentRunRecord(identity={"agent_id": "agent-task-real", "task_id": "task-real", "role": "code"})
+    agent = _make_agent_record(agent_id="agent-task-real", task_id="task-real")
     events: list[dict[str, Any]] = []
     adapter = CodexProviderAdapter(
         cwd=str(tmp_path),

@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.state import OrchestratorState, OrchestratorStatus
 from vibrant.models.task import TaskInfo, TaskStatus
 
 
 def test_agent_record_status_transition_guardrails():
-    record = AgentRunRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "role": "code"})
+    record = AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE})
 
     record.transition_to(AgentStatus.CONNECTING)
     record.transition_to(AgentStatus.RUNNING)

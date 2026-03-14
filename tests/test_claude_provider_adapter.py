@@ -9,9 +9,18 @@ import pytest
 
 from claude_agent_sdk.types import AssistantMessage, ResultMessage, TaskProgressMessage, TaskStartedMessage, TextBlock
 
-from vibrant.models.agent import AgentRunRecord
+from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.providers.base import RuntimeMode
 from vibrant.providers.claude.adapter import ClaudeProviderAdapter
+
+
+def _make_agent_record(
+    *,
+    agent_id: str,
+    task_id: str,
+    agent_type: AgentType,
+) -> AgentRecord:
+    return AgentRecord(identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type})
 
 
 class FakeClaudeClient:
@@ -116,7 +125,11 @@ class TestClaudeProviderAdapter:
             ),
         ]
 
-        agent = AgentRunRecord(identity={"agent_id": "agent-claude-1", "task_id": "task-claude-1", "role": "code"})
+        agent = _make_agent_record(
+            agent_id="agent-claude-1",
+            task_id="task-claude-1",
+            agent_type=AgentType.CODE,
+        )
         events: list[dict[str, Any]] = []
         adapter = ClaudeProviderAdapter(client=client, cwd=str(tmp_path), agent_record=agent, on_canonical_event=events.append)
 
@@ -172,7 +185,11 @@ class TestClaudeProviderAdapter:
             )
         ]
 
-        agent = AgentRunRecord(identity={"agent_id": "agent-claude-2", "task_id": "task-claude-2", "role": "gatekeeper"})
+        agent = _make_agent_record(
+            agent_id="agent-claude-2",
+            task_id="task-claude-2",
+            agent_type=AgentType.GATEKEEPER,
+        )
         events: list[dict[str, Any]] = []
         adapter = ClaudeProviderAdapter(
             client=client,

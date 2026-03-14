@@ -10,10 +10,22 @@ from typing import Any
 
 import pytest
 
-from vibrant.models.agent import AgentRunRecord
+from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.wire import JsonRpcNotification
 from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
+
+
+def _make_agent_record(
+    *,
+    agent_id: str,
+    task_id: str,
+    provider: dict[str, Any] | None = None,
+) -> AgentRecord:
+    return AgentRecord(
+        identity={"agent_id": agent_id, "task_id": task_id, "type": AgentType.CODE},
+        provider=provider or {},
+    )
 
 
 class LoggingFakeCodexClient:
@@ -61,8 +73,9 @@ class TestCodexProviderLogging:
         client.responses["initialize"] = {"serverInfo": {"name": "codex"}}
         client.responses["thread/start"] = {"thread": {"id": "thread_abc123", "path": ".codex/thread_abc123"}}
 
-        agent = AgentRunRecord(
-            identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"},
+        agent = _make_agent_record(
+            agent_id="agent-task-001",
+            task_id="task-001",
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),
                 "canonical_event_log": str(tmp_path / "canonical.ndjson"),
@@ -98,8 +111,9 @@ class TestCodexProviderLogging:
         client.responses["initialize"] = {"serverInfo": {"name": "codex"}}
         client.responses["account/login/start"] = {"type": "apiKey"}
 
-        agent = AgentRunRecord(
-            identity={"agent_id": "agent-auth-redact", "task_id": "task-auth-redact", "role": "code"},
+        agent = _make_agent_record(
+            agent_id="agent-auth-redact",
+            task_id="task-auth-redact",
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),
                 "canonical_event_log": str(tmp_path / "canonical.ndjson"),
@@ -127,7 +141,7 @@ async def test_real_agent_run_populates_both_logs(tmp_path: Path):
     if not codex_binary:
         pytest.skip("codex CLI is not available")
 
-    agent = AgentRunRecord(identity={"agent_id": "agent-task-real-log", "task_id": "task-real-log", "role": "code"})
+    agent = _make_agent_record(agent_id="agent-task-real-log", task_id="task-real-log")
     adapter = CodexProviderAdapter(cwd=str(tmp_path), codex_binary=codex_binary, agent_record=agent)
 
     await adapter.start_session(cwd=str(tmp_path))
