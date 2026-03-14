@@ -107,6 +107,41 @@ def test_conversation_view_records_request_events_as_status_entries():
     assert view._conversation.entries[0].text == "User input requested"
 
 
+def test_conversation_view_splits_staggered_thinking_around_tool_output():
+    view = ConversationView()
+    for sequence, event_type, text, payload in (
+        (1, "conversation.assistant.thinking.delta", "First thought.", None),
+        (
+            2,
+            "conversation.tool_call.completed",
+            "rg output",
+            {"tool_name": "rg", "result": "matched line"},
+        ),
+        (3, "conversation.assistant.thinking.delta", "Second thought.", None),
+    ):
+        view.ingest_stream_event(
+            AgentStreamEvent(
+                conversation_id="gatekeeper-1",
+                entry_id=f"evt-{sequence}",
+                source_event_id=None,
+                sequence=sequence,
+                agent_id="gatekeeper-agent",
+                task_id=None,
+                turn_id="turn-1",
+                item_id=None,
+                type=event_type,
+                text=text,
+                payload=payload,
+                created_at=f"2026-03-13T00:00:0{sequence}Z",
+            )
+        )
+
+    assert view._conversation is not None
+    assert [entry.kind for entry in view._conversation.entries] == ["thinking", "tool_call", "thinking"]
+    assert view._conversation.entries[0].text == "First thought."
+    assert view._conversation.entries[2].text == "Second thought."
+
+
 def test_chat_panel_uses_question_records_for_summary():
     panel = ChatPanel()
     panel.set_gatekeeper_state(

@@ -386,11 +386,14 @@ def _find_open_entry(
     kind: str,
     turn_id: str | None,
 ) -> AgentConversationEntry | None:
-    for entry in reversed(entries):
-        if entry.role != role or entry.kind != kind:
-            continue
-        if entry.turn_id != turn_id:
-            continue
-        if entry.finished_at is None:
-            return entry
-    return None
+    # Only the trailing open widget can keep streaming content. If a later
+    # message/tool widget has already been appended, preserve transcript order
+    # by starting a fresh widget for subsequent deltas.
+    if not entries:
+        return None
+    entry = entries[-1]
+    if entry.role != role or entry.kind != kind:
+        return None
+    if entry.turn_id != turn_id or entry.finished_at is not None:
+        return None
+    return entry

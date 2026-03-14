@@ -63,3 +63,48 @@ def test_conversation_stream_subscriptions_receive_replay(tmp_path: Path) -> Non
 
     assert seen[0] == "conversation.user.message"
     assert seen[-1] == "conversation.runtime.error"
+
+
+def test_conversation_stream_rebuild_splits_staggered_thinking_blocks(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".vibrant")
+    stream = ConversationStreamService(store)
+
+    stream.bind_agent(conversation_id="gatekeeper-1", agent_id="gatekeeper-a", task_id=None)
+    stream.ingest_canonical(
+        {
+            "type": "reasoning.summary.delta",
+            "agent_id": "gatekeeper-a",
+            "delta": "First thought.",
+            "turn_id": "turn-1",
+            "timestamp": "2026-03-13T00:00:00Z",
+            "event_id": "evt-1",
+        }
+    )
+    stream.ingest_canonical(
+        {
+            "type": "tool.call.completed",
+            "agent_id": "gatekeeper-a",
+            "name": "rg",
+            "result": "matched line",
+            "turn_id": "turn-1",
+            "timestamp": "2026-03-13T00:00:01Z",
+            "event_id": "evt-2",
+        }
+    )
+    stream.ingest_canonical(
+        {
+            "type": "reasoning.summary.delta",
+            "agent_id": "gatekeeper-a",
+            "delta": "Second thought.",
+            "turn_id": "turn-1",
+            "timestamp": "2026-03-13T00:00:02Z",
+            "event_id": "evt-3",
+        }
+    )
+
+    view = stream.rebuild("gatekeeper-1")
+
+    assert view is not None
+    assert [entry.kind for entry in view.entries] == ["thinking", "tool_call", "thinking"]
+    assert view.entries[0].text == "First thought."
+    assert view.entries[2].text == "Second thought."

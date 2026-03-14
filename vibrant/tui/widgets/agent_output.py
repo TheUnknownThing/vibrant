@@ -9,8 +9,8 @@ from typing import Any, Iterable
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Collapsible, ContentSwitcher, LoadingIndicator, Static
+from textual.containers import Vertical, VerticalScroll
+from textual.widgets import Collapsible, ContentSwitcher, Static
 
 from ...models.agent import AgentStatus
 
@@ -35,11 +35,22 @@ class AgentStreamState:
     task_id: str | None = None
     status: str | None = None
     provider_thread_id: str | None = None
-    canonical_lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
+    entries: deque["AgentStreamEntry"] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
     debug_lines: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
     thought_text: str = ""
     thought_timestamp: str | None = None
     active_thought_item_id: str | None = None
+
+
+@dataclass(slots=True)
+class AgentStreamEntry:
+    """One rendered entry in the ordered agent-output stream."""
+
+    kind: str
+    text: str
+    timestamp: str | None = None
+    item_id: str | None = None
+    running: bool = False
 
 
 class AgentOutput(Static):
@@ -92,39 +103,35 @@ class AgentOutput(Static):
         scrollbar-size: 1 1;
     }
 
-    #agent-output-thoughts {
-        margin: 0 1 1 1;
-    }
-
-    #agent-output-thoughts-status {
-        height: auto;
-        min-height: 1;
-        align: left middle;
-        padding: 0 1 1 1;
-    }
-
-    #agent-output-thoughts-spinner {
-        width: 3;
-        margin-right: 1;
-    }
-
-    #agent-output-thoughts-label {
-        color: $text-muted;
-    }
-
-    #agent-output-thoughts-body,
     #agent-output-stream,
     #agent-output-debug {
         width: 100%;
         padding: 0 1;
     }
 
-    #agent-output-thoughts-body {
-        padding-bottom: 1;
-    }
-
     #agent-output-stream {
         margin-top: 1;
+        height: auto;
+    }
+
+    #agent-output-stream > .agent-output-entry {
+        margin-bottom: 1;
+    }
+
+    #agent-output-stream > .agent-output-entry:last-child {
+        margin-bottom: 0;
+    }
+
+    .agent-output-log {
+        padding: 0 1;
+    }
+
+    .agent-output-reasoning {
+        margin: 0;
+    }
+
+    .agent-output-reasoning-body {
+        padding: 0 1 1 1;
     }
     """
 
@@ -143,12 +150,7 @@ class AgentOutput(Static):
         yield Static("", id="agent-output-tabs")
         with ContentSwitcher(initial="agent-output-stream-scroll", id="agent-output-switcher"):
             with VerticalScroll(id="agent-output-stream-scroll"):
-                with Collapsible(title="💭 Agent thoughts", collapsed=True, id="agent-output-thoughts"):
-                    with Horizontal(id="agent-output-thoughts-status"):
-                        yield LoadingIndicator(id="agent-output-thoughts-spinner")
-                        yield Static("", id="agent-output-thoughts-label")
-                    yield Static("", id="agent-output-thoughts-body", markup=False)
-                yield Static("", id="agent-output-stream", markup=False)
+                yield Vertical(id="agent-output-stream")
             with VerticalScroll(id="agent-output-debug-scroll"):
                 yield Static("", id="agent-output-debug", markup=False)
 
@@ -192,6 +194,8 @@ class AgentOutput(Static):
             stream.task_id = self._task_id(agent)
             stream.status = self._status(agent)
             stream.provider_thread_id = self._provider_thread_id(agent)
+            if stream.status != AgentStatus.RUNNING.value:
+                self._close_active_reasoning(stream)
 
         self._agent_order = [agent_id for agent in (self._agent_id(agent) for agent in ordered_agents) if agent_id]
         self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
@@ -227,20 +231,25 @@ class AgentOutput(Static):
         if event_type == "reasoning.summary.delta":
             delta = event.get("delta")
             if isinstance(delta, str) and delta:
-                stream.thought_text = f"{stream.thought_text}{delta}"
                 item_id = event.get("item_id")
-                if isinstance(item_id, str) and item_id:
-                    stream.active_thought_item_id = item_id
-                stream.thought_timestamp = _timestamp_text(event.get("timestamp"))
+                self._append_reasoning_delta(
+                    stream,
+                    delta=delta,
+                    item_id=item_id if isinstance(item_id, str) and item_id else None,
+                    timestamp=_timestamp_text(event.get("timestamp")),
+                )
         elif event_type == "task.progress":
             item = event.get("item") if isinstance(event.get("item"), dict) else {}
             item_type = str(item.get("type") or event.get("item_type") or "").strip().lower()
             if item_type == "reasoning":
                 final_text = _extract_reasoning_text(item, fallback=stream.thought_text)
-                if final_text:
-                    stream.thought_text = final_text
-                stream.active_thought_item_id = None
-                stream.thought_timestamp = _timestamp_text(event.get("timestamp"))
+                item_id = item.get("id")
+                self._finalize_reasoning(
+                    stream,
+                    item_id=item_id if isinstance(item_id, str) and item_id else None,
+                    text=final_text,
+                    timestamp=_timestamp_text(event.get("timestamp")),
+                )
             else:
                 for line in _render_task_progress_lines(event):
                     self._append_canonical_line(stream, line)
@@ -298,7 +307,7 @@ class AgentOutput(Static):
         stream = self._streams[agent_id]
         if debug:
             return len(stream.debug_lines)
-        return len(stream.canonical_lines)
+        return len(stream.entries)
 
     def get_thoughts_text(self, agent_id: str | None = None) -> str:
         """Return the latest visible thought text for tests and diagnostics."""
@@ -439,18 +448,16 @@ class AgentOutput(Static):
         switcher.current = "agent-output-debug-scroll" if self._debug_view_enabled else "agent-output-stream-scroll"
 
     def _update_active_body(self, *, active_agent_changed: bool = False) -> None:
-        self._update_thoughts()
-
-        stream_body = self.query_one("#agent-output-stream", Static)
+        stream_body = self.query_one("#agent-output-stream", Vertical)
         debug_body = self.query_one("#agent-output-debug", Static)
 
         if self._active_agent_id is None:
-            stream_body.update(self._empty_message)
+            self._rebuild_stream(stream_body, None)
             debug_body.update("No event debug output yet.")
             return
 
         stream = self._streams[self._active_agent_id]
-        stream_body.update(self._build_canonical_text(stream))
+        self._rebuild_stream(stream_body, stream)
         debug_body.update(self._build_debug_text(stream))
 
         if self._auto_follow or active_agent_changed:
@@ -460,44 +467,128 @@ class AgentOutput(Static):
             )
             scroll.scroll_end(animate=False)
 
-    def _update_thoughts(self) -> None:
-        thoughts = self.query_one("#agent-output-thoughts", Collapsible)
-        spinner = self.query_one("#agent-output-thoughts-spinner", LoadingIndicator)
-        label = self.query_one("#agent-output-thoughts-label", Static)
-        body = self.query_one("#agent-output-thoughts-body", Static)
-
-        if self._active_agent_id is None:
-            thoughts.title = "💭 Agent thoughts"
-            spinner.display = False
-            label.update("")
-            body.update("No agent thoughts yet.")
+    def _rebuild_stream(self, container: Vertical, stream: AgentStreamState | None) -> None:
+        container.remove_children()
+        if stream is None:
+            container.mount(Static(self._empty_message, classes="agent-output-entry agent-output-log", markup=False))
             return
-
-        stream = self._streams[self._active_agent_id]
-        is_running = self.thoughts_running(stream.agent_id)
-        spinner.display = is_running
-        thoughts.title = "💭 Agent thoughts (thinking…)" if is_running else "💭 Agent thoughts"
-
-        if is_running:
-            label.update("Streaming live reasoning")
-        elif stream.thought_text:
-            label.update("Latest reasoning summary")
-        else:
-            label.update("No reasoning captured yet")
-
-        body.update(stream.thought_text or "No agent thoughts yet.")
+        if not stream.entries:
+            container.mount(
+                Static(
+                    "Operational activity will appear here…",
+                    classes="agent-output-entry agent-output-log",
+                    markup=False,
+                )
+            )
+            return
+        for entry in stream.entries:
+            if entry.kind == "reasoning":
+                container.mount(_build_reasoning_widget(entry))
+            else:
+                container.mount(Static(entry.text, classes="agent-output-entry agent-output-log", markup=False))
 
     def _build_canonical_text(self, stream: AgentStreamState) -> str:
-        return "\n".join(stream.canonical_lines) if stream.canonical_lines else "Operational activity will appear here…"
+        if not stream.entries:
+            return "Operational activity will appear here…"
+        return "\n\n".join(_entry_plain_text(entry) for entry in stream.entries)
 
     def _build_debug_text(self, stream: AgentStreamState) -> str:
         return "\n".join(stream.debug_lines) if stream.debug_lines else "Waiting for event debug output…"
 
     def _append_canonical_line(self, stream: AgentStreamState, line: str) -> None:
-        stream.canonical_lines.append(line)
+        self._close_active_reasoning(stream)
+        stream.entries.append(AgentStreamEntry(kind="log", text=line))
 
     def _append_debug_line(self, stream: AgentStreamState, line: str) -> None:
         stream.debug_lines.append(line)
+
+    def _append_reasoning_delta(self, stream: AgentStreamState, *, delta: str, item_id: str | None, timestamp: str | None) -> None:
+        last_entry = stream.entries[-1] if stream.entries else None
+        if (
+            last_entry is not None
+            and last_entry.kind == "reasoning"
+            and last_entry.running
+            and last_entry.item_id == item_id
+        ):
+            last_entry.text = f"{last_entry.text}{delta}"
+            last_entry.timestamp = timestamp or last_entry.timestamp
+            stream.thought_text = last_entry.text
+            stream.thought_timestamp = last_entry.timestamp
+            stream.active_thought_item_id = item_id
+            return
+
+        entry = AgentStreamEntry(
+            kind="reasoning",
+            text=delta,
+            timestamp=timestamp,
+            item_id=item_id,
+            running=True,
+        )
+        stream.entries.append(entry)
+        stream.thought_text = entry.text
+        stream.thought_timestamp = timestamp
+        stream.active_thought_item_id = item_id
+
+    def _finalize_reasoning(
+        self,
+        stream: AgentStreamState,
+        *,
+        item_id: str | None,
+        text: str,
+        timestamp: str | None,
+    ) -> None:
+        target_entry: AgentStreamEntry | None = None
+        last_entry = stream.entries[-1] if stream.entries else None
+        if (
+            last_entry is not None
+            and last_entry.kind == "reasoning"
+            and (item_id is None or last_entry.item_id in {None, item_id})
+        ):
+            target_entry = last_entry
+
+        if target_entry is None:
+            target_entry = AgentStreamEntry(
+                kind="reasoning",
+                text=text,
+                timestamp=timestamp,
+                item_id=item_id,
+                running=False,
+            )
+            stream.entries.append(target_entry)
+        else:
+            if text:
+                target_entry.text = text
+            target_entry.timestamp = timestamp or target_entry.timestamp
+            target_entry.running = False
+
+        stream.thought_text = target_entry.text
+        stream.thought_timestamp = target_entry.timestamp
+        stream.active_thought_item_id = None
+
+    def _close_active_reasoning(self, stream: AgentStreamState) -> None:
+        last_entry = stream.entries[-1] if stream.entries else None
+        if last_entry is None or last_entry.kind != "reasoning" or not last_entry.running:
+            return
+        last_entry.running = False
+        stream.active_thought_item_id = None
+
+
+def _build_reasoning_widget(entry: AgentStreamEntry) -> Collapsible:
+    title = "💭 Agent thoughts (thinking…)" if entry.running else "💭 Agent thoughts"
+    body_text = entry.text or "Thinking..."
+    return Collapsible(
+        Static(body_text, classes="agent-output-reasoning-body", markup=False),
+        title=title,
+        collapsed=True,
+        classes="agent-output-entry agent-output-reasoning",
+    )
+
+
+def _entry_plain_text(entry: AgentStreamEntry) -> str:
+    if entry.kind != "reasoning":
+        return entry.text
+    label = "Reasoning..." if entry.running else "Reasoning"
+    return f"{label}\n{entry.text}".strip()
 
 
 def _timestamp_text(value: Any) -> str | None:
