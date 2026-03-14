@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from vibrant.models.agent import AgentRunRecord, AgentStatus, ProviderResumeHandle
@@ -52,12 +53,27 @@ class AgentRunStore:
         records = self.list_for_agent(agent_id)
         return records[-1] if records else None
 
-    def provider_thread_handle(self, agent_id: str) -> ProviderResumeHandle | None:
+    def resume_handle_for_run(self, run_id: str) -> ProviderResumeHandle | None:
+        record = self.get(run_id)
+        if record is None:
+            return None
+        handle = ProviderResumeHandle.from_provider_metadata(record.provider)
+        if handle is None or handle.empty:
+            return None
+        return handle
+
+    def latest_resumable_run(self, agent_id: str) -> AgentRunRecord | None:
         for record in reversed(self.list_for_agent(agent_id)):
             handle = ProviderResumeHandle.from_provider_metadata(record.provider)
             if handle is not None and not handle.empty:
-                return handle
+                return record
         return None
+
+    def provider_thread_handle(self, agent_id: str) -> ProviderResumeHandle | None:
+        record = self.latest_resumable_run(agent_id)
+        if record is None:
+            return None
+        return self.resume_handle_for_run(record.identity.run_id)
 
     def upsert(self, record: AgentRunRecord) -> AgentRunRecord:
         path = self.path / f"{record.identity.run_id}.json"
@@ -68,3 +84,18 @@ class AgentRunStore:
         path = self.path / f"{run_id}.json"
         if path.exists():
             path.unlink()
+
+    def normalize_files(self) -> list[str]:
+        rewritten: list[str] = []
+        for path in sorted(self.path.glob("*.json")):
+            try:
+                raw_payload = json.loads(path.read_text(encoding="utf-8"))
+                record = AgentRunRecord.model_validate(raw_payload)
+            except Exception:
+                continue
+            normalized_payload = record.model_dump(mode="json")
+            if raw_payload == normalized_payload:
+                continue
+            path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
+            rewritten.append(path.name)
+        return rewritten

@@ -13,6 +13,7 @@ from ..shared.workflow import (
     apply_workflow_status,
     infer_resume_workflow_status,
     orchestrator_status_from_workflow,
+    resume_workflow as resume_workflow_session,
     workflow_status_from_orchestrator,
 )
 
@@ -32,14 +33,7 @@ def end_planning(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
 
 
 def resume_workflow(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
-    state = artifacts.workflow_state_store.load()
-    status = state.resume_status
-    if status is None:
-        status = infer_resume_workflow_status(
-            consensus=artifacts.consensus_store.load(),
-            roadmap=artifacts.roadmap_store.load(),
-        )
-    return apply_workflow_status(artifacts, status)
+    return resume_workflow_session(artifacts)
 
 
 def can_transition_ui_status(current: OrchestratorStatus, next_status: OrchestratorStatus) -> bool:

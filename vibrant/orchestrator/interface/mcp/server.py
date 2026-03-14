@@ -115,6 +115,18 @@ class OrchestratorMCPServer:
                 required_scopes=(READ_SCOPE,),
                 handler=self.resources.get_workflow_status,
             ),
+            "vibrant.get_workflow_session": MCPResourceDefinition(
+                name="vibrant.get_workflow_session",
+                description="Return the workflow session snapshot.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_workflow_session,
+            ),
+            "vibrant.get_gatekeeper_session": MCPResourceDefinition(
+                name="vibrant.get_gatekeeper_session",
+                description="Return the Gatekeeper session snapshot.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_gatekeeper_session,
+            ),
             "vibrant.list_pending_questions": MCPResourceDefinition(
                 name="vibrant.list_pending_questions",
                 description="List pending user decisions.",
@@ -132,6 +144,18 @@ class OrchestratorMCPServer:
                 description="List active execution attempts.",
                 required_scopes=(READ_SCOPE,),
                 handler=self.resources.list_active_attempts,
+            ),
+            "vibrant.get_attempt_execution": MCPResourceDefinition(
+                name="vibrant.get_attempt_execution",
+                description="Return one joined attempt execution snapshot by id.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_attempt_execution,
+            ),
+            "vibrant.get_conversation": MCPResourceDefinition(
+                name="vibrant.get_conversation",
+                description="Return one orchestrator-owned conversation projection by id.",
+                required_scopes=(READ_SCOPE,),
+                handler=self.resources.get_conversation,
             ),
             "vibrant.get_review_ticket": MCPResourceDefinition(
                 name="vibrant.get_review_ticket",

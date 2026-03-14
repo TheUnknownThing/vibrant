@@ -49,8 +49,14 @@ class InterfaceControlPlane:
     def workflow_snapshot(self):
         return self.backend.queries.workflow_snapshot()
 
+    def workflow_session(self):
+        return self.backend.queries.workflow_session()
+
     def gatekeeper_state(self):
         return self.backend.queries.gatekeeper_state()
+
+    def gatekeeper_session(self):
+        return self.backend.queries.gatekeeper_session()
 
     def task_loop_state(self):
         return self.backend.queries.task_loop_state()
@@ -60,6 +66,9 @@ class InterfaceControlPlane:
 
     def conversation(self, conversation_id: str):
         return self.backend.queries.conversation(conversation_id)
+
+    def conversation_session(self, conversation_id: str):
+        return self.backend.queries.conversation_session(conversation_id)
 
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
         return self.backend.queries.subscribe_conversation(conversation_id, callback, replay=replay)
@@ -125,6 +134,9 @@ class InterfaceControlPlane:
 
     def list_active_attempts(self):
         return self.backend.queries.list_active_attempts()
+
+    def get_attempt_execution(self, attempt_id: str):
+        return self.backend.queries.get_attempt_execution(attempt_id)
 
     def get_review_ticket(self, ticket_id: str):
         return self.backend.queries.get_review_ticket(ticket_id)

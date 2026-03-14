@@ -127,6 +127,27 @@ class AttemptRecord:
 
 
 @dataclass(slots=True)
+class AttemptExecutionSnapshot:
+    attempt_id: str
+    task_id: str
+    status: AttemptStatus
+    workspace_id: str
+    conversation_id: str | None
+    run_id: str | None
+    run_status: str | None
+    workspace_path: str | None
+    provider_kind: str | None = None
+    provider_thread_id: str | None = None
+    provider_thread_path: str | None = None
+    provider_resume_cursor: dict[str, Any] | None = None
+    resumable: bool = False
+    live: bool = False
+    awaiting_input: bool = False
+    input_requests: list[InputRequest] = field(default_factory=list)
+    updated_at: str | None = None
+
+
+@dataclass(slots=True)
 class AttemptCompletion:
     attempt_id: str
     task_id: str

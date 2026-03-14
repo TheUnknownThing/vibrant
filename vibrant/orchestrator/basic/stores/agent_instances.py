@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 
-from vibrant.models.agent import AgentInstanceRecord
+from vibrant.models.agent import AgentInstanceRecord, AgentRunRecord
 
 
 class AgentInstanceStore:
@@ -57,3 +58,26 @@ class AgentInstanceStore:
         path = self.path / f"{agent_id}.json"
         if path.exists():
             path.unlink()
+
+    def reconcile_active_runs(
+        self,
+        *,
+        live_run_ids: Collection[str],
+        run_by_id: dict[str, AgentRunRecord],
+    ) -> list[str]:
+        rewritten: list[str] = []
+        for record in self.list():
+            active_run_id = record.active_run_id
+            if active_run_id is None:
+                continue
+            run_record = run_by_id.get(active_run_id)
+            run_is_live = active_run_id in live_run_ids
+            run_is_terminal = (
+                run_record is None or run_record.lifecycle.status in AgentRunRecord.TERMINAL_STATUSES
+            )
+            if run_is_live and not run_is_terminal:
+                continue
+            record.active_run_id = None
+            self.upsert(record)
+            rewritten.append(record.identity.agent_id)
+        return rewritten

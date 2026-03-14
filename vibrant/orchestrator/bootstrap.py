@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -35,13 +35,14 @@ from .basic.stores import (
     RoadmapStore,
     WorkflowStateStore,
 )
+from .basic.stores.gatekeeper_session import project_gatekeeper_session
 from .basic.workspace import WorkspaceService
 from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBackend, PolicyCommandAdapter
 from .interface.mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
 from .policy import GatekeeperLoopState
 from .policy.gatekeeper_loop import GatekeeperLifecycleService, GatekeeperUserLoop
 from .policy.task_loop import ExecutionCoordinator, TaskLoop
-from .types import TaskResult, WorkflowSnapshot, WorkflowStatus
+from .types import GatekeeperLifecycleStatus, GatekeeperSessionSnapshot, TaskResult, WorkflowSnapshot, WorkflowStatus
 
 
 @dataclass(slots=True)
@@ -97,6 +98,14 @@ class Orchestrator:
         conversation_stream = ConversationStreamService(conversation_store)
         runtime_service = AgentRuntimeService()
         workspace_service = WorkspaceService(project_root=root, worktree_root=config.worktree_directory)
+        _normalize_durable_state(
+            workflow_state_store=workflow_state_store,
+            agent_run_store=agent_run_store,
+            attempt_store=attempt_store,
+            agent_instance_store=agent_instance_store,
+            conversation_store=conversation_store,
+            runtime_service=runtime_service,
+        )
 
         artifacts = ArtifactsCapability(
             workflow_state_store=workflow_state_store,
@@ -421,3 +430,63 @@ def create_orchestrator(
         on_canonical_event=on_canonical_event,
         **kwargs,
     )
+
+
+def _normalize_durable_state(
+    *,
+    workflow_state_store: WorkflowStateStore,
+    agent_run_store: AgentRunStore,
+    attempt_store: AttemptStore,
+    agent_instance_store: AgentInstanceStore,
+    conversation_store: ConversationStore,
+    runtime_service: AgentRuntimeService,
+) -> None:
+    agent_run_store.normalize_files()
+    live_run_ids = runtime_service.live_run_ids()
+    run_by_id = {record.identity.run_id: record for record in agent_run_store.list()}
+    gatekeeper_session = _normalize_gatekeeper_session_state(
+        workflow_state_store=workflow_state_store,
+        agent_run_store=agent_run_store,
+        live_run_ids=live_run_ids,
+    )
+    conversation_store.normalize_manifests(
+        attempt_records=attempt_store.list_all(),
+        gatekeeper_conversation_id=gatekeeper_session.conversation_id,
+        gatekeeper_run_id=gatekeeper_session.run_id,
+    )
+    agent_instance_store.reconcile_active_runs(
+        live_run_ids=live_run_ids,
+        run_by_id=run_by_id,
+    )
+
+
+def _normalize_gatekeeper_session_state(
+    *,
+    workflow_state_store: WorkflowStateStore,
+    agent_run_store: AgentRunStore,
+    live_run_ids: set[str],
+) -> GatekeeperSessionSnapshot:
+    state = workflow_state_store.load()
+    run_record = (
+        agent_run_store.get(state.gatekeeper_session.run_id)
+        if state.gatekeeper_session.run_id is not None
+        else None
+    )
+    normalized_session = project_gatekeeper_session(
+        state.gatekeeper_session,
+        run_record=run_record,
+    )
+    if (
+        normalized_session.run_id is not None
+        and normalized_session.run_id not in live_run_ids
+        and normalized_session.lifecycle_state in {
+            GatekeeperLifecycleStatus.STARTING,
+            GatekeeperLifecycleStatus.RUNNING,
+        }
+    ):
+        normalized_session.lifecycle_state = GatekeeperLifecycleStatus.IDLE
+        normalized_session.active_turn_id = None
+    if asdict(normalized_session) != asdict(state.gatekeeper_session):
+        state.gatekeeper_session = normalized_session
+    workflow_state_store.normalize_file(state)
+    return normalized_session

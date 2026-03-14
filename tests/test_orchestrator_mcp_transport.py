@@ -13,6 +13,7 @@ from vibrant.agents.gatekeeper import GatekeeperRequest, GatekeeperTrigger
 from vibrant.orchestrator import create_orchestrator
 from vibrant.orchestrator.mcp import BINDING_HEADER_NAME
 from vibrant.orchestrator.policy.shared.capabilities import gatekeeper_binding_preset, worker_binding_preset
+from vibrant.orchestrator.types import AttemptStatus
 from vibrant.project_init import initialize_project
 
 
@@ -25,6 +26,24 @@ def _prepare_orchestrator(tmp_path: Path):
 async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_path: Path) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     try:
+        workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
+        attempt = orchestrator.attempt_store.create(
+            task_id="task-1",
+            task_definition_version=1,
+            workspace_id=workspace.workspace_id,
+            status=AttemptStatus.RUNNING,
+            code_run_id="run-task-1",
+            conversation_id="attempt-conv-1",
+        )
+        orchestrator.conversation_stream.bind_run(
+            conversation_id="attempt-conv-1",
+            run_id="run-task-1",
+        )
+        orchestrator.conversation_stream.record_host_message(
+            conversation_id="attempt-conv-1",
+            role="system",
+            text="Attempt resumed for transport inspection.",
+        )
         orchestrator.mcp_host.transport.port = 8765
         orchestrator.mcp_host.fastmcp.settings.port = 8765
         app = orchestrator.mcp_host.fastmcp.streamable_http_app()
@@ -55,7 +74,11 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
                         assert "vibrant.add_task" in {tool.name for tool in tools.tools}
                         assert "vibrant.update_consensus" in {tool.name for tool in tools.tools}
                         assert "vibrant.get_consensus" in {resource.name for resource in resources.resources}
+                        assert "vibrant.get_workflow_session" in {resource.name for resource in resources.resources}
+                        assert "vibrant.get_gatekeeper_session" in {resource.name for resource in resources.resources}
                         assert "vibrant.get_task" in {template.name for template in templates.resourceTemplates}
+                        assert "vibrant.get_attempt_execution" in {template.name for template in templates.resourceTemplates}
+                        assert "vibrant.get_conversation" in {template.name for template in templates.resourceTemplates}
 
                         add_task_result = await session.call_tool(
                             "vibrant.add_task",
@@ -66,11 +89,31 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
                             },
                         )
                         task_result = await session.read_resource("vibrant://tasks/task-1")
+                        workflow_session_result = await session.read_resource("vibrant://workflow-session")
+                        gatekeeper_session_result = await session.read_resource("vibrant://gatekeeper-session")
+                        active_attempts_result = await session.read_resource("vibrant://active-attempts")
+                        attempt_execution_result = await session.read_resource(
+                            f"vibrant://attempts/{attempt.attempt_id}"
+                        )
+                        conversation_result = await session.read_resource("vibrant://conversations/attempt-conv-1")
 
         created_task = json.loads(add_task_result.content[0].text)
         resolved_task = json.loads(task_result.contents[0].text)
+        workflow_session = json.loads(workflow_session_result.contents[0].text)
+        gatekeeper_session = json.loads(gatekeeper_session_result.contents[0].text)
+        active_attempts = json.loads(active_attempts_result.contents[0].text)
+        attempt_execution = json.loads(attempt_execution_result.contents[0].text)
+        conversation = json.loads(conversation_result.contents[0].text)
         assert created_task["id"] == "task-1"
         assert resolved_task["id"] == "task-1"
+        assert workflow_session["status"] == "init"
+        assert gatekeeper_session["lifecycle_state"] in {"not_started", "idle"}
+        assert active_attempts[0]["attempt_id"] == attempt.attempt_id
+        assert active_attempts[0]["code_run_id"] == "run-task-1"
+        assert "run_id" not in active_attempts[0]
+        assert attempt_execution["run_id"] == "run-task-1"
+        assert conversation["conversation_id"] == "attempt-conv-1"
+        assert conversation["run_ids"] == ["run-task-1"]
     finally:
         await orchestrator.shutdown()
 

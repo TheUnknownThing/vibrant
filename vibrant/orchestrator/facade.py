@@ -164,6 +164,12 @@ class OrchestratorFacade:
     def get_workflow_status(self) -> OrchestratorStatus:
         return orchestrator_status_from_workflow(self.control_plane.get_workflow_status())
 
+    def get_workflow_session(self):
+        return self.control_plane.workflow_session()
+
+    def get_gatekeeper_session(self):
+        return self.control_plane.gatekeeper_session()
+
     def get_consensus_document(self) -> ConsensusDocument | None:
         return self.control_plane.get_consensus_document()
 
@@ -231,6 +237,12 @@ class OrchestratorFacade:
 
     def get_run(self, run_id: str) -> AgentRunSnapshot | None:
         return self.control_plane.get_run(run_id)
+
+    def get_attempt_execution(self, attempt_id: str):
+        return self.control_plane.get_attempt_execution(attempt_id)
+
+    def get_conversation(self, conversation_id: str):
+        return self.control_plane.conversation_session(conversation_id)
 
     def task_id_for_run(self, run_id: str) -> str | None:
         normalized_run_id = run_id.strip() if isinstance(run_id, str) else ""

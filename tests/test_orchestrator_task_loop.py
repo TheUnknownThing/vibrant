@@ -5,9 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus as RunStatus, AgentType
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator import create_orchestrator
 from vibrant.orchestrator.policy import TaskLoopStage
+from vibrant.orchestrator.policy.task_loop.models import DispatchLease, PreparedTaskExecution
 from vibrant.orchestrator.types import AttemptCompletion, AttemptStatus, MergeOutcome, ValidationOutcome, WorkflowStatus
 from vibrant.project_init import initialize_project
 
@@ -255,3 +257,227 @@ async def test_pending_review_ticket_can_be_resolved_after_restart(tmp_path: Pat
 
     assert resolution.decision == "accept"
     assert task is not None and task.status is TaskStatus.ACCEPTED
+
+
+@pytest.mark.asyncio
+async def test_execution_coordinator_recover_attempt_resumes_existing_provider_thread(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator.attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-old",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator.agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-old",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.RUNNING},
+            context={
+                "worktree_path": workspace.path,
+                "prompt_used": "Resume the coding task.",
+            },
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_resume_run(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    async def fake_start_run(**kwargs):
+        raise AssertionError("fresh start should not be used when a resume handle exists")
+
+    monkeypatch.setattr(orchestrator.runtime_service, "resume_run", fake_resume_run)
+    monkeypatch.setattr(orchestrator.runtime_service, "start_run", fake_start_run)
+
+    task = orchestrator.get_task("task-1")
+    assert task is not None
+    prepared = PreparedTaskExecution(
+        lease=DispatchLease(task_id="task-1", lease_id="lease-1", task_definition_version=1, branch_hint=task.branch),
+        task=task,
+        prompt="Fresh prompt should be ignored in favor of persisted prompt.",
+    )
+
+    recovered = await orchestrator.execution_coordinator.recover_attempt(attempt.attempt_id, prepared=prepared)
+    session = orchestrator.execution_coordinator.attempt_execution(attempt.attempt_id)
+
+    assert recovered is not None
+    assert recovered.code_run_id is not None and recovered.code_run_id != "run-old"
+    assert captured["prompt"] == "Resume the coding task."
+    assert captured["provider_thread"].thread_id == "thread-existing"
+    assert session is not None
+    assert session.run_id == recovered.code_run_id
+    assert session.resumable is False
+
+
+@pytest.mark.asyncio
+async def test_execution_coordinator_recover_attempt_falls_back_to_fresh_start(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator.attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-old",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator.agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-old",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.RUNNING},
+            context={
+                "worktree_path": workspace.path,
+                "prompt_used": "Start from scratch if needed.",
+            },
+            provider=AgentProviderMetadata(),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_start_run(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    async def fake_resume_run(**kwargs):
+        raise AssertionError("resume should not be used without a durable handle")
+
+    monkeypatch.setattr(orchestrator.runtime_service, "start_run", fake_start_run)
+    monkeypatch.setattr(orchestrator.runtime_service, "resume_run", fake_resume_run)
+
+    task = orchestrator.get_task("task-1")
+    assert task is not None
+    prepared = PreparedTaskExecution(
+        lease=DispatchLease(task_id="task-1", lease_id="lease-2", task_definition_version=1, branch_hint=task.branch),
+        task=task,
+        prompt="Recompute the task prompt.",
+    )
+
+    recovered = await orchestrator.execution_coordinator.recover_attempt(attempt.attempt_id, prepared=prepared)
+
+    assert recovered is not None
+    assert recovered.code_run_id is not None and recovered.code_run_id != "run-old"
+    assert captured["prompt"] == "Start from scratch if needed."
+
+
+@pytest.mark.asyncio
+async def test_run_next_task_recovers_active_attempt_before_dispatching_new_work(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    attempt = orchestrator.attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=orchestrator.workspace_service.prepare_task_workspace("task-1").workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-stale",
+        conversation_id="attempt-conv-1",
+    )
+    task = orchestrator.get_task("task-1")
+    assert task is not None
+    orchestrator.roadmap_store.replace_task(
+        task.model_copy(update={"status": TaskStatus.IN_PROGRESS}),
+        active_attempt_id=attempt.attempt_id,
+    )
+    calls: list[str] = []
+
+    async def fake_recover_attempt(attempt_id: str, *, prepared):
+        del prepared
+        calls.append(f"recover:{attempt_id}")
+        return orchestrator.attempt_store.get(attempt_id)
+
+    async def fake_start_attempt(prepared):
+        del prepared
+        raise AssertionError("new dispatch should not happen while an active attempt is recoverable")
+
+    async def fake_await_attempt_completion(attempt_id: str):
+        calls.append(f"await:{attempt_id}")
+        active = orchestrator.attempt_store.get(attempt_id)
+        assert active is not None
+        return AttemptCompletion(
+            attempt_id=active.attempt_id,
+            task_id=active.task_id,
+            status="failed",
+            code_run_id=active.code_run_id or "run-stale",
+            workspace_ref=active.workspace_id,
+            diff_ref=None,
+            validation=None,
+            summary=None,
+            error="resume failed",
+            conversation_ref=active.conversation_id,
+            provider_events_ref=None,
+        )
+
+    orchestrator.task_loop.execution = SimpleNamespace(
+        next_attempt_to_recover=lambda: orchestrator.execution_coordinator.attempt_execution(attempt.attempt_id),
+        recover_attempt=fake_recover_attempt,
+        start_attempt=fake_start_attempt,
+        await_attempt_completion=fake_await_attempt_completion,
+    )
+
+    result = await orchestrator.run_next_task()
+
+    assert result is not None and result.outcome == "failed"
+    assert calls == [f"recover:{attempt.attempt_id}", f"await:{attempt.attempt_id}"]
+
+
+@pytest.mark.asyncio
+async def test_run_next_task_surfaces_recovery_failure_without_dispatching_new_work(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    attempt = orchestrator.attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=orchestrator.workspace_service.prepare_task_workspace("task-1").workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-stale",
+        conversation_id="attempt-conv-1",
+    )
+    task = orchestrator.get_task("task-1")
+    assert task is not None
+    orchestrator.roadmap_store.replace_task(
+        task.model_copy(update={"status": TaskStatus.IN_PROGRESS}),
+        active_attempt_id=attempt.attempt_id,
+    )
+    calls: list[str] = []
+
+    async def fake_recover_attempt(attempt_id: str, *, prepared):
+        del prepared
+        calls.append(f"recover:{attempt_id}")
+        raise RuntimeError("resume failed")
+
+    async def fake_start_attempt(prepared):
+        del prepared
+        raise AssertionError("new dispatch should not happen after a recovery failure")
+
+    async def fake_await_attempt_completion(attempt_id: str):
+        raise AssertionError(f"await should not run after failed recovery: {attempt_id}")
+
+    orchestrator.task_loop.execution = SimpleNamespace(
+        next_attempt_to_recover=lambda: orchestrator.execution_coordinator.attempt_execution(attempt.attempt_id),
+        recover_attempt=fake_recover_attempt,
+        start_attempt=fake_start_attempt,
+        await_attempt_completion=fake_await_attempt_completion,
+    )
+
+    result = await orchestrator.run_next_task()
+    failed_attempt = orchestrator.attempt_store.get(attempt.attempt_id)
+
+    assert result is not None and result.outcome == "failed"
+    assert result.error == "resume failed"
+    assert failed_attempt is not None and failed_attempt.status is AttemptStatus.FAILED
+    assert calls == [f"recover:{attempt.attempt_id}"]

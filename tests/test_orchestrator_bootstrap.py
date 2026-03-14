@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentInstanceRecord, AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator import OrchestratorFacade, create_orchestrator
+from vibrant.orchestrator.basic.stores import AgentInstanceStore, AgentRunStore
 from vibrant.orchestrator.types import WorkflowStatus
 from vibrant.project_init import initialize_project
 
@@ -23,6 +25,96 @@ def test_create_orchestrator_bootstraps_redesigned_services(tmp_path: Path) -> N
     assert orchestrator.binding_service is not None
     assert orchestrator.conversation_store.base_dir.exists()
     assert orchestrator.attempt_store.list_active() == []
+
+
+def test_bootstrap_rewrites_gatekeeper_state_and_projects_resume_from_run(tmp_path: Path) -> None:
+    initialize_project(tmp_path)
+    vibrant_dir = tmp_path / ".vibrant"
+    AgentRunStore(vibrant_dir / "agent-runs").upsert(
+        AgentRecord(
+            identity={
+                "run_id": "gatekeeper-run-1",
+                "agent_id": "gatekeeper-agent",
+                "role": AgentType.GATEKEEPER.value,
+                "type": AgentType.GATEKEEPER,
+            },
+            lifecycle={"status": AgentStatus.COMPLETED},
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+    state_path = vibrant_dir / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "session_id": "session-1",
+                "started_at": "2026-03-14T00:00:00Z",
+                "workflow_status": "planning",
+                "resume_status": None,
+                "concurrency_limit": 4,
+                "gatekeeper_session": {
+                    "agent_id": "gatekeeper-agent",
+                    "run_id": "gatekeeper-run-1",
+                    "conversation_id": "gatekeeper-conversation",
+                    "lifecycle_state": "running",
+                    "provider_thread_id": "thread-existing",
+                    "active_turn_id": "turn-1",
+                    "resumable": True,
+                    "last_error": None,
+                    "updated_at": "2026-03-14T00:00:00Z",
+                },
+                "total_agent_spawns": 0,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    orchestrator = create_orchestrator(tmp_path)
+    persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
+    snapshot = orchestrator.snapshot()
+
+    assert "provider_thread_id" not in persisted_state["gatekeeper_session"]
+    assert persisted_state["gatekeeper_session"]["lifecycle_state"] == "idle"
+    assert persisted_state["gatekeeper_session"]["resumable"] is True
+    assert snapshot.gatekeeper.run_id == "gatekeeper-run-1"
+    assert snapshot.gatekeeper.provider_thread_id == "thread-existing"
+
+
+def test_bootstrap_clears_stale_instance_active_run_pointer(tmp_path: Path) -> None:
+    initialize_project(tmp_path)
+    vibrant_dir = tmp_path / ".vibrant"
+    agent_run_store = AgentRunStore(vibrant_dir / "agent-runs")
+    agent_instance_store = AgentInstanceStore(vibrant_dir / "agent-instances")
+    agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-stale",
+                "agent_id": "worker-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": AgentStatus.RUNNING},
+        )
+    )
+    agent_instance_store.upsert(
+        AgentInstanceRecord(
+            identity={"agent_id": "worker-1", "role": AgentType.CODE.value},
+            scope={"scope_type": "task", "scope_id": "task-1"},
+            latest_run_id="run-stale",
+            active_run_id="run-stale",
+        )
+    )
+
+    orchestrator = create_orchestrator(tmp_path)
+    instance = orchestrator.agent_instance_store.get("worker-1")
+
+    assert instance is not None
+    assert instance.latest_run_id == "run-stale"
+    assert instance.active_run_id is None
 
 
 def test_facade_manages_tasks_questions_and_status_projection(tmp_path: Path) -> None:

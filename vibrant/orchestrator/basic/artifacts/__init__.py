@@ -16,6 +16,7 @@ from ..stores import (
     RoadmapStore,
     WorkflowStateStore,
 )
+from ..stores.gatekeeper_session import project_gatekeeper_session
 from ...types import WorkflowSnapshot
 
 
@@ -34,10 +35,18 @@ class ArtifactsCapability:
 
     def workflow_snapshot(self) -> WorkflowSnapshot:
         state = self.workflow_state_store.load()
+        gatekeeper_run = (
+            self.agent_run_store.get(state.gatekeeper_session.run_id)
+            if state.gatekeeper_session.run_id is not None
+            else None
+        )
         return WorkflowSnapshot(
             status=state.workflow_status,
             concurrency_limit=state.concurrency_limit,
-            gatekeeper=state.gatekeeper_session,
+            gatekeeper=project_gatekeeper_session(
+                state.gatekeeper_session,
+                run_record=gatekeeper_run,
+            ),
             pending_question_ids=tuple(question.question_id for question in self.question_store.list_pending()),
             active_attempt_ids=tuple(attempt.attempt_id for attempt in self.attempt_store.list_active()),
             active_agent_ids=tuple(record.identity.agent_id for record in self.agent_run_store.list_active()),

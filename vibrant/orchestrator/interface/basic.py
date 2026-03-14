@@ -41,11 +41,17 @@ class BasicQueryAdapter:
     def workflow_snapshot(self):
         return self.artifacts.workflow_snapshot()
 
+    def workflow_session(self):
+        return self.artifacts.workflow_snapshot()
+
     def get_workflow_status(self):
         return self.artifacts.workflow_state_store.load().workflow_status
 
     def gatekeeper_state(self):
         return self.gatekeeper_loop.snapshot()
+
+    def gatekeeper_session(self):
+        return self.gatekeeper_loop.snapshot().session
 
     def task_loop_state(self):
         return self.task_loop.snapshot()
@@ -54,6 +60,9 @@ class BasicQueryAdapter:
         return self.gatekeeper_loop.snapshot().conversation_id
 
     def conversation(self, conversation_id: str):
+        return self.gatekeeper_loop.conversation(conversation_id)
+
+    def conversation_session(self, conversation_id: str):
         return self.gatekeeper_loop.conversation(conversation_id)
 
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
@@ -176,6 +185,9 @@ class BasicQueryAdapter:
 
     def list_active_attempts(self):
         return self.artifacts.attempt_store.list_active()
+
+    def get_attempt_execution(self, attempt_id: str):
+        return self.task_loop.execution.attempt_execution(attempt_id)
 
     def get_review_ticket(self, ticket_id: str):
         return self.task_loop.get_review_ticket(ticket_id)

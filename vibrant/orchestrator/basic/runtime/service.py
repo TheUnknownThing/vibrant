@@ -180,6 +180,13 @@ class AgentRuntimeService:
             input_requests=live_run.handle.input_requests,
         )
 
+    def live_run_ids(self) -> set[str]:
+        return {
+            run_id
+            for run_id, live_run in self._runs.items()
+            if not live_run.handle.done
+        }
+
     def subscribe_canonical_events(
         self,
         callback: CanonicalEventHandler,

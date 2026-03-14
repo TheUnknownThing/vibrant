@@ -33,19 +33,23 @@ class WorkflowStateStore:
         return self._parse_state(raw)
 
     def save(self, state: WorkflowState) -> None:
-        payload = {
+        write_json(self.path, self.serialize(state))
+
+    def serialize(self, state: WorkflowState) -> dict[str, object]:
+        gatekeeper_payload = {
+            **asdict(state.gatekeeper_session),
+            "lifecycle_state": state.gatekeeper_session.lifecycle_state.value,
+        }
+        gatekeeper_payload.pop("provider_thread_id", None)
+        return {
             "session_id": state.session_id,
             "started_at": state.started_at,
             "workflow_status": state.workflow_status.value,
             "resume_status": state.resume_status.value if state.resume_status is not None else None,
             "concurrency_limit": state.concurrency_limit,
-            "gatekeeper_session": {
-                **asdict(state.gatekeeper_session),
-                "lifecycle_state": state.gatekeeper_session.lifecycle_state.value,
-            },
+            "gatekeeper_session": gatekeeper_payload,
             "total_agent_spawns": state.total_agent_spawns,
         }
-        write_json(self.path, payload)
 
     def update_workflow_status(
         self,
@@ -66,6 +70,15 @@ class WorkflowStateStore:
         state.gatekeeper_session = session
         self.save(state)
         return state
+
+    def normalize_file(self, state: WorkflowState | None = None) -> bool:
+        raw = read_json(self.path, default=None)
+        normalized_state = state or self.load()
+        normalized_payload = self.serialize(normalized_state)
+        if raw == normalized_payload:
+            return False
+        self.save(normalized_state)
+        return True
 
     def set_concurrency_limit(self, limit: int) -> WorkflowState:
         if limit < 1:
@@ -136,6 +149,7 @@ class WorkflowStateStore:
                     provider_thread_id = gatekeeper_runtime["provider_thread_id"]
 
         active_turn_id = _as_non_empty_string(raw.get("active_turn_id"))
+        resumable = raw.get("resumable")
         return GatekeeperSessionSnapshot(
             agent_id=_as_non_empty_string(raw.get("agent_id")),
             run_id=_as_non_empty_string(raw.get("run_id")),
@@ -143,7 +157,7 @@ class WorkflowStateStore:
             lifecycle_state=GatekeeperLifecycleStatus(mapped),
             provider_thread_id=provider_thread_id,
             active_turn_id=active_turn_id,
-            resumable=bool(provider_thread_id),
+            resumable=bool(provider_thread_id) or resumable is True,
             last_error=_as_non_empty_string(raw.get("last_error")),
             updated_at=_as_non_empty_string(raw.get("updated_at")) or utc_now(),
         )

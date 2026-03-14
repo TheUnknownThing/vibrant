@@ -235,6 +235,16 @@ class _BindingAwareFastMCP(FastMCP):
                 uri="vibrant://workflow-status",
             ),
             _TransportResource(
+                name="vibrant.get_workflow_session",
+                description=descriptions["vibrant.get_workflow_session"].description,
+                uri="vibrant://workflow-session",
+            ),
+            _TransportResource(
+                name="vibrant.get_gatekeeper_session",
+                description=descriptions["vibrant.get_gatekeeper_session"].description,
+                uri="vibrant://gatekeeper-session",
+            ),
+            _TransportResource(
                 name="vibrant.list_pending_questions",
                 description=descriptions["vibrant.list_pending_questions"].description,
                 uri="vibrant://pending-questions",
@@ -259,6 +269,18 @@ class _BindingAwareFastMCP(FastMCP):
                 description=descriptions["vibrant.get_task"].description,
                 uri_template="vibrant://tasks/{task_id}",
                 pattern=re.compile(r"^vibrant://tasks/(?P<task_id>[^/]+)$"),
+            ),
+            _TransportResource(
+                name="vibrant.get_attempt_execution",
+                description=descriptions["vibrant.get_attempt_execution"].description,
+                uri_template="vibrant://attempts/{attempt_id}",
+                pattern=re.compile(r"^vibrant://attempts/(?P<attempt_id>[^/]+)$"),
+            ),
+            _TransportResource(
+                name="vibrant.get_conversation",
+                description=descriptions["vibrant.get_conversation"].description,
+                uri_template="vibrant://conversations/{conversation_id}",
+                pattern=re.compile(r"^vibrant://conversations/(?P<conversation_id>[^/]+)$"),
             ),
             _TransportResource(
                 name="vibrant.get_review_ticket",

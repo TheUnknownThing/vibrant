@@ -9,6 +9,7 @@ from vibrant.models.task import TaskInfo, TaskStatus
 
 from ...basic import ArtifactsCapability, WorkspaceCapability
 from ...types import (
+    AttemptRecord,
     AttemptStatus,
     MergeOutcome,
     ReviewResolutionRecord,
@@ -22,6 +23,12 @@ from ..shared.workflow import apply_workflow_status
 from .execution import ExecutionCoordinator
 from .models import DispatchLease, ReviewResolutionCommand, TaskLoopSnapshot, TaskLoopStage, TaskState
 from .prompting import prepare_task_execution, retry_definition_patch
+
+
+@dataclass(slots=True)
+class _AttemptRecoveryResult:
+    attempt: AttemptRecord | None = None
+    task_result: TaskResult | None = None
 
 
 @dataclass(slots=True)
@@ -91,6 +98,13 @@ class TaskLoop:
         return selected
 
     async def run_next_task(self) -> TaskResult | None:
+        recovery = await self._recover_active_attempt()
+        if recovery.task_result is not None:
+            return recovery.task_result
+        if recovery.attempt is not None:
+            lease = self._build_attempt_lease(recovery.attempt)
+            return await self._await_attempt_result(lease, recovery.attempt)
+
         leases = self.select_next(limit=1)
         if not leases:
             self._maybe_complete_workflow()
@@ -138,6 +152,9 @@ class TaskLoop:
             blocking_reason=None,
         )
 
+        return await self._await_attempt_result(lease, attempt)
+
+    async def _await_attempt_result(self, lease: DispatchLease, attempt) -> TaskResult:
         try:
             completion = await self.execution.await_attempt_completion(attempt.attempt_id)
         except Exception as exc:
@@ -239,6 +256,69 @@ class TaskLoop:
             error=completion.error,
             worktree_path=workspace.path,
         )
+
+    async def _recover_active_attempt(self) -> _AttemptRecoveryResult:
+        workflow = self.artifacts.workflow_snapshot()
+        reason = self._task_execution_block_reason(workflow)
+        if reason is not None:
+            self._set_blocked_if_needed(reason)
+            return _AttemptRecoveryResult()
+        if workflow.status is not WorkflowStatus.EXECUTING:
+            self._set_blocked_if_needed(None)
+            return _AttemptRecoveryResult()
+        recover_selector = getattr(self.execution, "next_attempt_to_recover", None)
+        session = recover_selector() if callable(recover_selector) else None
+        if session is None:
+            return _AttemptRecoveryResult()
+        attempt = self.artifacts.attempt_store.get(session.attempt_id)
+        if attempt is None:
+            return _AttemptRecoveryResult()
+        lease = self._build_attempt_lease(attempt)
+        self._set_snapshot(
+            stage=TaskLoopStage.CODING,
+            active_lease=lease,
+            active_attempt_id=attempt.attempt_id,
+            blocking_reason=None,
+        )
+        prepared = prepare_task_execution(
+            lease=lease,
+            roadmap_store=self.artifacts.roadmap_store,
+            consensus_store=self.artifacts.consensus_store,
+            project_name=self.artifacts.consensus_store.project_name,
+        )
+        try:
+            recovered = await self.execution.recover_attempt(
+                attempt.attempt_id,
+                prepared=prepared,
+            )
+        except Exception as exc:
+            reason = str(exc)
+            self.artifacts.attempt_store.update(attempt.attempt_id, status=AttemptStatus.FAILED)
+            self._record_task_state(
+                attempt.task_id,
+                TaskState.BLOCKED,
+                active_attempt_id=attempt.attempt_id,
+                failure_reason=reason,
+            )
+            self._set_snapshot(
+                stage=TaskLoopStage.BLOCKED,
+                active_lease=lease,
+                active_attempt_id=attempt.attempt_id,
+                blocking_reason=reason,
+            )
+            return _AttemptRecoveryResult(
+                task_result=TaskResult(
+                    task_id=attempt.task_id,
+                    outcome="failed",
+                    error=reason,
+                )
+            )
+        self._record_task_state(
+            recovered.task_id,
+            TaskState.ACTIVE,
+            active_attempt_id=recovered.attempt_id,
+        )
+        return _AttemptRecoveryResult(attempt=recovered)
 
     async def run_until_blocked(self) -> list[TaskResult]:
         results: list[TaskResult] = []
@@ -509,6 +589,13 @@ class TaskLoop:
             lease_id=f"lease-{uuid4()}",
             task_definition_version=definition_version,
             branch_hint=task.branch,
+        )
+
+    def _build_attempt_lease(self, attempt) -> DispatchLease:
+        task = self._require_task(attempt.task_id)
+        return self._build_dispatch_lease(
+            task,
+            definition_version=attempt.task_definition_version,
         )
 
     @staticmethod

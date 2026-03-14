@@ -13,12 +13,12 @@ from vibrant.agents.gatekeeper import (
     Gatekeeper,
     GatekeeperRequest,
 )
-from vibrant.models.agent import AgentInstanceProviderConfig
-from vibrant.models.agent import ProviderResumeHandle
+from vibrant.models.agent import AgentInstanceProviderConfig, AgentRunRecord, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.invocation_compiler import compile_provider_invocation
 
 from ...basic.stores import AgentInstanceStore, AgentRunStore
+from ...basic.stores.gatekeeper_session import project_gatekeeper_session
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
 from ..shared.capabilities import gatekeeper_binding_preset
@@ -57,6 +57,7 @@ class GatekeeperLifecycleService:
         self.run_store = run_store
         self._session_loader = session_loader
         self._session_saver = session_saver
+        self._legacy_provider_thread_id: str | None = None
         self._session = self._load_session()
         self._active_handle = None
         self._active_handle_run_id: str | None = None
@@ -118,10 +119,11 @@ class GatekeeperLifecycleService:
         )
 
         provider_thread = None
-        if resume and session.provider_thread_id:
-            provider_thread = self.run_store.provider_thread_handle(instance.identity.agent_id) or ProviderResumeHandle(
-                kind=agent_record.provider.kind,
-                thread_id=session.provider_thread_id,
+        if resume:
+            provider_thread = self._resolve_resume_handle(
+                session=session,
+                fallback_agent_id=instance.identity.agent_id,
+                provider_kind=agent_record.provider.kind,
             )
 
         self._session.agent_id = instance.identity.agent_id
@@ -210,6 +212,7 @@ class GatekeeperLifecycleService:
         self._session.run_id = None
         self._session.provider_thread_id = None
         self._session.resumable = False
+        self._legacy_provider_thread_id = None
         self._session.lifecycle_state = GatekeeperLifecycleStatus.NOT_STARTED
         self._session.last_error = reason
         self._session.updated_at = utc_now()
@@ -217,16 +220,22 @@ class GatekeeperLifecycleService:
         return await self.resume_or_start()
 
     def snapshot(self) -> GatekeeperSessionSnapshot:
-        return GatekeeperSessionSnapshot(
-            agent_id=self._session.agent_id,
-            run_id=self._session.run_id,
-            conversation_id=self._session.conversation_id,
-            lifecycle_state=self._session.lifecycle_state,
-            provider_thread_id=self._session.provider_thread_id,
-            active_turn_id=self._session.active_turn_id,
-            resumable=self._session.resumable,
-            last_error=self._session.last_error,
-            updated_at=self._session.updated_at,
+        run_record = self._run_record_for_session(self._session)
+        return project_gatekeeper_session(
+            GatekeeperSessionSnapshot(
+                agent_id=self._session.agent_id,
+                run_id=self._session.run_id,
+                conversation_id=self._session.conversation_id,
+                lifecycle_state=self._session.lifecycle_state,
+                provider_thread_id=self._session.provider_thread_id,
+                active_turn_id=self._session.active_turn_id,
+                resumable=self._session.resumable,
+                last_error=self._session.last_error,
+                updated_at=self._session.updated_at,
+            ),
+            run_record=run_record,
+            cached_provider_thread_id=self._legacy_provider_thread_id,
+            cached_resumable=self._session.resumable,
         )
 
     async def _monitor_handle(self, run_id: str, handle) -> None:
@@ -242,6 +251,7 @@ class GatekeeperLifecycleService:
 
         self._session.provider_thread_id = result.provider_thread.thread_id
         self._session.resumable = bool(result.provider_thread.thread_id)
+        self._legacy_provider_thread_id = result.provider_thread.thread_id
         self._session.run_id = result.run_id
         self._session.updated_at = utc_now()
         if result.awaiting_input:
@@ -283,6 +293,7 @@ class GatekeeperLifecycleService:
         if isinstance(provider_thread_id, str) and provider_thread_id:
             self._session.provider_thread_id = provider_thread_id
             self._session.resumable = True
+            self._legacy_provider_thread_id = provider_thread_id
         self._session.updated_at = utc_now()
         self._persist()
 
@@ -290,16 +301,23 @@ class GatekeeperLifecycleService:
         if self._session_loader is None:
             return GatekeeperSessionSnapshot()
         loaded = self._session_loader()
+        self._legacy_provider_thread_id = loaded.provider_thread_id
+        projected = project_gatekeeper_session(
+            loaded,
+            run_record=self._run_record_for_session(loaded),
+            cached_provider_thread_id=self._legacy_provider_thread_id,
+            cached_resumable=loaded.resumable,
+        )
         return GatekeeperSessionSnapshot(
-            agent_id=loaded.agent_id,
-            run_id=loaded.run_id,
-            conversation_id=loaded.conversation_id,
-            lifecycle_state=loaded.lifecycle_state,
-            provider_thread_id=loaded.provider_thread_id,
-            active_turn_id=loaded.active_turn_id,
-            resumable=loaded.resumable,
-            last_error=loaded.last_error,
-            updated_at=loaded.updated_at,
+            agent_id=projected.agent_id,
+            run_id=projected.run_id,
+            conversation_id=projected.conversation_id,
+            lifecycle_state=projected.lifecycle_state,
+            provider_thread_id=projected.provider_thread_id,
+            active_turn_id=projected.active_turn_id,
+            resumable=projected.resumable,
+            last_error=projected.last_error,
+            updated_at=projected.updated_at,
         )
 
     def _release_binding(self, run_id: str | None) -> None:
@@ -338,3 +356,30 @@ class GatekeeperLifecycleService:
         result = self._session_saver(self.snapshot())
         if inspect.isawaitable(result):
             raise RuntimeError("Gatekeeper session persistence must be synchronous")
+
+    def _resolve_resume_handle(
+        self,
+        *,
+        session: GatekeeperSessionSnapshot,
+        fallback_agent_id: str,
+        provider_kind: str,
+    ) -> ProviderResumeHandle | None:
+        if session.run_id is not None:
+            run_handle = self.run_store.resume_handle_for_run(session.run_id)
+            if run_handle is not None:
+                return run_handle
+        agent_id = session.agent_id or fallback_agent_id
+        latest_run = self.run_store.latest_resumable_run(agent_id)
+        if latest_run is not None:
+            return self.run_store.resume_handle_for_run(latest_run.identity.run_id)
+        if self._legacy_provider_thread_id:
+            return ProviderResumeHandle(
+                kind=provider_kind,
+                thread_id=self._legacy_provider_thread_id,
+            )
+        return None
+
+    def _run_record_for_session(self, session: GatekeeperSessionSnapshot) -> AgentRunRecord | None:
+        if session.run_id is None:
+            return None
+        return self.run_store.get(session.run_id)
