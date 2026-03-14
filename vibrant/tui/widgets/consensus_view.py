@@ -50,20 +50,6 @@ class ConsensusView(Static):
         align: center middle;
     }
 
-    #consensus-empty-message,
-    #consensus-empty-action {
-        text-style: bold;
-        content-align: center middle;
-    }
-
-    #consensus-empty-action {
-        color: $accent;
-    }
-
-    #consensus-empty-action:hover {
-        color: $surface;
-    }
-
     #consensus-content {
         width: 1fr;
         height: 1fr;
@@ -124,16 +110,12 @@ class ConsensusView(Static):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._document: ConsensusDocument | None = None
-        self._source_path: Path | None = None
-        self._tasks: tuple[TaskInfo, ...] = ()
         self._is_editing = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="consensus-empty-state"):
             with Vertical(id="consensus-empty-copy"):
                 yield Static("", id="consensus-empty-message")
-                with Center():
-                    yield Button("+ Create File", id="consensus-empty-action", compact=True, flat=True)
 
         with Vertical(id="consensus-content"):
             with Horizontal(id="consensus-header"):
@@ -159,7 +141,7 @@ class ConsensusView(Static):
 
         if not self._is_editing or self._document is None:
             return False
-        return _normalize_markdown(self.current_editable_markdown) != self._load_markdown_from_disk()
+        return self.current_editable_markdown != self._load_markdown_context()
 
     @property
     def current_editable_markdown(self) -> str:
@@ -168,40 +150,27 @@ class ConsensusView(Static):
         editor = self._editor_widget()
         if editor is not None:
             return editor.text
-        return self._load_markdown_from_disk()
+        return self._load_markdown_context()
 
     def clear_summary(self) -> None:
         """Show the missing-file state with a short summary."""
 
         self._document = None
-        self._tasks = ()
-        self._source_path = None
         self._is_editing = False
         self._refresh_view()
 
     def update_consensus(
         self,
         document: ConsensusDocument | None,
-        *,
-        tasks: Sequence[TaskInfo] = (),
-        source_path: str | Path | None = None,
-        raw_markdown: str | None = None,
     ) -> None:
         """Refresh the widget from the latest consensus document."""
 
         if document is None:
             self.clear_summary()
+            self._document = None
             return
 
         self._document = document.model_copy(deep=True)
-        self._tasks = tuple(tasks)
-        if source_path is not None:
-            self._source_path = Path(source_path)
-        elif self._source_path is None and self._orchestrator_facade is not None:
-            self._source_path = self._orchestrator_facade.get_consensus_source_path()
-
-        if not self._is_editing:
-            self._reload_preview_from_disk(fallback=raw_markdown)
 
         self._refresh_view()
 
@@ -215,11 +184,9 @@ class ConsensusView(Static):
             if self.has_unsaved_changes and not self._save_current_edits():
                 return
             self._is_editing = False
-            self._reload_preview_from_disk()
         else:
             self._is_editing = True
-            self._load_editor_from_disk()
-            self._refresh_preview(self.current_editable_markdown)
+            self._set_editor_text(self._load_markdown_context())
 
         self._refresh_view()
 
@@ -241,16 +208,6 @@ class ConsensusView(Static):
         self._reload_preview_from_disk()
         self._refresh_view()
 
-    def action_create_file(self) -> None:
-        """Create a new consensus document using the default scaffold."""
-
-        document = self._build_default_document()
-        self._document = document
-        if self._save_document(document):
-            self._is_editing = False
-            self._reload_preview_from_disk()
-            self._refresh_view()
-
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "consensus-edit-toggle":
@@ -259,8 +216,6 @@ class ConsensusView(Static):
             self.action_revert_edits()
         elif button_id == "consensus-save":
             self.action_save_edits()
-        elif button_id == "consensus-empty-action":
-            self.action_create_file()
 
     def assert_facade(self) -> OrchestratorFacade:
         """Return the orchestrator facade, asserting the view is displayable."""
@@ -315,12 +270,10 @@ class ConsensusView(Static):
 
         if has_document:
             meta.update(_format_metadata(self._document))
-            markdown_text = self.current_editable_markdown if self._is_editing else self._load_markdown_from_disk()
-            self._refresh_preview(markdown_text)
+            self._refresh_preview(self._load_markdown_context())
 
     def _source_label(self) -> str:
-        if self._source_path is not None:
-            return self._source_path.name
+        # Maybe we want this name to be editable in the future, but for now we'll just show the filename or a placeholder
         return "consensus.md"
 
     def _editor_widget(self) -> TextArea | None:
@@ -330,32 +283,19 @@ class ConsensusView(Static):
             return None
 
     def _set_editor_text(self, text: str) -> None:
-        normalized = _normalize_markdown(text)
         editor = self._editor_widget()
-        if editor is not None and editor.text != normalized:
-            editor.load_text(normalized)
+        if editor is not None and editor.text != text:
+            editor.load_text(text)
 
-    def _load_markdown_from_disk(self, *, fallback: str | None = None) -> str:
-        if self._source_path is not None:
-            try:
-                raw_markdown = self._source_path.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                pass
-            else:
-                return _extract_editable_markdown(raw_markdown, self._document)
-
-        return _extract_editable_markdown(fallback, self._document)
-
-    def _load_editor_from_disk(self) -> None:
-        self._set_editor_text(self._load_markdown_from_disk())
+    def _load_markdown_context(self) -> str:
+        document =self.assert_facade().get_consensus_document()
+        return document.context if document is not None else ""
 
     def _reload_preview_from_disk(self, *, fallback: str | None = None) -> None:
-        # TODO: shouldn't load from disk.
-
         self._document = self._get_consensus() or self._document
         if not self.is_mounted:
             return
-        self._refresh_preview(self._load_markdown_from_disk(fallback=fallback))
+        self._refresh_preview(self._load_markdown_context())
 
     def _refresh_preview(self, markdown_text: str) -> None:
         if not self.is_mounted:
@@ -374,7 +314,6 @@ class ConsensusView(Static):
             return False
 
         self._document = written.model_copy(deep=True)
-        self._source_path = self.assert_facade().get_consensus_source_path()
         self.post_message(self.SaveRequested(written, already_saved=True))
         return True
 
@@ -382,15 +321,8 @@ class ConsensusView(Static):
         if self._document is None:
             raise ValueError("Consensus document is unavailable")
         updated = self._document.model_copy(deep=True)
-        updated.context = _normalize_markdown(editable_markdown).rstrip("\n")
+        updated.context = editable_markdown.rstrip("\n")
         return updated
-
-    def _build_default_document(self) -> ConsensusDocument:
-        return ConsensusDocument(
-            project=_infer_project_name(self._source_path),
-            status=ConsensusStatus.INIT,
-            context=DEFAULT_CONSENSUS_CONTEXT,
-        )
 
     @property
     def _orchestrator_facade(self) -> OrchestratorFacade | None:
@@ -411,19 +343,6 @@ class ConsensusView(Static):
             return None
         return facade.get_consensus_document()
 
-
-def _extract_editable_markdown(raw_markdown: str | None, document: ConsensusDocument | None) -> str:
-    if raw_markdown:
-        meta_end_marker = "<!-- META:END -->"
-        if meta_end_marker in raw_markdown:
-            body = raw_markdown.split(meta_end_marker, maxsplit=1)[1].lstrip("\n")
-            return _normalize_markdown(body)
-        return _normalize_markdown(raw_markdown)
-    if document is None:
-        return ""
-    return _normalize_markdown(document.context)
-
-
 def _format_metadata(document: ConsensusDocument) -> str:
     status_color = {
         ConsensusStatus.INIT: "white",
@@ -438,17 +357,3 @@ def _format_metadata(document: ConsensusDocument) -> str:
     if document.updated_at is not None:
         metadata += f"\n[b]Updated[/b]: {document.updated_at.astimezone(timezone.utc).isoformat()}"
     return metadata
-
-
-def _infer_project_name(source_path: Path | None) -> str:
-    if source_path is None:
-        return "Vibrant"
-    if source_path.parent.name == ".vibrant" and source_path.parent.parent.name:
-        return source_path.parent.parent.name
-    if source_path.parent.name:
-        return source_path.parent.name
-    return "Vibrant"
-
-
-def _normalize_markdown(text: str) -> str:
-    return text
