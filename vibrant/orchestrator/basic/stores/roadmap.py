@@ -50,6 +50,7 @@ class RoadmapStore:
 
         insertion_index = len(document.tasks) if index is None else max(0, min(index, len(document.tasks)))
         document.tasks.insert(insertion_index, task)
+        self.parser.validate_dependency_graph(document.tasks)
         written = self.write(document)
 
         meta = self._load_meta()
