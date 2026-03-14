@@ -32,9 +32,9 @@ class ChatPanel(Static):
     }
 
     #chat-panel-header {
-        height: 3;
+        height: 2;
         padding: 1 1 0 1;
-        margin: 0 1;
+        margin-top: 1;
         background: $primary-background;
         color: $text;
     }
@@ -42,7 +42,7 @@ class ChatPanel(Static):
     #chat-panel-subtitle {
         height: auto;
         padding: 0 1 1 1;
-        margin: 0 1;
+        margin-bottom: 1;
         color: $text-muted;
         background: $primary-background;
     }
@@ -72,7 +72,7 @@ class ChatPanel(Static):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._header_text = "[b]Gatekeeper[/b]"
-        self._subtitle_text = "Gatekeeper conversation"
+        self._subtitle_text = "Type in the input bar to engage in conversation."
         self._question_summary_text = ""
         self._question_records: tuple[QuestionRecord, ...] = ()
         self._pending_questions: tuple[str, ...] = ()
@@ -192,7 +192,7 @@ def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_que
         return "Completed · Review history"
     if normalized == OrchestratorStatus.FAILED.value:
         return "Failed · Review history"
-    return "Gatekeeper conversation"
+    return "Type in the input bar to engage in conversation."
 
 
 def _render_gatekeeper_summary(question_records: Sequence[QuestionRecord]) -> str:
