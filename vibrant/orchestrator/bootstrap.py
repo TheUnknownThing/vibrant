@@ -12,8 +12,8 @@ from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.agent import AgentRunRecord
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.mcp.fastmcp_host import OrchestratorFastMCPHost
-from vibrant.orchestrator.mcp.server import OrchestratorMCPServer
+from vibrant.orchestrator.interface.mcp.fastmcp_host import OrchestratorFastMCPHost
+from vibrant.orchestrator.interface.mcp.server import OrchestratorMCPServer
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.registry import resolve_provider_adapter
 
