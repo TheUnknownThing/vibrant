@@ -1,6 +1,13 @@
 """Redesigned orchestrator package."""
 
+from typing import TYPE_CHECKING, Any
+
 from .types import OrchestratorAgentSnapshot, TaskResult
+
+if TYPE_CHECKING:
+    from .bootstrap import Orchestrator, create_orchestrator
+    from .facade import OrchestratorFacade, OrchestratorSnapshot
+    from .mcp import OrchestratorMCPServer
 
 __all__ = [
     "Orchestrator",
@@ -13,7 +20,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name in {"Orchestrator", "create_orchestrator"}:
         from .bootstrap import Orchestrator, create_orchestrator
 
@@ -27,3 +34,7 @@ def __getattr__(name: str):
 
         return OrchestratorMCPServer
     raise AttributeError(name)
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
