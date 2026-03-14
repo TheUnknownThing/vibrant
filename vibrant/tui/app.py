@@ -454,7 +454,6 @@ class VibrantApp(App):
             self.notify("Gatekeeper is already running.", severity="warning")
             return
 
-        self._record_command_history_entry(event.text)
         input_bar.set_enabled(False)
         input_bar.set_context("gatekeeper", "sending…")
         self._set_status("Sending message to Gatekeeper…")
