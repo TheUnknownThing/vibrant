@@ -11,10 +11,10 @@ from vibrant.config import DEFAULT_CONFIG_DIR
 from vibrant.models.agent import AgentInstanceProviderConfig, ProviderResumeHandle
 from vibrant.providers.registry import provider_transport
 
-from ...types import AttemptCompletion, AttemptExecutionSnapshot, AttemptRecord, AttemptStatus
+from ...types import AttemptCompletion, AttemptExecutionView, AttemptRecord, AttemptRecoveryState, AttemptStatus
 from .models import PreparedTaskExecution
 from .roles import ensure_task_agent_instance
-from .sessions import attempt_needs_recovery, project_attempt_execution
+from .sessions import attempt_needs_recovery, project_attempt_execution_view, project_attempt_recovery_state
 
 
 @dataclass(slots=True)
@@ -95,20 +95,20 @@ class ExecutionCoordinator:
             raise
         return self.attempt_store.get(attempt.attempt_id)
 
-    def attempt_execution(self, attempt_id: str) -> AttemptExecutionSnapshot | None:
+    def attempt_execution(self, attempt_id: str) -> AttemptExecutionView | None:
         attempt = self.attempt_store.get(attempt_id)
         if attempt is None:
             return None
-        return project_attempt_execution(
+        return project_attempt_execution_view(
             attempt,
             run_store=self.agent_run_store,
             workspace_service=self.workspace_service,
             runtime_service=self.runtime_service,
         )
 
-    def list_active_attempt_executions(self) -> list[AttemptExecutionSnapshot]:
+    def list_active_attempt_executions(self) -> list[AttemptExecutionView]:
         return [
-            project_attempt_execution(
+            project_attempt_execution_view(
                 attempt,
                 run_store=self.agent_run_store,
                 workspace_service=self.workspace_service,
@@ -117,8 +117,30 @@ class ExecutionCoordinator:
             for attempt in self.attempt_store.list_active()
         ]
 
-    def next_attempt_to_recover(self) -> AttemptExecutionSnapshot | None:
-        for snapshot in self.list_active_attempt_executions():
+    def attempt_recovery_state(self, attempt_id: str) -> AttemptRecoveryState | None:
+        attempt = self.attempt_store.get(attempt_id)
+        if attempt is None:
+            return None
+        return project_attempt_recovery_state(
+            attempt,
+            run_store=self.agent_run_store,
+            workspace_service=self.workspace_service,
+            runtime_service=self.runtime_service,
+        )
+
+    def list_active_attempt_recovery_states(self) -> list[AttemptRecoveryState]:
+        return [
+            project_attempt_recovery_state(
+                attempt,
+                run_store=self.agent_run_store,
+                workspace_service=self.workspace_service,
+                runtime_service=self.runtime_service,
+            )
+            for attempt in self.attempt_store.list_active()
+        ]
+
+    def next_attempt_to_recover(self) -> AttemptRecoveryState | None:
+        for snapshot in self.list_active_attempt_recovery_states():
             if attempt_needs_recovery(snapshot):
                 return snapshot
         return None

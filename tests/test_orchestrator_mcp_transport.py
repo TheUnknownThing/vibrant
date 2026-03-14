@@ -112,6 +112,9 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
         assert active_attempts[0]["code_run_id"] == "run-task-1"
         assert "run_id" not in active_attempts[0]
         assert attempt_execution["run_id"] == "run-task-1"
+        assert "workspace_path" not in attempt_execution
+        assert "provider_thread_path" not in attempt_execution
+        assert "provider_resume_cursor" not in attempt_execution
         assert conversation["conversation_id"] == "attempt-conv-1"
         assert conversation["run_ids"] == ["run-task-1"]
     finally:

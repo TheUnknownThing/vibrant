@@ -47,6 +47,8 @@ async def test_mcp_server_supports_semantic_tools_and_resources(tmp_path: Path) 
     assert consensus["context"].startswith("## Objectives")
     assert task["id"] == "task-1"
     assert questions[0]["text"] == "Approve the refactor order"
+    assert "source_turn_id" not in questions[0]
+    assert "source_agent_id" not in questions[0]
     assert workflow_session["status"] == "init"
     assert gatekeeper_session["lifecycle_state"] in {"not_started", "idle"}
     assert facade.get_task("task-1") is not None
@@ -100,6 +102,9 @@ async def test_mcp_server_exposes_attempt_execution_without_breaking_active_atte
     assert "run_id" not in attempts[0]
     assert attempt_execution["attempt_id"] == attempt.attempt_id
     assert attempt_execution["run_id"] == "run-task-1"
+    assert "workspace_path" not in attempt_execution
+    assert "provider_thread_path" not in attempt_execution
+    assert "provider_resume_cursor" not in attempt_execution
     assert conversation["conversation_id"] == "attempt-conv-1"
     assert conversation["run_ids"] == ["run-task-1"]
 

@@ -43,7 +43,7 @@ Cleanup:
 
 ### `BoundAgentCapabilities`
 
-Status: too wide and violates boundaries
+Status: replaced in current tree
 
 - Built in [`basic/binding/service.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/basic/binding/service.py#L85).
 - Consumed in [`interface/mcp/fastmcp_host.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/interface/mcp/fastmcp_host.py#L347) and [`policy/gatekeeper_loop/lifecycle.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/policy/gatekeeper_loop/lifecycle.py#L146).
@@ -53,15 +53,15 @@ Status: too wide and violates boundaries
 
 Cleanup:
 
-- Replace `BoundAgentCapabilities` with a narrower `RegisteredBindingSpec` or similar object that contains only:
+- Replaced by `AgentMCPBinding`, a two-field value object with:
   - `principal`
   - `access`
-- Keep `tool_names` and `resource_names` on `BindingPreset` if they are still useful there.
-- Delete `mcp_server` and `provider_binding` from the returned object unless a real consumer is added.
+- `BindingPreset` still carries tool/resource visibility, where it belongs.
+- The live server object and write-only provider mapping have been removed from the returned binding type.
 
 ### `AttemptExecutionSnapshot`
 
-Status: over-scoped for current consumers
+Status: split in current tree
 
 - Built in [`policy/task_loop/sessions.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/policy/task_loop/sessions.py#L80).
 - Used for recovery in [`policy/task_loop/sessions.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/policy/task_loop/sessions.py#L105) and [`policy/task_loop/execution.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/policy/task_loop/execution.py#L120).
@@ -75,11 +75,10 @@ Boundary issue:
 
 Cleanup:
 
-- Split it into two shapes:
+- Split into:
   - `AttemptRecoveryState` for internal task-loop recovery
   - `AttemptExecutionView` for MCP and first-party inspection
-- Keep provider recovery metadata out of the public view unless the stable API explicitly promises it.
-- If a single type must remain, remove `provider_thread_path` and `provider_resume_cursor` first.
+- `workspace_path`, `provider_thread_path`, and `provider_resume_cursor` no longer leak onto the public read surface.
 
 ### `TaskResult`
 
@@ -104,7 +103,7 @@ Cleanup:
 
 ### `RuntimeExecutionResult`
 
-Status: mixes public result data with provider-debug detail
+Status: narrowed in current tree
 
 - Built in [`basic/runtime/service.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/basic/runtime/service.py#L138).
 - Consumed by gatekeeper flow in [`policy/gatekeeper_loop/lifecycle.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/policy/gatekeeper_loop/lifecycle.py#L243), task execution in [`policy/task_loop/execution.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/policy/task_loop/execution.py#L212), and planning-completion detection in [`tui/app.py`](/home/rogerw/project/vibrant/vibrant/tui/app.py#L1280).
@@ -112,26 +111,21 @@ Status: mixes public result data with provider-debug detail
   - `run_id`
   - `role`
   - `status`
-  - `state`
   - `summary`
   - `error`
   - `awaiting_input`
-  - `events`
   - `provider_events_ref`
-- I found no first-party reads of:
-  - `provider_thread_path`
-  - `provider_resume_cursor`
-  - `normalized_result`
+  - `provider_thread_id`
+  - `input_requests`
 
 Cleanup:
 
-- Keep a narrow public wait result.
-- Move provider-debug and provider-resume detail into an internal companion object.
-- If the stable API must keep one type for compatibility, mark the unused fields deprecated and stop using them in new code.
+- The public wait result now excludes raw event replay, provider thread path/cursor data, and the embedded normalized provider result.
+- Canonical event subscription remains available through the runtime/event services instead of being duplicated on the wait result.
 
 ### `QuestionRecord`
 
-Status: one type is serving too many layers
+Status: split in current tree
 
 - Defined in [`types.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/types.py#L216).
 - Persisted in [`basic/stores/questions.py`](/home/rogerw/project/vibrant/vibrant/orchestrator/basic/stores/questions.py#L56).
@@ -148,9 +142,10 @@ Boundary issue:
 
 Cleanup:
 
-- Keep the durable store record if needed, but add a narrower `QuestionView` for UI and policy consumers.
-- Remove `source_turn_id` if no consumer is added.
-- Finish migrating legacy question state out of [`models/state.py`](/home/rogerw/project/vibrant/vibrant/models/state.py).
+- The durable store still owns `QuestionRecord`.
+- Public policy, facade, MCP, and TUI consumers now receive `QuestionView`.
+- Source metadata and timestamps no longer cross the public read boundary.
+- `source_turn_id` remains write-only on the durable record and should be removed next if no consumer appears.
 
 ### `AgentStreamEvent`
 

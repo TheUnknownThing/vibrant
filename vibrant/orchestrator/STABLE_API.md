@@ -118,6 +118,19 @@ The stable conversation contract is centered on:
 The TUI contract is the processed conversation stream, not raw canonical
 provider events and not imported provider transcript artifacts.
 
+### Question And Attempt Views
+
+The public question and attempt inspection surface is intentionally narrower
+than the durable store or recovery layer:
+
+- `QuestionView` is the public question shape for facade, control-plane, MCP,
+  and TUI consumers.
+- `AttemptExecutionView` is the public active-attempt inspection shape.
+- Durable question audit fields and attempt recovery-only fields stay on
+  internal record/recovery types.
+- Provider resume cursors, provider thread paths, and workspace paths are not
+  part of the public attempt-inspection contract.
+
 ## Interface Control Plane Contract
 
 The layered orchestrator is built around `basic` capabilities, `policy` loops,
@@ -162,6 +175,9 @@ class InterfaceControlPlane:
 The stable behavioral rule is that public consumers receive a **submission
 receipt plus explicit wait/query methods**, not raw lifecycle or runtime
 services as their primary integration surface.
+
+`RuntimeExecutionResult` is the narrow wait result for those flows. It does not
+double as a raw event transcript or provider-debug bundle.
 
 ## Compatibility Facade
 

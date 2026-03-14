@@ -11,7 +11,7 @@ from vibrant.providers.invocation import MCPAccessDescriptor
 
 from ...interface.mcp.binding_registry import BINDING_HEADER_NAME
 from ...interface.mcp.common import MCPPrincipal
-from ...types import BoundAgentCapabilities
+from ...types import AgentMCPBinding
 
 
 @dataclass(slots=True)
@@ -48,7 +48,7 @@ class AgentSessionBindingService:
         preset: BindingPreset,
         conversation_id: str | None,
         run_id: str,
-    ) -> BoundAgentCapabilities:
+    ) -> AgentMCPBinding:
         return self._build_bound_capabilities(
             preset,
             conversation_id=conversation_id,
@@ -61,7 +61,7 @@ class AgentSessionBindingService:
         *,
         conversation_id: str | None,
         run_id: str,
-    ) -> BoundAgentCapabilities:
+    ) -> AgentMCPBinding:
         binding_id = f"binding-{preset.role}-{uuid4().hex[:12]}"
         endpoint_url = getattr(self._mcp_host, "endpoint_url", None)
         access = MCPAccessDescriptor(
@@ -78,16 +78,8 @@ class AgentSessionBindingService:
             static_headers={BINDING_HEADER_NAME: binding_id} if endpoint_url else {},
             metadata={"principal_id": preset.principal.principal_id},
         )
-        provider_binding = {
-            **access.to_mapping(),
-            "principal_id": preset.principal.principal_id,
-        }
-        return BoundAgentCapabilities(
+        return AgentMCPBinding(
             principal=preset.principal,
-            mcp_server=self._mcp_server,
-            tool_names=list(preset.tools),
-            resource_names=list(preset.resources),
-            provider_binding=provider_binding,
             access=access,
         )
 

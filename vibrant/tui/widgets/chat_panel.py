@@ -9,7 +9,7 @@ from textual.containers import Vertical
 from textual.widgets import Static
 
 from ...models.state import OrchestratorStatus
-from ...orchestrator.types import AgentConversationView, AgentStreamEvent, QuestionRecord, QuestionStatus
+from ...orchestrator.types import AgentConversationView, AgentStreamEvent, QuestionStatus, QuestionView
 from .conversation_view import ConversationView
 
 
@@ -74,7 +74,7 @@ class ChatPanel(Static):
         self._header_text = "[b]Gatekeeper[/b]"
         self._subtitle_text = "Gatekeeper conversation"
         self._question_summary_text = ""
-        self._question_records: tuple[QuestionRecord, ...] = ()
+        self._question_records: tuple[QuestionView, ...] = ()
         self._pending_questions: tuple[str, ...] = ()
         self._status: OrchestratorStatus | str | None = None
         self._notification_token = 0
@@ -134,7 +134,7 @@ class ChatPanel(Static):
         self,
         *,
         status: OrchestratorStatus | str | None,
-        question_records: Sequence[QuestionRecord],
+        question_records: Sequence[QuestionView],
         flash: bool = False,
     ) -> None:
         """Update panel metadata from orchestrator-owned question state."""
@@ -195,7 +195,7 @@ def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_que
     return "Gatekeeper conversation"
 
 
-def _render_gatekeeper_summary(question_records: Sequence[QuestionRecord]) -> str:
+def _render_gatekeeper_summary(question_records: Sequence[QuestionView]) -> str:
     if not question_records:
         return ""
 

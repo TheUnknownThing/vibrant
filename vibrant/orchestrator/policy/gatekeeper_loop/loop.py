@@ -13,7 +13,7 @@ from ...basic.artifacts import build_workflow_snapshot
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, RoadmapStore, WorkflowStateStore
-from ...types import QuestionPriority, QuestionStatus, WorkflowSnapshot, WorkflowStatus
+from ...types import QuestionPriority, QuestionStatus, QuestionView, WorkflowSnapshot, WorkflowStatus
 from .lifecycle import GatekeeperLifecycleService
 from .models import GatekeeperLoopState, GatekeeperSubmission
 from .questions import current_pending_question, normalize_question_scope, require_pending_question
@@ -203,7 +203,7 @@ class GatekeeperUserLoop:
 
     def snapshot(self) -> GatekeeperLoopState:
         session = self.lifecycle.snapshot()
-        pending_questions = tuple(self.question_store.list_pending())
+        pending_questions = tuple(QuestionView.from_record(record) for record in self.question_store.list_pending())
         return GatekeeperLoopState(
             session=session,
             conversation_id=session.conversation_id,

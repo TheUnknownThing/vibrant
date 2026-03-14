@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
+from vibrant.agents.runtime import InputRequest
 from vibrant.models.agent import AgentStatus
 from vibrant.providers.base import CanonicalEvent
 
@@ -93,13 +93,9 @@ class GatekeeperSessionSnapshot:
 
 
 @dataclass(slots=True)
-class BoundAgentCapabilities:
+class AgentMCPBinding:
     principal: MCPPrincipal
-    tool_names: list[str]
-    resource_names: list[str]
-    provider_binding: Mapping[str, Any]
-    access: MCPAccessDescriptor | None = None
-    mcp_server: Any | None = None
+    access: MCPAccessDescriptor
 
 
 @dataclass(slots=True)
@@ -126,7 +122,18 @@ class AttemptRecord:
 
 
 @dataclass(slots=True)
-class AttemptExecutionSnapshot:
+class AttemptRecoveryState:
+    attempt_id: str
+    task_id: str
+    status: AttemptStatus
+    run_id: str | None
+    run_status: str | None
+    workspace_path: str | None
+    live: bool = False
+
+
+@dataclass(slots=True)
+class AttemptExecutionView:
     attempt_id: str
     task_id: str
     status: AttemptStatus
@@ -134,11 +141,7 @@ class AttemptExecutionSnapshot:
     conversation_id: str | None
     run_id: str | None
     run_status: str | None
-    workspace_path: str | None
-    provider_kind: str | None = None
     provider_thread_id: str | None = None
-    provider_thread_path: str | None = None
-    provider_resume_cursor: dict[str, Any] | None = None
     resumable: bool = False
     live: bool = False
     awaiting_input: bool = False
@@ -227,6 +230,31 @@ class QuestionRecord:
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     withdrawn_reason: str | None = None
+
+
+@dataclass(slots=True)
+class QuestionView:
+    question_id: str
+    text: str
+    priority: QuestionPriority
+    status: QuestionStatus
+    blocking_scope: str
+    task_id: str | None = None
+    answer: str | None = None
+    withdrawn_reason: str | None = None
+
+    @classmethod
+    def from_record(cls, record: QuestionRecord) -> "QuestionView":
+        return cls(
+            question_id=record.question_id,
+            text=record.text,
+            priority=record.priority,
+            status=record.status,
+            blocking_scope=record.blocking_scope,
+            task_id=record.task_id,
+            answer=record.answer,
+            withdrawn_reason=record.withdrawn_reason,
+        )
 
 
 @dataclass(slots=True)
@@ -323,19 +351,12 @@ class RuntimeExecutionResult:
     agent_id: str
     role: str
     status: AgentStatus
-    events: list[CanonicalEvent] = field(default_factory=list)
     summary: str | None = None
     error: str | None = None
-    turn_result: Any | None = None
-    state: RunState | None = None
     awaiting_input: bool = False
-    provider_kind: str = "codex"
     provider_events_ref: str | None = None
     provider_thread_id: str | None = None
-    provider_thread_path: str | None = None
-    provider_resume_cursor: dict[str, Any] | None = None
     input_requests: list[InputRequest] = field(default_factory=list)
-    normalized_result: NormalizedRunResult | None = None
 
 
 @dataclass(slots=True)

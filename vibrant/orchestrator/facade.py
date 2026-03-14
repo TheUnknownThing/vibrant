@@ -23,7 +23,7 @@ from .types import (
     AgentInstanceSnapshot,
     AgentRunSnapshot,
     QuestionPriority,
-    QuestionRecord,
+    QuestionView,
     RoleSnapshot,
     WorkflowStatus,
 )
@@ -32,7 +32,7 @@ from .types import (
 class OrchestratorSnapshot:
     status: OrchestratorStatus
     pending_questions: tuple[str, ...]
-    question_records: tuple[QuestionRecord, ...]
+    question_records: tuple[QuestionView, ...]
     roadmap: RoadmapDocument | None
     consensus: ConsensusDocument | None
     consensus_path: Path | None
@@ -250,10 +250,10 @@ class OrchestratorFacade:
             return None
         return self.orchestrator.attempt_store.task_id_for_run(normalized_run_id)
 
-    def list_question_records(self) -> list[QuestionRecord]:
+    def list_question_records(self) -> list[QuestionView]:
         return self.control_plane.list_question_records()
 
-    def list_pending_question_records(self) -> list[QuestionRecord]:
+    def list_pending_question_records(self) -> list[QuestionView]:
         return self.control_plane.list_pending_question_records()
 
     def get_task(self, task_id: str) -> TaskInfo | None:
@@ -319,7 +319,7 @@ class OrchestratorFacade:
         task_id: str | None = None,
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
-    ) -> QuestionRecord:
+    ) -> QuestionView:
         return self.control_plane.request_user_decision(
             text,
             source_agent_id=source_agent_id,
@@ -342,7 +342,7 @@ class OrchestratorFacade:
         task_id: str | None = None,
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
-    ) -> QuestionRecord:
+    ) -> QuestionView:
         return self.ask_question(
             text,
             source_agent_id=source_agent_id,
@@ -354,7 +354,7 @@ class OrchestratorFacade:
             source_turn_id=source_turn_id,
         )
 
-    def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionRecord:
+    def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionView:
         return self.control_plane.withdraw_question(question_id, reason=reason)
 
     def get_task_summaries(self) -> dict[str, str]:

@@ -33,6 +33,7 @@ from ..types import (
     AgentRunRuntimeSnapshot,
     AgentRunSnapshot,
     AgentRunWorkspaceSnapshot,
+    QuestionView,
     RoleSnapshot,
 )
 
@@ -197,11 +198,11 @@ class BasicQueryAdapter:
             return None
         return self._project_run(record)
 
-    def list_question_records(self):
-        return self.question_store.list()
+    def list_question_records(self) -> list[QuestionView]:
+        return [QuestionView.from_record(record) for record in self.question_store.list()]
 
-    def list_pending_question_records(self):
-        return self.question_store.list_pending()
+    def list_pending_question_records(self) -> list[QuestionView]:
+        return [QuestionView.from_record(record) for record in self.question_store.list_pending()]
 
     def list_active_attempts(self):
         return self.attempt_store.list_active()

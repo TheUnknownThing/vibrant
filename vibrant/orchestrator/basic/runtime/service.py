@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -30,7 +30,6 @@ class _LiveRun:
     runtime: AgentRuntime
     handle: AgentHandle
     sequence: int = 0
-    events: list[CanonicalEvent] = field(default_factory=list)
 
 
 class _EventSubscriptionHandle:
@@ -140,19 +139,12 @@ class AgentRuntimeService:
             agent_id=result.agent_id,
             role=result.role,
             status=result.status,
-            events=list(live_run.events),
             summary=result.summary,
             error=result.error,
-            turn_result=result.turn_result,
-            state=result.state,
             awaiting_input=result.awaiting_input,
-            provider_kind=result.provider_kind,
             provider_events_ref=result.provider_events_ref,
             provider_thread_id=provider_thread.thread_id,
-            provider_thread_path=provider_thread.thread_path,
-            provider_resume_cursor=provider_thread.resume_cursor,
             input_requests=list(result.input_requests),
-            normalized_result=result,
         )
         if live_run.handle.done:
             self._forget_live_run(run_id, live_run.agent_record.identity.agent_id)
@@ -235,9 +227,6 @@ class AgentRuntimeService:
 
         async def _bridge(event: CanonicalEvent) -> None:
             normalized = self._normalize_event(agent_record, event)
-            live_run = self._runs.get(agent_record.identity.run_id)
-            if live_run is not None:
-                live_run.events.append(normalized)
             await self._publish(normalized)
             if original_callback is not None:
                 result = original_callback(event)

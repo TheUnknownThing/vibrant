@@ -17,7 +17,7 @@ from mcp.types import ResourceTemplate as MCPResourceTemplate
 from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 
-from vibrant.orchestrator.types import BoundAgentCapabilities
+from vibrant.orchestrator.types import AgentMCPBinding
 
 from .binding_registry import BINDING_HEADER_NAME, MCPBindingRegistry, RegisteredMCPBinding
 from .common import MCPAuthorizationError, MCPNotFoundError
@@ -344,14 +344,12 @@ class OrchestratorFastMCPHost:
         self.binding_registry.clear()
         await self.transport.stop()
 
-    def register_binding(self, capabilities: BoundAgentCapabilities) -> RegisteredMCPBinding:
+    def register_binding(self, binding: AgentMCPBinding) -> RegisteredMCPBinding:
         """Register a runtime binding so incoming requests can resolve it."""
 
-        if capabilities.access is None:
-            raise ValueError("BoundAgentCapabilities.access is required for MCP transport registration")
         return self.binding_registry.register(
-            principal=capabilities.principal,
-            access=capabilities.access,
+            principal=binding.principal,
+            access=binding.access,
         )
 
     def unregister_binding(self, binding_id: str | None) -> None:

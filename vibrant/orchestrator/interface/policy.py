@@ -11,7 +11,7 @@ from vibrant.models.task import TaskInfo
 
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop import TaskLoop
-from ..types import QuestionPriority, ReviewResolutionRecord, WorkflowSnapshot, WorkflowStatus
+from ..types import QuestionPriority, QuestionView, ReviewResolutionRecord, WorkflowSnapshot, WorkflowStatus
 
 
 @dataclass(slots=True)
@@ -91,8 +91,8 @@ class PolicyCommandAdapter:
         source_role: str = "gatekeeper",
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
-    ):
-        return self.gatekeeper_loop.request_user_decision(
+    ) -> QuestionView:
+        record = self.gatekeeper_loop.request_user_decision(
             text=text,
             priority=priority,
             source_role=source_role,
@@ -102,9 +102,11 @@ class PolicyCommandAdapter:
             blocking_scope=blocking_scope,
             task_id=task_id,
         )
+        return QuestionView.from_record(record)
 
-    def withdraw_question(self, question_id: str, *, reason: str | None = None):
-        return self.gatekeeper_loop.withdraw_question(question_id, reason=reason)
+    def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionView:
+        record = self.gatekeeper_loop.withdraw_question(question_id, reason=reason)
+        return QuestionView.from_record(record)
 
     def accept_review_ticket(self, ticket_id: str) -> ReviewResolutionRecord:
         return self.task_loop.accept_review_ticket(ticket_id)
