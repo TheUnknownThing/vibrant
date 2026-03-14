@@ -82,6 +82,8 @@ class ConversationStore:
             if not raw:
                 continue
             payload = json.loads(raw)
+            if isinstance(payload, dict):
+                payload.pop("task_id", None)
             payload.setdefault("run_id", None)
             frames.append(AgentStreamEvent(**payload))
         return frames

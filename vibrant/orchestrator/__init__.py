@@ -1,11 +1,10 @@
 """Redesigned orchestrator package."""
 
-from .types import AgentRunSnapshot, OrchestratorAgentSnapshot, TaskResult
+from .types import AgentRunSnapshot, TaskResult
 
 __all__ = [
     "AgentRunSnapshot",
     "Orchestrator",
-    "OrchestratorAgentSnapshot",
     "OrchestratorFacade",
     "OrchestratorMCPServer",
     "OrchestratorSnapshot",

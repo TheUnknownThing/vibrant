@@ -183,3 +183,35 @@ def test_conversation_store_normalizes_legacy_binding_ids_and_backfills_attempt_
     assert index["conv-legacy"]["run_ids"] == ["run-legacy"]
     assert "binding_ids" not in index["conv-legacy"]
     assert index["conv-attempt"]["run_ids"] == ["run-attempt"]
+
+
+def test_conversation_store_loads_legacy_frames_with_task_id(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".vibrant")
+    frames_path = store.frames_dir / "conv-1.jsonl"
+    frames_path.write_text(
+        json.dumps(
+            {
+                "conversation_id": "conv-1",
+                "entry_id": "evt-1",
+                "source_event_id": None,
+                "sequence": 1,
+                "agent_id": None,
+                "run_id": "run-1",
+                "task_id": "task-1",
+                "turn_id": None,
+                "item_id": None,
+                "type": "conversation.user.message",
+                "text": "hello",
+                "payload": {"role": "user"},
+                "created_at": "2026-03-15T00:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    frames = store.load_frames("conv-1")
+
+    assert len(frames) == 1
+    assert frames[0].conversation_id == "conv-1"
+    assert frames[0].run_id == "run-1"

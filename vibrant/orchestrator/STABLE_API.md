@@ -2,6 +2,10 @@
 
 This document defines the stable public contract for the orchestrator redesign.
 
+Related design notes:
+
+- [`TYPES_AUDIT.md`](/home/rogerw/project/vibrant/vibrant/orchestrator/TYPES_AUDIT.md): audit of larger orchestrator types and cleanup plan
+
 It is written from the perspective of **external and first-party consumers**
 that need a durable integration boundary while the implementation is organized
 as layered `basic`, `policy`, and `interface` packages.

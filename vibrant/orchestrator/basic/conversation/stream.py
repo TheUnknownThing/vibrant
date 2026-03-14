@@ -63,7 +63,6 @@ class ConversationStreamService:
             sequence=self.store.allocate_sequence(conversation_id),
             agent_id=None,
             run_id=None,
-            task_id=None,
             turn_id=None,
             item_id=None,
             type="conversation.user.message",
@@ -190,7 +189,6 @@ class ConversationStreamService:
             sequence=self.store.allocate_sequence(conversation_id),
             agent_id=_coerce_text(event, "agent_id"),
             run_id=run_id,
-            task_id=None,
             turn_id=turn_id if isinstance(turn_id, str) else None,
             item_id=item_id if isinstance(item_id, str) else None,
             type=event_type,  # type: ignore[arg-type]
@@ -300,7 +298,7 @@ def _coerce_text(event: Mapping[str, Any], key: str) -> str | None:
 
 
 def _payload(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "agent_id", "task_id"}}
+    payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "agent_id"}}
     return payload or None
 
 

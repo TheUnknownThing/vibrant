@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
 from vibrant.models.agent import AgentStatus
-from vibrant.models.task import TaskStatus
 from vibrant.providers.base import CanonicalEvent
 
 if TYPE_CHECKING:
@@ -238,7 +237,6 @@ class AgentStreamEvent:
     sequence: int
     agent_id: str | None
     run_id: str | None
-    task_id: str | None
     turn_id: str | None
     item_id: str | None
     type: Literal[
@@ -476,24 +474,10 @@ class AgentRunSnapshot:
     provider: AgentRunProviderSnapshot = field(default_factory=AgentRunProviderSnapshot)
 
 
-# Compatibility aliases while first-party consumers finish moving to
-# explicit role/instance/run names.
-AgentSnapshotIdentity = AgentRunIdentitySnapshot
-AgentSnapshotRuntime = AgentRunRuntimeSnapshot
-AgentSnapshotWorkspace = AgentRunWorkspaceSnapshot
-AgentSnapshotOutcome = AgentRunOutcomeSnapshot
-AgentSnapshotProvider = AgentRunProviderSnapshot
-OrchestratorAgentSnapshot = AgentRunSnapshot
-
-
 @dataclass(slots=True)
 class TaskResult:
     task_id: str | None
     outcome: str
-    task_status: TaskStatus | None = None
-    gatekeeper_result: NormalizedRunResult | None = None
-    merge_result: MergeOutcome | None = None
-    events: list[CanonicalEvent] = field(default_factory=list)
     summary: str | None = None
     error: str | None = None
     worktree_path: str | None = None
