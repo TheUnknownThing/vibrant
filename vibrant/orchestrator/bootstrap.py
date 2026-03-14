@@ -1,10 +1,8 @@
-"""Bootstrap and composition root for the redesigned orchestrator."""
+"""Bootstrap and composition root for the layered orchestrator."""
 
 from __future__ import annotations
 
-from collections import deque
-import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,20 +10,29 @@ from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
 from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.agent import AgentRecord
-from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
+from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 from vibrant.project_init import ensure_project_files
-from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.registry import resolve_provider_adapter
 
+from .basic import (
+    AgentRuntimeCapability,
+    ArtifactsCapability,
+    BindingCapability,
+    ConversationCapability,
+    EventLogCapability,
+    WorkspaceCapability,
+)
 from .binding import AgentSessionBindingService
-from .control_plane import OrchestratorControlPlane
 from .conversation import ConversationStore, ConversationStreamService
 from .execution.coordinator import ExecutionCoordinator
 from .gatekeeper import GatekeeperLifecycleService
+from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBackend, PolicyCommandAdapter
 from .mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
-from .review import ReviewControlService
-from .runtime import AgentRuntimeService
+from .policy import GatekeeperLoopState
+from .policy.gatekeeper_loop import GatekeeperUserLoop
+from .policy.task_loop import TaskLoop
+from .runtime.service import AgentRuntimeService
 from .stores import (
     AgentRecordStore,
     AttemptStore,
@@ -35,19 +42,7 @@ from .stores import (
     RoadmapStore,
     WorkflowStateStore,
 )
-from .types import (
-    GatekeeperSessionSnapshot,
-    QuestionPriority,
-    QuestionRecord,
-    ReviewResolutionCommand,
-    ReviewResolutionRecord,
-    ReviewTicket,
-    TaskResult,
-    TaskState,
-    WorkflowSnapshot,
-    WorkflowStatus,
-)
-from .workflow import WorkflowPolicyService
+from .types import TaskResult, WorkflowSnapshot, WorkflowStatus
 from .workspace import WorkspaceService
 
 
@@ -58,29 +53,23 @@ class Orchestrator:
     project_root: Path
     vibrant_dir: Path
     config: VibrantConfig
-    workflow_state_store: WorkflowStateStore
-    attempt_store: AttemptStore
-    question_store: QuestionStore
-    consensus_store: ConsensusStore
-    roadmap_store: RoadmapStore
-    review_ticket_store: ReviewTicketStore
-    agent_record_store: AgentRecordStore
-    conversation_store: ConversationStore
-    conversation_stream: ConversationStreamService
-    runtime_service: AgentRuntimeService
-    workspace_service: WorkspaceService
-    workflow_policy: WorkflowPolicyService
-    review_control: ReviewControlService
-    execution_coordinator: ExecutionCoordinator
+    artifacts: ArtifactsCapability
+    conversations: ConversationCapability
+    runtime: AgentRuntimeCapability
+    workspace: WorkspaceCapability
+    bindings: BindingCapability
+    event_log: EventLogCapability
     gatekeeper_lifecycle: GatekeeperLifecycleService
-    control_plane: OrchestratorControlPlane
+    execution_coordinator: ExecutionCoordinator
+    gatekeeper_loop: GatekeeperUserLoop
+    task_loop: TaskLoop
+    backend: OrchestratorBackend
+    control_plane: InterfaceControlPlane
     mcp_server: OrchestratorMCPServer
     mcp_host: OrchestratorFastMCPHost
     session_binding: AgentSessionBindingService
     gatekeeper: Gatekeeper
     adapter_factory: Any
-    on_canonical_event: Any | None = None
-    _recent_events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=200), repr=False)
 
     @classmethod
     def load(
@@ -108,37 +97,22 @@ class Orchestrator:
         conversation_store = ConversationStore(vibrant_dir)
         conversation_stream = ConversationStreamService(conversation_store)
         runtime_service = AgentRuntimeService()
-        workspace_service = WorkspaceService(
-            project_root=root,
-            worktree_root=config.worktree_directory,
-        )
-        workflow_policy = WorkflowPolicyService(
-            state_store=workflow_state_store,
-            roadmap_store=roadmap_store,
+        workspace_service = WorkspaceService(project_root=root, worktree_root=config.worktree_directory)
+
+        artifacts = ArtifactsCapability(
+            workflow_state_store=workflow_state_store,
             attempt_store=attempt_store,
             question_store=question_store,
-            agent_store=agent_record_store,
-        )
-        review_control = ReviewControlService(
-            review_ticket_store=review_ticket_store,
-            workflow_policy=workflow_policy,
-            roadmap_store=roadmap_store,
-            workspace_service=workspace_service,
-            attempt_store=attempt_store,
-        )
-        execution_coordinator = ExecutionCoordinator(
-            project_root=root,
-            config=config,
             consensus_store=consensus_store,
             roadmap_store=roadmap_store,
-            attempt_store=attempt_store,
-            agent_store=agent_record_store,
-            workspace_service=workspace_service,
-            runtime_service=runtime_service,
-            conversation_stream=conversation_stream,
-            workflow_policy=workflow_policy,
-            adapter_factory=resolved_adapter_factory,
+            review_ticket_store=review_ticket_store,
+            agent_record_store=agent_record_store,
         )
+        conversations = ConversationCapability(store=conversation_store, stream=conversation_stream)
+        runtime = AgentRuntimeCapability(service=runtime_service)
+        workspace = WorkspaceCapability(service=workspace_service)
+        event_log = EventLogCapability(on_canonical_event=on_canonical_event)
+
         resolved_gatekeeper = gatekeeper or Gatekeeper(root)
         gatekeeper_lifecycle = GatekeeperLifecycleService(
             root,
@@ -151,57 +125,135 @@ class Orchestrator:
             session_saver=workflow_state_store.update_gatekeeper_session,
             on_record_updated=agent_record_store.upsert,
         )
-        control_plane = OrchestratorControlPlane(
-            workflow_state_store=workflow_state_store,
-            question_store=question_store,
+        execution_coordinator = ExecutionCoordinator(
+            project_root=root,
+            config=config,
+            consensus_store=consensus_store,
+            roadmap_store=roadmap_store,
             attempt_store=attempt_store,
             agent_store=agent_record_store,
-            gatekeeper_lifecycle=gatekeeper_lifecycle,
+            workspace_service=workspace_service,
+            runtime_service=runtime_service,
             conversation_stream=conversation_stream,
-            workflow_policy=workflow_policy,
-            roadmap_store=roadmap_store,
-            review_control=review_control,
+            adapter_factory=resolved_adapter_factory,
         )
+        gatekeeper_loop = GatekeeperUserLoop(
+            artifacts=artifacts,
+            conversations=conversations,
+            runtime=runtime,
+            lifecycle=gatekeeper_lifecycle,
+        )
+        task_loop = TaskLoop(
+            artifacts=artifacts,
+            workspace=workspace,
+            execution=execution_coordinator,
+        )
+
+        commands = PolicyCommandAdapter(
+            project_name=root.name,
+            artifacts=artifacts,
+            gatekeeper_loop=gatekeeper_loop,
+            task_loop=task_loop,
+        )
+        queries = BasicQueryAdapter(
+            artifacts=artifacts,
+            conversations=conversations,
+            runtime_service=runtime_service,
+            event_log=event_log,
+            gatekeeper_loop=gatekeeper_loop,
+            task_loop=task_loop,
+        )
+        backend = OrchestratorBackend(commands=commands, queries=queries)
+        control_plane = InterfaceControlPlane(backend=backend)
+        mcp_server = OrchestratorMCPServer(control_plane)
+        mcp_host = OrchestratorFastMCPHost(mcp_server)
+        session_binding = AgentSessionBindingService(mcp_server=mcp_server, mcp_host=mcp_host)
+        gatekeeper_lifecycle.binding_service = session_binding
+        gatekeeper_lifecycle.mcp_host = mcp_host
+        bindings = BindingCapability(service=session_binding)
 
         orchestrator = cls(
             project_root=root,
             vibrant_dir=vibrant_dir,
             config=config,
-            workflow_state_store=workflow_state_store,
-            attempt_store=attempt_store,
-            question_store=question_store,
-            consensus_store=consensus_store,
-            roadmap_store=roadmap_store,
-            review_ticket_store=review_ticket_store,
-            agent_record_store=agent_record_store,
-            conversation_store=conversation_store,
-            conversation_stream=conversation_stream,
-            runtime_service=runtime_service,
-            workspace_service=workspace_service,
-            workflow_policy=workflow_policy,
-            review_control=review_control,
-            execution_coordinator=execution_coordinator,
+            artifacts=artifacts,
+            conversations=conversations,
+            runtime=runtime,
+            workspace=workspace,
+            bindings=bindings,
+            event_log=event_log,
             gatekeeper_lifecycle=gatekeeper_lifecycle,
+            execution_coordinator=execution_coordinator,
+            gatekeeper_loop=gatekeeper_loop,
+            task_loop=task_loop,
+            backend=backend,
             control_plane=control_plane,
-            mcp_server=None,  # type: ignore[arg-type]
-            mcp_host=None,  # type: ignore[arg-type]
-            session_binding=None,  # type: ignore[arg-type]
+            mcp_server=mcp_server,
+            mcp_host=mcp_host,
+            session_binding=session_binding,
             gatekeeper=resolved_gatekeeper,
             adapter_factory=resolved_adapter_factory,
-            on_canonical_event=on_canonical_event,
         )
-        orchestrator.mcp_server = OrchestratorMCPServer(orchestrator)
-        orchestrator.mcp_host = OrchestratorFastMCPHost(orchestrator.mcp_server)
-        orchestrator.session_binding = AgentSessionBindingService(
-            mcp_server=orchestrator.mcp_server,
-            mcp_host=orchestrator.mcp_host,
-        )
-        gatekeeper_lifecycle.binding_service = orchestrator.session_binding
-        gatekeeper_lifecycle.mcp_host = orchestrator.mcp_host
-        runtime_service.subscribe_canonical_events(orchestrator._record_runtime_event)
+        runtime_service.subscribe_canonical_events(orchestrator.event_log.record_runtime_event)
         runtime_service.subscribe_canonical_events(conversation_stream.ingest_canonical)
         orchestrator.refresh()
         return orchestrator
+
+    @property
+    def workflow_state_store(self) -> WorkflowStateStore:
+        return self.artifacts.workflow_state_store
+
+    @property
+    def attempt_store(self) -> AttemptStore:
+        return self.artifacts.attempt_store
+
+    @property
+    def question_store(self) -> QuestionStore:
+        return self.artifacts.question_store
+
+    @property
+    def consensus_store(self) -> ConsensusStore:
+        return self.artifacts.consensus_store
+
+    @property
+    def roadmap_store(self) -> RoadmapStore:
+        return self.artifacts.roadmap_store
+
+    @property
+    def review_ticket_store(self) -> ReviewTicketStore:
+        return self.artifacts.review_ticket_store
+
+    @property
+    def agent_record_store(self) -> AgentRecordStore:
+        return self.artifacts.agent_record_store
+
+    @property
+    def conversation_store(self) -> ConversationStore:
+        return self.conversations.store
+
+    @property
+    def conversation_stream(self) -> ConversationStreamService:
+        return self.conversations.stream
+
+    @property
+    def runtime_service(self) -> AgentRuntimeService:
+        return self.runtime.service
+
+    @property
+    def workspace_service(self) -> WorkspaceService:
+        return self.workspace.service
+
+    @property
+    def binding_service(self) -> AgentSessionBindingService:
+        return self.session_binding
+
+    @property
+    def workflow_policy(self) -> TaskLoop:
+        return self.task_loop
+
+    @property
+    def review_control(self) -> TaskLoop:
+        return self.task_loop
 
     @property
     def roadmap_path(self) -> Path:
@@ -216,187 +268,105 @@ class Orchestrator:
         return self.config.execution_mode
 
     @property
-    def binding_service(self) -> AgentSessionBindingService:
-        return self.session_binding
-
-    @property
     def gatekeeper_busy(self) -> bool:
-        return self.gatekeeper_lifecycle.busy
+        return self.control_plane.gatekeeper_busy()
 
     def refresh(self) -> RoadmapDocument:
         self.config = load_config(start_path=self.project_root)
         return self.roadmap_store.load()
 
     async def submit_user_message(self, text: str):
-        return await self.control_plane.submit_user_message(text)
+        return await self.control_plane.submit_user_input(text)
 
     async def answer_user_decision(self, question_id: str, answer: str):
-        return await self.control_plane.answer_user_decision(question_id, answer)
+        return await self.control_plane.submit_user_input(answer, question_id=question_id)
 
     async def start_execution(self) -> WorkflowSnapshot:
-        self.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
-        self.consensus_store.set_status_projection(ConsensusStatus.EXECUTING)
-        return self.control_plane.snapshot()
+        return await self.control_plane.start_execution()
 
     async def pause_workflow(self) -> WorkflowSnapshot:
-        self.workflow_state_store.update_workflow_status(WorkflowStatus.PAUSED)
-        self.consensus_store.set_status_projection(ConsensusStatus.PAUSED)
-        return self.control_plane.snapshot()
+        return await self.control_plane.pause_workflow()
 
     async def resume_workflow(self) -> WorkflowSnapshot:
-        self.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
-        self.consensus_store.set_status_projection(ConsensusStatus.EXECUTING)
-        return self.control_plane.snapshot()
+        return await self.control_plane.resume_workflow()
 
-    async def restart_gatekeeper(self, reason: str | None = None) -> GatekeeperSessionSnapshot:
+    async def restart_gatekeeper(self, reason: str | None = None) -> GatekeeperLoopState:
         return await self.control_plane.restart_gatekeeper(reason)
 
-    async def stop_gatekeeper(self) -> GatekeeperSessionSnapshot:
+    async def stop_gatekeeper(self) -> GatekeeperLoopState:
         return await self.control_plane.stop_gatekeeper()
 
     async def run_until_blocked(self) -> list[TaskResult]:
-        results: list[TaskResult] = []
-        while True:
-            result = await self.run_next_task()
-            if result is None:
-                break
-            results.append(result)
-            if result.outcome in {"awaiting_user", "review_pending", "failed"}:
-                break
-        return results
+        return await self.control_plane.run_until_blocked()
 
     async def run_next_task(self) -> TaskResult | None:
-        leases = self.workflow_policy.select_next(limit=1)
-        if not leases:
-            self.workflow_policy.maybe_complete()
-            return None
-        lease = leases[0]
-        attempt = await self.execution_coordinator.start_attempt(lease)
-        completion = await self.execution_coordinator.await_attempt_completion(attempt.attempt_id)
-        if completion.status == "awaiting_input":
-            return TaskResult(
-                task_id=completion.task_id,
-                outcome="awaiting_user",
-                summary=completion.summary,
-                error=completion.error,
-            )
-
-        workspace = self.workspace_service.get_workspace(task_id=completion.task_id, workspace_id=completion.workspace_ref)
-        diff = self.workspace_service.collect_review_diff(workspace)
-        self.review_control.create_ticket(completion, diff)
-        return TaskResult(
-            task_id=completion.task_id,
-            outcome="review_pending",
-            summary=completion.summary,
-            error=completion.error,
-            worktree_path=workspace.path,
-        )
+        return await self.control_plane.run_next_task()
 
     def snapshot(self) -> WorkflowSnapshot:
-        return self.control_plane.snapshot()
+        return self.control_plane.workflow_snapshot()
 
     def list_recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
-        return list(self._recent_events)[-limit:]
+        return self.event_log.list_recent_events(limit=limit)
 
     async def shutdown(self) -> None:
-        """Stop transport services owned by the orchestrator."""
-
         await self.mcp_host.stop()
 
     def get_consensus_document(self) -> ConsensusDocument | None:
-        return self.consensus_store.load()
+        return self.control_plane.get_consensus_document()
 
     def get_roadmap(self) -> RoadmapDocument:
-        return self.roadmap_store.load()
+        return self.control_plane.get_roadmap()
 
     def get_task(self, task_id: str) -> TaskInfo | None:
-        return self.roadmap_store.get_task(task_id)
+        return self.control_plane.get_task(task_id)
 
-    def get_workflow_status(self) -> WorkflowStatus:
-        return self.workflow_state_store.load().workflow_status
+    def get_workflow_status(self):
+        return self.control_plane.get_workflow_status()
 
     def list_agent_records(self) -> list[AgentRecord]:
-        return self.agent_record_store.list()
+        return self.control_plane.list_agent_records()
 
     def list_active_agents(self) -> list[AgentRecord]:
-        return self.agent_record_store.list_active()
+        return self.control_plane.list_active_agents()
 
     def list_active_attempts(self):
-        return self.attempt_store.list_active()
+        return self.control_plane.list_active_attempts()
 
-    def get_review_ticket(self, ticket_id: str) -> ReviewTicket | None:
-        return self.review_control.get_ticket(ticket_id)
+    def get_review_ticket(self, ticket_id: str):
+        return self.control_plane.get_review_ticket(ticket_id)
 
-    def list_pending_review_tickets(self) -> list[ReviewTicket]:
-        return self.review_control.list_pending()
+    def list_pending_review_tickets(self):
+        return self.control_plane.list_pending_review_tickets()
 
-    def request_user_decision(
-        self,
-        text: str,
-        *,
-        priority: QuestionPriority = QuestionPriority.BLOCKING,
-        blocking_scope: str = "planning",
-        task_id: str | None = None,
-        source_agent_id: str | None = None,
-        source_role: str = "gatekeeper",
-        source_conversation_id: str | None = None,
-        source_turn_id: str | None = None,
-    ) -> QuestionRecord:
-        return self.question_store.create(
-            text=text,
-            priority=priority,
-            source_role=source_role,
-            source_agent_id=source_agent_id,
-            source_conversation_id=source_conversation_id,
-            source_turn_id=source_turn_id,
-            blocking_scope=blocking_scope,
-            task_id=task_id,
-        )
+    def request_user_decision(self, text: str, **kwargs: Any):
+        return self.control_plane.request_user_decision(text, **kwargs)
 
-    def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionRecord:
-        return self.question_store.withdraw(question_id, reason=reason)
+    def withdraw_question(self, question_id: str, *, reason: str | None = None):
+        return self.control_plane.withdraw_question(question_id, reason=reason)
 
-    def update_consensus(
-        self,
-        *,
-        context: str | None = None,
-        status: str | None = None,
-    ) -> ConsensusDocument:
-        if context is not None:
-            document = self.consensus_store.update_context(context)
-        else:
-            document = self.consensus_store.load() or ConsensusDocument(project=self.project_root.name)
-        if status is not None:
-            document.status = ConsensusStatus(status.upper())
-            document = self.consensus_store.write(document)
-        return document
+    def update_consensus(self, *, context: str | None = None, status: str | None = None):
+        return self.control_plane.update_consensus(context=context, status=status)
 
-    def append_decision(self, **kwargs: Any) -> ConsensusDocument:
-        return self.consensus_store.append_decision(**kwargs)
+    def append_decision(self, **kwargs: Any):
+        return self.control_plane.append_decision(**kwargs)
 
     def add_task(self, task: TaskInfo, *, index: int | None = None):
-        self.roadmap_store.add_task(task, index=index)
-        created = self.roadmap_store.get_task(task.id)
-        if created is None:
-            raise KeyError(task.id)
-        return created
+        return self.control_plane.add_task(task, index=index)
 
     def update_task_definition(self, task_id: str, **patch: Any):
-        return self.roadmap_store.update_task_definition(task_id, **patch)
+        return self.control_plane.update_task_definition(task_id, **patch)
 
     def reorder_tasks(self, task_ids: list[str]):
-        return self.roadmap_store.reorder_tasks(task_ids)
+        return self.control_plane.reorder_tasks(task_ids)
 
     def replace_roadmap(self, *, tasks: list[TaskInfo], project: str | None = None):
-        return self.roadmap_store.replace(tasks=tasks, project=project or self.project_root.name)
+        return self.control_plane.replace_roadmap(tasks=tasks, project=project)
 
     def end_planning_phase(self):
-        self.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
-        self.consensus_store.set_status_projection(ConsensusStatus.EXECUTING)
-        return self.control_plane.snapshot()
+        return self.control_plane.set_workflow_status(WorkflowStatus.EXECUTING)
 
-    def accept_review_ticket(self, ticket_id: str) -> ReviewResolutionRecord:
-        return self.review_control.resolve(ticket_id, ReviewResolutionCommand(decision="accept"))
+    def accept_review_ticket(self, ticket_id: str):
+        return self.control_plane.accept_review_ticket(ticket_id)
 
     def retry_review_ticket(
         self,
@@ -405,22 +375,16 @@ class Orchestrator:
         failure_reason: str,
         prompt_patch: str | None = None,
         acceptance_patch: list[str] | None = None,
-    ) -> ReviewResolutionRecord:
-        return self.review_control.resolve(
+    ):
+        return self.control_plane.retry_review_ticket(
             ticket_id,
-            ReviewResolutionCommand(
-                decision="retry",
-                failure_reason=failure_reason,
-                prompt_patch=prompt_patch,
-                acceptance_patch=acceptance_patch,
-            ),
+            failure_reason=failure_reason,
+            prompt_patch=prompt_patch,
+            acceptance_patch=acceptance_patch,
         )
 
-    def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> ReviewResolutionRecord:
-        return self.review_control.resolve(
-            ticket_id,
-            ReviewResolutionCommand(decision="escalate", failure_reason=reason),
-        )
+    def escalate_review_ticket(self, ticket_id: str, *, reason: str):
+        return self.control_plane.escalate_review_ticket(ticket_id, reason=reason)
 
     def set_pending_questions(
         self,
@@ -428,50 +392,15 @@ class Orchestrator:
         *,
         source_agent_id: str | None = None,
         source_role: str = "gatekeeper",
-    ) -> list[QuestionRecord]:
-        existing_pending = {record.text: record for record in self.question_store.list_pending()}
-        requested = {question.strip() for question in questions if question.strip()}
-
-        for text, record in existing_pending.items():
-            if text not in requested:
-                self.question_store.withdraw(record.question_id, reason="Legacy pending-question sync removed it")
-
-        created: list[QuestionRecord] = []
-        for text in requested:
-            existing = existing_pending.get(text)
-            if existing is not None:
-                created.append(existing)
-                continue
-            created.append(
-                self.question_store.create(
-                    text=text,
-                    priority=QuestionPriority.BLOCKING,
-                    source_role=source_role,
-                    source_agent_id=source_agent_id,
-                    source_conversation_id=None,
-                    source_turn_id=None,
-                    blocking_scope="planning",
-                    task_id=None,
-                )
-            )
-        return created
+    ):
+        return self.control_plane.set_pending_questions(
+            questions,
+            source_agent_id=source_agent_id,
+            source_role=source_role,
+        )
 
     def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None):
-        review_kind = decision.strip().lower()
-        active_attempt = self.attempt_store.get_active_by_task(task_id)
-        if active_attempt is None:
-            raise KeyError(f"No active attempt for task: {task_id}")
-
-        if review_kind in {"accept", "accepted"}:
-            self.workflow_policy.mark_task_accepted(task_id=task_id, attempt_id=active_attempt.attempt_id)
-            return self.roadmap_store.get_task(task_id)
-        if review_kind in {"retry", "rejected", "needs_changes"}:
-            self.workflow_policy.requeue_task(task_id=task_id, attempt_id=active_attempt.attempt_id)
-            return self.roadmap_store.get_task(task_id)
-        if review_kind in {"escalate", "escalated"}:
-            self.workflow_policy.mark_task_escalated(task_id=task_id, attempt_id=active_attempt.attempt_id)
-            return self.roadmap_store.get_task(task_id)
-        raise ValueError(f"Unsupported review decision: {decision}")
+        return self.control_plane.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
 
     def mark_task_for_retry(
         self,
@@ -481,24 +410,12 @@ class Orchestrator:
         prompt: str | None = None,
         acceptance_criteria: list[str] | None = None,
     ):
-        patch: dict[str, Any] = {}
-        if prompt is not None:
-            patch["prompt"] = prompt
-        if acceptance_criteria is not None:
-            patch["acceptance_criteria"] = acceptance_criteria
-        if patch:
-            self.roadmap_store.update_task_definition(task_id, patch)
-        active_attempt = self.attempt_store.get_active_by_task(task_id)
-        if active_attempt is not None:
-            self.workflow_policy.requeue_task(task_id=task_id, attempt_id=active_attempt.attempt_id)
-        return self.roadmap_store.record_task_state(task_id, TaskState.READY, failure_reason=failure_reason)
-
-    async def _record_runtime_event(self, event: CanonicalEvent) -> None:
-        self._recent_events.append(dict(event))
-        if self.on_canonical_event is not None:
-            result = self.on_canonical_event(event)
-            if inspect.isawaitable(result):
-                await result
+        return self.control_plane.mark_task_for_retry(
+            task_id,
+            failure_reason=failure_reason,
+            prompt=prompt,
+            acceptance_criteria=acceptance_criteria,
+        )
 
 
 def create_orchestrator(

@@ -3,14 +3,14 @@
 This document defines the stable public contract for the orchestrator redesign.
 
 It is written from the perspective of **external and first-party consumers**
-that need a durable integration boundary while the implementation is being
-rebuilt around the control-plane architecture.
+that need a durable integration boundary while the implementation is organized
+as layered `basic`, `policy`, and `interface` packages.
 
 ## Status
 
-As of **March 13, 2026**, the stable contract is defined by:
+As of **March 14, 2026**, the stable contract is defined by:
 
-- the **control-plane model** described here
+- the **interface control-plane model** described here
 - the **typed MCP resource/tool surface**
 - the **read models and conversation subscription semantics**
 - the **compatibility constraints** required during migration
@@ -32,11 +32,11 @@ The stable contract is governed by the following rules:
 
 ## Stable Consumer Model
 
-The target stable integration model is:
+The stable integration model is:
 
 1. bootstrap an orchestrator root for one project
-2. submit workflow or user actions through the control plane or compatibility facade
-3. read coherent state through snapshots and typed views
+2. submit workflow or user actions through the interface control plane or compatibility facade
+3. read coherent state through snapshots and typed query adapters
 4. subscribe to orchestrator-owned conversation streams
 5. use MCP resources/tools for Gatekeeper-driven mutations
 
@@ -95,10 +95,10 @@ The stable conversation contract is centered on:
 The TUI contract is the processed conversation stream, not raw canonical
 provider events and not imported provider transcript artifacts.
 
-## Target Control Plane Contract
+## Interface Control Plane Contract
 
-The redesigned orchestrator is built around a control plane with the following
-stable semantics:
+The layered orchestrator is built around `basic` capabilities, `policy` loops,
+and an `interface` control plane with the following stable semantics:
 
 ```python
 @dataclass
@@ -111,22 +111,26 @@ class GatekeeperSubmission:
     active_turn_id: str | None
     error: str | None = None
 
-class OrchestratorControlPlane:
-    async def submit_user_message(self, text: str) -> GatekeeperSubmission: ...
-    async def answer_user_decision(self, question_id: str, answer: str) -> GatekeeperSubmission: ...
-    async def start_execution(self) -> WorkflowSnapshot: ...
-    async def pause_workflow(self) -> WorkflowSnapshot: ...
-    async def resume_workflow(self) -> WorkflowSnapshot: ...
-    async def restart_gatekeeper(self, reason: str | None = None) -> GatekeeperSessionSnapshot: ...
-    async def stop_gatekeeper(self) -> GatekeeperSessionSnapshot: ...
+class InterfaceControlPlane:
+    async def submit_user_input(self, text: str, question_id: str | None = None) -> GatekeeperSubmission: ...
+    async def wait_for_gatekeeper_submission(self, submission: GatekeeperSubmission) -> RuntimeExecutionResult: ...
+    def start_execution(self) -> WorkflowSnapshot: ...
+    def pause_workflow(self) -> WorkflowSnapshot: ...
+    def resume_workflow(self) -> WorkflowSnapshot: ...
+    async def restart_gatekeeper(self, reason: str | None = None) -> GatekeeperLoopState: ...
+    async def stop_gatekeeper(self) -> GatekeeperLoopState: ...
+    async def run_next_task(self) -> TaskResult | None: ...
+    async def run_until_blocked(self) -> list[TaskResult]: ...
     def conversation(self, conversation_id: str) -> AgentConversationView | None: ...
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False): ...
-    def snapshot(self) -> OrchestratorSnapshot: ...
+    def workflow_snapshot(self) -> WorkflowSnapshot: ...
+    def gatekeeper_state(self) -> GatekeeperLoopState: ...
+    def task_loop_state(self) -> TaskLoopSnapshot: ...
 ```
 
 The stable behavioral rule is that public consumers receive a **submission
-receipt plus conversation subscription**, not a raw Gatekeeper-specific runtime
-handle as their primary integration surface.
+receipt plus explicit wait/query methods**, not raw lifecycle or runtime
+services as their primary integration surface.
 
 ## Compatibility Facade
 
@@ -137,7 +141,7 @@ Compatibility commitments:
 
 - it must expose coherent snapshot reads
 - it may preserve selected legacy entry points temporarily
-- it must route mutations through the redesigned command handlers and stores
+- it must route mutations through the interface control plane
 - it must not preserve legacy authority behavior that contradicts the redesign
 
 Allowed temporary compatibility examples:

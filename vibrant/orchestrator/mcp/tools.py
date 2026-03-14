@@ -1,4 +1,4 @@
-"""Semantic write tools for the redesigned MCP surface."""
+"""Semantic write tools for the orchestrator MCP surface."""
 
 from __future__ import annotations
 
@@ -6,13 +6,11 @@ from collections.abc import Sequence
 from typing import Any
 
 from vibrant.models.task import TaskInfo, TaskStatus
-from vibrant.orchestrator.types import QuestionPriority, ReviewResolutionCommand
-
-from .common import call_backend, has_backend, serialize_value
+from vibrant.orchestrator.types import QuestionPriority, WorkflowStatus
 
 
 class OrchestratorMCPTools:
-    """Semantic command handlers over an orchestrator backend."""
+    """Semantic command handlers over the interface control plane."""
 
     def __init__(self, backend: Any) -> None:
         self.backend = backend
@@ -27,29 +25,14 @@ class OrchestratorMCPTools:
         resolution: str | None = None,
         impact: str | None = None,
     ) -> Any:
-        if decision_title and has_backend(self.backend, "append_decision", "consensus_store.append_decision"):
-            return serialize_value(
-                call_backend(
-                    self.backend,
-                    ("append_decision", "consensus_store.append_decision"),
-                    title=decision_title,
-                    context=decision_context or "",
-                    resolution=resolution or "",
-                    impact=impact or "",
-                )
+        if decision_title:
+            return self.backend.append_decision(
+                title=decision_title,
+                context=decision_context or "",
+                resolution=resolution or "",
+                impact=impact or "",
             )
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "update_consensus",
-                    "consensus_store.update_context",
-                    "consensus_service.update",
-                ),
-                context=context,
-                status=status,
-            )
-        )
+        return self.backend.update_consensus(context=context, status=status)
 
     def add_task(
         self,
@@ -77,18 +60,7 @@ class OrchestratorMCPTools:
             dependencies=list(dependencies or ()),
             priority=priority,
         )
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "add_task",
-                    "roadmap_store.add_task",
-                    "roadmap_service.add_task",
-                ),
-                task,
-                index=index,
-            )
-        )
+        return self.backend.add_task(task, index=index)
 
     def update_task_definition(
         self,
@@ -103,53 +75,20 @@ class OrchestratorMCPTools:
         priority: int | None = None,
         max_retries: int | None = None,
     ) -> Any:
-        if has_backend(self.backend, "update_task_definition", "roadmap_store.update_task_definition"):
-            return serialize_value(
-                call_backend(
-                    self.backend,
-                    (
-                        "update_task_definition",
-                        "roadmap_store.update_task_definition",
-                    ),
-                    task_id,
-                    title=title,
-                    acceptance_criteria=list(acceptance_criteria) if acceptance_criteria is not None else None,
-                    skills=list(skills) if skills is not None else None,
-                    dependencies=list(dependencies) if dependencies is not None else None,
-                    prompt=prompt,
-                    branch=branch,
-                    priority=priority,
-                    max_retries=max_retries,
-                )
-            )
-        return serialize_value(
-            call_backend(
-                self.backend,
-                ("update_task",),
-                task_id,
-                title=title,
-                acceptance_criteria=list(acceptance_criteria) if acceptance_criteria is not None else None,
-                skills=list(skills) if skills is not None else None,
-                dependencies=list(dependencies) if dependencies is not None else None,
-                prompt=prompt,
-                branch=branch,
-                priority=priority,
-                max_retries=max_retries,
-            )
+        return self.backend.update_task_definition(
+            task_id,
+            title=title,
+            acceptance_criteria=list(acceptance_criteria) if acceptance_criteria is not None else None,
+            skills=list(skills) if skills is not None else None,
+            dependencies=list(dependencies) if dependencies is not None else None,
+            prompt=prompt,
+            branch=branch,
+            priority=priority,
+            max_retries=max_retries,
         )
 
     def reorder_tasks(self, task_ids: Sequence[str]) -> Any:
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "reorder_tasks",
-                    "roadmap_store.reorder_tasks",
-                    "roadmap_service.reorder_tasks",
-                ),
-                list(task_ids),
-            )
-        )
+        return self.backend.reorder_tasks(list(task_ids))
 
     def request_user_decision(
         self,
@@ -163,68 +102,31 @@ class OrchestratorMCPTools:
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
     ) -> Any:
-        parsed_priority = QuestionPriority(priority)
-        if has_backend(self.backend, "request_user_decision"):
-            return serialize_value(
-                self.backend.request_user_decision(
-                    text,
-                    priority=parsed_priority,
-                    blocking_scope=blocking_scope,
-                    task_id=task_id,
-                    source_agent_id=source_agent_id,
-                    source_role=source_role,
-                    source_conversation_id=source_conversation_id,
-                    source_turn_id=source_turn_id,
-                )
-            )
-        return serialize_value(
-            call_backend(
-                self.backend,
-                ("ask_question",),
-                text,
-                source_agent_id=source_agent_id,
-                source_role=source_role,
-                priority=parsed_priority,
-            )
+        return self.backend.request_user_decision(
+            text,
+            priority=QuestionPriority(priority),
+            blocking_scope=blocking_scope,
+            task_id=task_id,
+            source_agent_id=source_agent_id,
+            source_role=source_role,
+            source_conversation_id=source_conversation_id,
+            source_turn_id=source_turn_id,
         )
 
     def withdraw_question(self, question_id: str, *, reason: str | None = None) -> Any:
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "withdraw_question",
-                    "question_store.withdraw",
-                    "question_service.withdraw",
-                ),
-                question_id,
-                reason=reason,
-            )
-        )
+        return self.backend.withdraw_question(question_id, reason=reason)
 
     def end_planning_phase(self) -> Any:
-        return serialize_value(call_backend(self.backend, ("end_planning_phase",)))
+        return self.backend.set_workflow_status(WorkflowStatus.EXECUTING)
 
     def pause_workflow(self) -> Any:
-        return serialize_value(call_backend(self.backend, ("pause_workflow",)))
+        return self.backend.pause_workflow()
 
     def resume_workflow(self) -> Any:
-        return serialize_value(call_backend(self.backend, ("resume_workflow",)))
+        return self.backend.resume_workflow()
 
     def accept_review_ticket(self, ticket_id: str) -> Any:
-        if has_backend(self.backend, "accept_review_ticket"):
-            return serialize_value(self.backend.accept_review_ticket(ticket_id))
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "review_control.resolve",
-                    "review_service.resolve",
-                ),
-                ticket_id,
-                ReviewResolutionCommand(decision="accept"),
-            )
-        )
+        return self.backend.accept_review_ticket(ticket_id)
 
     def retry_review_ticket(
         self,
@@ -234,64 +136,19 @@ class OrchestratorMCPTools:
         prompt_patch: str | None = None,
         acceptance_patch: Sequence[str] | None = None,
     ) -> Any:
-        if has_backend(self.backend, "retry_review_ticket"):
-            return serialize_value(
-                self.backend.retry_review_ticket(
-                    ticket_id,
-                    failure_reason=failure_reason,
-                    prompt_patch=prompt_patch,
-                    acceptance_patch=list(acceptance_patch) if acceptance_patch is not None else None,
-                )
-            )
-        command = ReviewResolutionCommand(
-            decision="retry",
+        return self.backend.retry_review_ticket(
+            ticket_id,
             failure_reason=failure_reason,
             prompt_patch=prompt_patch,
             acceptance_patch=list(acceptance_patch) if acceptance_patch is not None else None,
         )
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "review_control.resolve",
-                    "review_service.resolve",
-                ),
-                ticket_id,
-                command,
-            )
-        )
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> Any:
-        if has_backend(self.backend, "escalate_review_ticket"):
-            return serialize_value(self.backend.escalate_review_ticket(ticket_id, reason=reason))
-        command = ReviewResolutionCommand(decision="escalate", failure_reason=reason)
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "review_control.resolve",
-                    "review_service.resolve",
-                ),
-                ticket_id,
-                command,
-            )
-        )
+        return self.backend.escalate_review_ticket(ticket_id, reason=reason)
 
-    # Transitional aliases: keep these only while the rest of the app
-    # finishes moving away from the legacy Gatekeeper tool surface.
     def update_roadmap(self, *, tasks: Sequence[dict[str, Any]], project: str | None = None) -> Any:
         normalized_tasks = [TaskInfo.model_validate(task) for task in tasks]
-        return serialize_value(
-            call_backend(
-                self.backend,
-                (
-                    "replace_roadmap",
-                    "roadmap_service.write",
-                ),
-                tasks=normalized_tasks,
-                project=project,
-            )
-        )
+        return self.backend.replace_roadmap(tasks=normalized_tasks, project=project)
 
     def set_pending_questions(
         self,
@@ -300,14 +157,10 @@ class OrchestratorMCPTools:
         source_agent_id: str | None = None,
         source_role: str = "gatekeeper",
     ) -> Any:
-        return serialize_value(
-            call_backend(
-                self.backend,
-                ("set_pending_questions",),
-                list(questions),
-                source_agent_id=source_agent_id,
-                source_role=source_role,
-            )
+        return self.backend.set_pending_questions(
+            list(questions),
+            source_agent_id=source_agent_id,
+            source_role=source_role,
         )
 
     def review_task_outcome(
@@ -317,15 +170,7 @@ class OrchestratorMCPTools:
         decision: str,
         failure_reason: str | None = None,
     ) -> Any:
-        return serialize_value(
-            call_backend(
-                self.backend,
-                ("review_task_outcome",),
-                task_id,
-                decision=decision,
-                failure_reason=failure_reason,
-            )
-        )
+        return self.backend.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
 
     def mark_task_for_retry(
         self,
@@ -335,13 +180,9 @@ class OrchestratorMCPTools:
         prompt: str | None = None,
         acceptance_criteria: Sequence[str] | None = None,
     ) -> Any:
-        return serialize_value(
-            call_backend(
-                self.backend,
-                ("mark_task_for_retry",),
-                task_id,
-                failure_reason=failure_reason,
-                prompt=prompt,
-                acceptance_criteria=list(acceptance_criteria) if acceptance_criteria is not None else None,
-            )
+        return self.backend.mark_task_for_retry(
+            task_id,
+            failure_reason=failure_reason,
+            prompt=prompt,
+            acceptance_criteria=list(acceptance_criteria) if acceptance_criteria is not None else None,
         )

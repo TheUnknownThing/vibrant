@@ -89,9 +89,16 @@ class GatekeeperLifecycleService:
         text: str,
         submission_id: str,
         resume: bool = True,
+        trigger_description: str | None = None,
+        agent_summary: str | None = None,
     ):
         session = await self.resume_or_start()
-        request = self._build_request(message_kind=message_kind, text=text)
+        request = self._build_request(
+            message_kind=message_kind,
+            text=text,
+            trigger_description=trigger_description,
+            agent_summary=agent_summary,
+        )
         prompt = self.gatekeeper.render_prompt(request)
         agent_record = self.gatekeeper.build_agent_record(request)
         agent_record.context.prompt_used = prompt
@@ -153,8 +160,13 @@ class GatekeeperLifecycleService:
                     on_record_updated=self._on_record_updated,
                     invocation_plan=invocation_plan,
                 )
-        except Exception:
+        except Exception as exc:
             self._release_binding(agent_record.identity.agent_id)
+            self._session.lifecycle_state = GatekeeperLifecycleStatus.FAILED
+            self._session.last_error = str(exc)
+            self._session.active_turn_id = None
+            self._session.updated_at = utc_now()
+            self._persist()
             raise
 
         self._active_handle = handle
@@ -262,23 +274,31 @@ class GatekeeperLifecycleService:
         self._session.updated_at = utc_now()
         self._persist()
 
-    def _build_request(self, *, message_kind: GatekeeperMessageKind, text: str) -> GatekeeperRequest:
+    def _build_request(
+        self,
+        *,
+        message_kind: GatekeeperMessageKind,
+        text: str,
+        trigger_description: str | None = None,
+        agent_summary: str | None = None,
+    ) -> GatekeeperRequest:
         if message_kind is GatekeeperMessageKind.USER_ANSWER:
             return GatekeeperRequest(
                 trigger=GatekeeperTrigger.USER_CONVERSATION,
-                trigger_description=build_user_answer_trigger_description(question="User decision", answer=text),
-                agent_summary=text,
+                trigger_description=trigger_description
+                or build_user_answer_trigger_description(question="User decision", answer=text),
+                agent_summary=agent_summary or text,
             )
         if message_kind is GatekeeperMessageKind.REVIEW:
             return GatekeeperRequest(
                 trigger=GatekeeperTrigger.TASK_COMPLETION,
-                trigger_description=text,
-                agent_summary=text,
+                trigger_description=trigger_description or text,
+                agent_summary=agent_summary or text,
             )
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
-            trigger_description=text,
-            agent_summary=text,
+            trigger_description=trigger_description or text,
+            agent_summary=agent_summary or text,
         )
 
     def _load_session(self) -> GatekeeperSessionSnapshot:

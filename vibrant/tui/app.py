@@ -366,25 +366,15 @@ class VibrantApp(App):
 
     async def _start_gatekeeper_message(self, text: str) -> None:
         assert self._orchestrator is not None
-        pending_question = self._current_pending_gatekeeper_question_record()
         try:
-            if pending_question is not None:
-                submission = await self._orchestrator.control_plane.answer_user_decision(
-                    pending_question.question_id,
-                    text,
-                )
-            else:
-                submission = await self._orchestrator.control_plane.submit_user_message(text)
+            submission = await self._orchestrator.control_plane.submit_user_input(text)
             self._sync_gatekeeper_conversation_binding(
                 conversation_id=submission.conversation_id,
                 force=True,
             )
             self._refresh_gatekeeper_state()
 
-            if not submission.agent_id:
-                raise RuntimeError("Gatekeeper submission did not produce an agent id")
-
-            result = await self._orchestrator.runtime_service.wait_for_run(submission.agent_id)
+            result = await self._orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
             if _extract_planning_completion_request(result):
                 self._transition_to_vibing(prefer_chat_history=True)
                 return
@@ -581,10 +571,8 @@ class VibrantApp(App):
         self._close_orchestrator_subscriptions()
         if self._orchestrator is None:
             return
-        self._pending_runtime_bootstrap_events = self._orchestrator.list_recent_events(limit=200)
-        self._runtime_event_subscription = self._orchestrator.runtime_service.subscribe_canonical_events(
-            self._on_runtime_event
-        )
+        self._pending_runtime_bootstrap_events = self._orchestrator.control_plane.list_recent_events(limit=200)
+        self._runtime_event_subscription = self._orchestrator.control_plane.subscribe_runtime_events(self._on_runtime_event)
 
     def _initialize_project_setup(self) -> None:
         self._close_orchestrator_subscriptions()
@@ -803,7 +791,7 @@ class VibrantApp(App):
 
         resolved_conversation_id = conversation_id
         if resolved_conversation_id is None:
-            resolved_conversation_id = self._orchestrator.snapshot().gatekeeper.conversation_id
+            resolved_conversation_id = self._orchestrator.control_plane.gatekeeper_conversation_id()
 
         if not resolved_conversation_id:
             if force or self._gatekeeper_conversation_id is not None:

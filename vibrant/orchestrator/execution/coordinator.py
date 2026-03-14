@@ -1,4 +1,4 @@
-"""Execution coordinator for task attempts."""
+"""Task execution mechanics."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from typing import Any
 from vibrant.agents.code_agent import CodeAgent
 from vibrant.agents.runtime import BaseAgentRuntime
 
-from ..types import AttemptCompletion, AttemptRecord, AttemptStatus, DispatchLease, ValidationOutcome, utc_now
+from ..types import AttemptCompletion, AttemptRecord, AttemptStatus, DispatchLease, ValidationOutcome
 
 
 @dataclass(slots=True)
 class ExecutionCoordinator:
-    """Mechanically run worker stages for one task attempt."""
+    """Run code-stage mechanics for one task attempt."""
 
     project_root: Any
     config: Any
@@ -25,7 +25,6 @@ class ExecutionCoordinator:
     workspace_service: Any
     runtime_service: Any
     conversation_stream: Any
-    workflow_policy: Any
     adapter_factory: Any
 
     async def start_attempt(self, lease: DispatchLease) -> AttemptRecord:
@@ -78,7 +77,6 @@ class ExecutionCoordinator:
             code_agent_id=agent_record.identity.agent_id,
             conversation_id=conversation_id,
         )
-        self.workflow_policy.on_attempt_started(self.attempt_store.get(attempt.attempt_id))
         await self.runtime_service.start_run(
             agent_record=agent_record,
             prompt=prompt,
@@ -119,10 +117,9 @@ class ExecutionCoordinator:
         next_status = (
             AttemptStatus.AWAITING_INPUT
             if completion.status == "awaiting_input"
-            else AttemptStatus.REVIEW_PENDING
+            else AttemptStatus.VALIDATION_PENDING
             if completion.status == "succeeded"
             else AttemptStatus.CANCELLED
         )
         self.attempt_store.update(attempt.attempt_id, status=next_status)
-        self.workflow_policy.on_attempt_completed(completion)
         return completion
