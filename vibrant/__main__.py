@@ -78,9 +78,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     start_path = args.cwd or os.getcwd()
     project_root = find_project_root(start_path)
     config = load_config(start_path=start_path)
+    mock_responses_enabled = config.mock_responses
     provider_binary = config.codex_binary
     resolved_provider_binary = None
-    if config.provider_kind is ProviderKind.CODEX:
+    if mock_responses_enabled:
+        resolved_provider_binary = None
+    elif config.provider_kind is ProviderKind.CODEX:
         resolved_provider_binary = _check_binary(config.codex_binary)
         if not resolved_provider_binary:
             print(
