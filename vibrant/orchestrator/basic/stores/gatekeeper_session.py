@@ -31,7 +31,7 @@ def project_gatekeeper_session(
     provider_thread_id = (
         resume_handle.thread_id
         if resume_handle is not None
-        else _normalize_string(session.provider_thread_id)
+        else session.provider_thread_id
     )
     resumable = (
         resume_handle.resumable
@@ -47,10 +47,3 @@ def project_gatekeeper_session(
         provider_thread_id=provider_thread_id,
         resumable=resumable,
     )
-
-
-def _normalize_string(value: object) -> str | None:
-    if isinstance(value, str):
-        normalized = value.strip()
-        return normalized or None
-    return None

@@ -5,9 +5,6 @@ from pathlib import Path
 
 from vibrant.orchestrator.basic.conversation.store import ConversationStore
 from vibrant.orchestrator.basic.conversation.stream import ConversationStreamService
-from vibrant.orchestrator.types import AttemptRecord, AttemptStatus
-
-
 def test_conversation_stream_rebuilds_processed_history(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     stream = ConversationStreamService(store)
@@ -134,58 +131,7 @@ def test_conversation_stream_ignores_agent_only_events_without_run_binding(tmp_p
     assert projected == []
 
 
-def test_conversation_store_normalizes_legacy_binding_ids_and_backfills_attempt_runs(tmp_path: Path) -> None:
-    store = ConversationStore(tmp_path / ".vibrant")
-    store.index_path.write_text(
-        json.dumps(
-            {
-                "conv-legacy": {
-                    "conversation_id": "conv-legacy",
-                    "binding_ids": ["run-legacy"],
-                    "active_turn_id": None,
-                    "updated_at": "2026-03-14T00:00:00Z",
-                    "next_sequence": 1,
-                },
-                "conv-attempt": {
-                    "conversation_id": "conv-attempt",
-                    "run_ids": [],
-                    "active_turn_id": None,
-                    "updated_at": "2026-03-14T00:00:00Z",
-                    "next_sequence": 1,
-                },
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    store.normalize_manifests(
-        attempt_records=[
-            AttemptRecord(
-                attempt_id="attempt-1",
-                task_id="task-1",
-                status=AttemptStatus.RUNNING,
-                workspace_id="workspace-1",
-                code_run_id="run-attempt",
-                validation_run_ids=[],
-                merge_run_id=None,
-                task_definition_version=1,
-                conversation_id="conv-attempt",
-                created_at="2026-03-14T00:00:00Z",
-                updated_at="2026-03-14T00:00:00Z",
-            )
-        ]
-    )
-
-    index = json.loads(store.index_path.read_text(encoding="utf-8"))
-
-    assert index["conv-legacy"]["run_ids"] == ["run-legacy"]
-    assert "binding_ids" not in index["conv-legacy"]
-    assert index["conv-attempt"]["run_ids"] == ["run-attempt"]
-
-
-def test_conversation_store_loads_legacy_frames_with_task_id(tmp_path: Path) -> None:
+def test_conversation_store_loads_current_frames(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     frames_path = store.frames_dir / "conv-1.jsonl"
     frames_path.write_text(
@@ -197,7 +143,6 @@ def test_conversation_store_loads_legacy_frames_with_task_id(tmp_path: Path) -> 
                 "sequence": 1,
                 "agent_id": None,
                 "run_id": "run-1",
-                "task_id": "task-1",
                 "turn_id": None,
                 "item_id": None,
                 "type": "conversation.user.message",

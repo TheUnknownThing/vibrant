@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from vibrant.models.agent import AgentRunRecord, AgentStatus, ProviderResumeHandle
@@ -71,18 +70,3 @@ class AgentRunStore:
         path = self.path / f"{run_id}.json"
         if path.exists():
             path.unlink()
-
-    def normalize_files(self) -> list[str]:
-        rewritten: list[str] = []
-        for path in sorted(self.path.glob("*.json")):
-            try:
-                raw_payload = json.loads(path.read_text(encoding="utf-8"))
-                record = AgentRunRecord.model_validate(raw_payload)
-            except Exception:
-                continue
-            normalized_payload = record.model_dump(mode="json")
-            if raw_payload == normalized_payload:
-                continue
-            path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-            rewritten.append(path.name)
-        return rewritten

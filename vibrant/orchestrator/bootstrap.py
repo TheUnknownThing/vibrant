@@ -98,12 +98,10 @@ class Orchestrator:
         conversation_stream = ConversationStreamService(conversation_store)
         runtime_service = AgentRuntimeService()
         workspace_service = WorkspaceService(project_root=root, worktree_root=config.worktree_directory)
-        _normalize_durable_state(
+        _repair_runtime_state(
             workflow_state_store=workflow_state_store,
             agent_run_store=agent_run_store,
-            attempt_store=attempt_store,
             agent_instance_store=agent_instance_store,
-            conversation_store=conversation_store,
             runtime_service=runtime_service,
         )
 
@@ -389,27 +387,19 @@ def create_orchestrator(
     )
 
 
-def _normalize_durable_state(
+def _repair_runtime_state(
     *,
     workflow_state_store: WorkflowStateStore,
     agent_run_store: AgentRunStore,
-    attempt_store: AttemptStore,
     agent_instance_store: AgentInstanceStore,
-    conversation_store: ConversationStore,
     runtime_service: AgentRuntimeService,
 ) -> None:
-    agent_run_store.normalize_files()
     live_run_ids = runtime_service.live_run_ids()
     run_by_id = {record.identity.run_id: record for record in agent_run_store.list()}
-    gatekeeper_session = _normalize_gatekeeper_session_state(
+    _repair_gatekeeper_session_state(
         workflow_state_store=workflow_state_store,
         agent_run_store=agent_run_store,
         live_run_ids=live_run_ids,
-    )
-    conversation_store.normalize_manifests(
-        attempt_records=attempt_store.list_all(),
-        gatekeeper_conversation_id=gatekeeper_session.conversation_id,
-        gatekeeper_run_id=gatekeeper_session.run_id,
     )
     agent_instance_store.reconcile_active_runs(
         live_run_ids=live_run_ids,
@@ -417,7 +407,7 @@ def _normalize_durable_state(
     )
 
 
-def _normalize_gatekeeper_session_state(
+def _repair_gatekeeper_session_state(
     *,
     workflow_state_store: WorkflowStateStore,
     agent_run_store: AgentRunStore,
@@ -429,21 +419,21 @@ def _normalize_gatekeeper_session_state(
         if state.gatekeeper_session.run_id is not None
         else None
     )
-    normalized_session = project_gatekeeper_session(
+    repaired_session = project_gatekeeper_session(
         state.gatekeeper_session,
         run_record=run_record,
     )
     if (
-        normalized_session.run_id is not None
-        and normalized_session.run_id not in live_run_ids
-        and normalized_session.lifecycle_state in {
+        repaired_session.run_id is not None
+        and repaired_session.run_id not in live_run_ids
+        and repaired_session.lifecycle_state in {
             GatekeeperLifecycleStatus.STARTING,
             GatekeeperLifecycleStatus.RUNNING,
         }
     ):
-        normalized_session.lifecycle_state = GatekeeperLifecycleStatus.IDLE
-        normalized_session.active_turn_id = None
-    if asdict(normalized_session) != asdict(state.gatekeeper_session):
-        state.gatekeeper_session = normalized_session
-    workflow_state_store.normalize_file(state)
-    return normalized_session
+        repaired_session.lifecycle_state = GatekeeperLifecycleStatus.IDLE
+        repaired_session.active_turn_id = None
+    if asdict(repaired_session) != asdict(state.gatekeeper_session):
+        state.gatekeeper_session = repaired_session
+        workflow_state_store.save(state)
+    return repaired_session

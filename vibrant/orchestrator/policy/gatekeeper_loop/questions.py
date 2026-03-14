@@ -31,10 +31,6 @@ def normalize_question_scope(value: object, *, default: str = DEFAULT_BLOCKING_S
     return normalized
 
 
-def normalize_blocking_scope(value: object, *, default: str = DEFAULT_BLOCKING_SCOPE) -> str:
-    return normalize_question_scope(value, default=default)
-
-
 def list_pending_questions(question_store: QuestionStore) -> tuple[QuestionRecord, ...]:
     return tuple(question_store.list_pending())
 

@@ -82,9 +82,8 @@ class ConversationStore:
             if not raw:
                 continue
             payload = json.loads(raw)
-            if isinstance(payload, dict):
-                payload.pop("task_id", None)
-            payload.setdefault("run_id", None)
+            if not isinstance(payload, dict):
+                continue
             frames.append(AgentStreamEvent(**payload))
         return frames
 
@@ -110,61 +109,6 @@ class ConversationStore:
         self._save_manifest(manifest)
         return manifest
 
-    def normalize_manifests(
-        self,
-        *,
-        attempt_records: list[object] | None = None,
-        gatekeeper_conversation_id: str | None = None,
-        gatekeeper_run_id: str | None = None,
-    ) -> list[str]:
-        raw_index = self._index()
-        normalized_index: dict[str, dict[str, Any]] = {}
-        rewritten: list[str] = []
-        attempt_records = list(attempt_records or [])
-
-        known_ids = set(raw_index)
-        known_ids.update(
-            conversation_id
-            for conversation_id in (
-                gatekeeper_conversation_id,
-                *(
-                    getattr(record, "conversation_id", None)
-                    for record in attempt_records
-                ),
-            )
-            if isinstance(conversation_id, str) and conversation_id
-        )
-
-        for conversation_id in sorted(known_ids):
-            raw = raw_index.get(conversation_id, {"conversation_id": conversation_id})
-            if not isinstance(raw, dict):
-                raw = {"conversation_id": conversation_id}
-            manifest = _manifest_from_raw(raw)
-            derived_run_ids = list(manifest.run_ids)
-            if not derived_run_ids:
-                derived_run_ids.extend(_frame_run_ids(self.load_frames(conversation_id)))
-            if gatekeeper_conversation_id == conversation_id and gatekeeper_run_id:
-                derived_run_ids.append(gatekeeper_run_id)
-            for attempt in attempt_records:
-                if getattr(attempt, "conversation_id", None) != conversation_id:
-                    continue
-                derived_run_ids.extend(_attempt_run_ids(attempt))
-            normalized_manifest = ConversationManifest(
-                conversation_id=conversation_id,
-                run_ids=_dedupe_strings(derived_run_ids),
-                active_turn_id=manifest.active_turn_id,
-                updated_at=manifest.updated_at,
-                next_sequence=manifest.next_sequence,
-            )
-            normalized_payload = asdict(normalized_manifest)
-            normalized_index[conversation_id] = normalized_payload
-            if raw != normalized_payload:
-                rewritten.append(conversation_id)
-
-        if rewritten or raw_index != normalized_index:
-            write_json(self.index_path, normalized_index)
-        return rewritten
-
     def _ensure_manifest(self, conversation_id: str) -> ConversationManifest:
         manifest = self.manifest(conversation_id)
         if manifest is not None:
@@ -189,50 +133,4 @@ class ConversationStore:
 
 
 def _manifest_from_raw(raw: dict[str, Any]) -> ConversationManifest:
-    payload = dict(raw)
-    binding_ids = _string_list(payload.get("binding_ids"))
-    run_ids = _string_list(payload.get("run_ids"))
-    payload["run_ids"] = run_ids or binding_ids
-    payload.pop("binding_kind", None)
-    payload.pop("binding_ids", None)
-    payload.pop("agent_ids", None)
-    payload.pop("task_ids", None)
-    payload.pop("run_task_ids", None)
-    payload.setdefault("active_turn_id", None)
-    payload.setdefault("updated_at", utc_now())
-    payload.setdefault("next_sequence", 1)
-    return ConversationManifest(**payload)
-
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-
-
-def _dedupe_strings(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    normalized: list[str] = []
-    for value in values:
-        cleaned = value.strip() if isinstance(value, str) else ""
-        if not cleaned or cleaned in seen:
-            continue
-        seen.add(cleaned)
-        normalized.append(cleaned)
-    return normalized
-
-
-def _frame_run_ids(frames: list[AgentStreamEvent]) -> list[str]:
-    return [frame.run_id for frame in frames if isinstance(frame.run_id, str) and frame.run_id]
-
-
-def _attempt_run_ids(record: object) -> list[str]:
-    run_ids: list[str] = []
-    for field_name in ("code_run_id", "merge_run_id"):
-        value = getattr(record, field_name, None)
-        if isinstance(value, str) and value.strip():
-            run_ids.append(value.strip())
-    validation_run_ids = getattr(record, "validation_run_ids", None)
-    if isinstance(validation_run_ids, list):
-        run_ids.extend(item.strip() for item in validation_run_ids if isinstance(item, str) and item.strip())
-    return run_ids
+    return ConversationManifest(**raw)

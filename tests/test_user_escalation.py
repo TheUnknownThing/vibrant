@@ -90,9 +90,9 @@ def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: st
             resume_cursor={"threadId": thread_id},
         ),
     )
-    agents_dir = project_root / ".vibrant" / "agents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / f"{agent_id}.json").write_text(record.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    runs_dir = project_root / ".vibrant" / "agent-runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / f"{record.identity.run_id}.json").write_text(record.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
 
 @pytest.mark.asyncio

@@ -185,9 +185,9 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
             resume_cursor={"threadId": "thread-existing"},
         ),
     )
-    agents_dir = tmp_path / ".vibrant" / "agents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / f"{prior_record.identity.agent_id}.json").write_text(
+    runs_dir = tmp_path / ".vibrant" / "agent-runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / f"{prior_record.identity.run_id}.json").write_text(
         prior_record.model_dump_json(indent=2) + "\n",
         encoding="utf-8",
     )

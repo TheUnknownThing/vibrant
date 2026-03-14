@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from vibrant.models.agent import AgentInstanceRecord, AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.orchestrator.basic.stores import WorkflowStateStore
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator import OrchestratorFacade, create_orchestrator
 from vibrant.orchestrator.basic.stores import AgentInstanceStore, AgentRunStore
-from vibrant.orchestrator.types import WorkflowStatus
+from vibrant.orchestrator.types import GatekeeperSessionSnapshot, GatekeeperLifecycleStatus, WorkflowStatus
 from vibrant.project_init import initialize_project
 
 
@@ -27,7 +27,7 @@ def test_create_orchestrator_bootstraps_redesigned_services(tmp_path: Path) -> N
     assert orchestrator.attempt_store.list_active() == []
 
 
-def test_bootstrap_rewrites_gatekeeper_state_and_projects_resume_from_run(tmp_path: Path) -> None:
+def test_bootstrap_projects_gatekeeper_resume_from_run_record(tmp_path: Path) -> None:
     initialize_project(tmp_path)
     vibrant_dir = tmp_path / ".vibrant"
     AgentRunStore(vibrant_dir / "agent-runs").upsert(
@@ -45,43 +45,24 @@ def test_bootstrap_rewrites_gatekeeper_state_and_projects_resume_from_run(tmp_pa
             ),
         )
     )
-    state_path = vibrant_dir / "state.json"
-    state_path.write_text(
-        json.dumps(
-            {
-                "session_id": "session-1",
-                "started_at": "2026-03-14T00:00:00Z",
-                "workflow_status": "planning",
-                "resume_status": None,
-                "concurrency_limit": 4,
-                "gatekeeper_session": {
-                    "agent_id": "gatekeeper-agent",
-                    "run_id": "gatekeeper-run-1",
-                    "conversation_id": "gatekeeper-conversation",
-                    "lifecycle_state": "running",
-                    "provider_thread_id": "thread-existing",
-                    "active_turn_id": "turn-1",
-                    "resumable": True,
-                    "last_error": None,
-                    "updated_at": "2026-03-14T00:00:00Z",
-                },
-                "total_agent_spawns": 0,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+    workflow_state_store = WorkflowStateStore(vibrant_dir / "state.json")
+    state = workflow_state_store.load()
+    state.gatekeeper_session = GatekeeperSessionSnapshot(
+        agent_id="gatekeeper-agent",
+        run_id="gatekeeper-run-1",
+        conversation_id="gatekeeper-conversation",
+        lifecycle_state=GatekeeperLifecycleStatus.IDLE,
+        resumable=False,
+        updated_at="2026-03-14T00:00:00Z",
     )
+    workflow_state_store.save(state)
 
     orchestrator = create_orchestrator(tmp_path)
-    persisted_state = json.loads(state_path.read_text(encoding="utf-8"))
     snapshot = orchestrator.snapshot()
 
-    assert "provider_thread_id" not in persisted_state["gatekeeper_session"]
-    assert persisted_state["gatekeeper_session"]["lifecycle_state"] == "idle"
-    assert persisted_state["gatekeeper_session"]["resumable"] is True
     assert snapshot.gatekeeper.run_id == "gatekeeper-run-1"
     assert snapshot.gatekeeper.provider_thread_id == "thread-existing"
+    assert snapshot.gatekeeper.resumable is True
 
 
 def test_bootstrap_clears_stale_instance_active_run_pointer(tmp_path: Path) -> None:
