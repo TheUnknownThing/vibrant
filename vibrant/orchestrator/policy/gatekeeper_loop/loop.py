@@ -10,7 +10,7 @@ from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.task import TaskInfo
 
 from ...basic import ArtifactsCapability, ConversationCapability, AgentRuntimeCapability
-from ...types import QuestionPriority, WorkflowSnapshot, WorkflowStatus
+from ...types import QuestionPriority, QuestionStatus, WorkflowSnapshot, WorkflowStatus
 from .lifecycle import GatekeeperLifecycleService
 from .models import GatekeeperLoopState, GatekeeperSubmission
 from .questions import current_pending_question, normalize_question_scope, require_pending_question
@@ -68,9 +68,6 @@ class GatekeeperUserLoop:
             self._last_error = str(exc)
             raise
 
-        if pending_question is not None:
-            self.artifacts.question_store.resolve(pending_question.question_id, answer=text)
-
         self._last_error = None
         snapshot = self.lifecycle.snapshot()
         identity = getattr(getattr(handle, "agent_record", None), "identity", None)
@@ -82,12 +79,27 @@ class GatekeeperUserLoop:
             run_id=getattr(identity, "run_id", snapshot.run_id),
             accepted=True,
             active_turn_id=snapshot.active_turn_id,
+            question_id=pending_question.question_id if pending_question is not None else None,
+            answer_text=text if pending_question is not None else None,
         )
 
     async def wait_for_submission(self, submission: GatekeeperSubmission):
         if not submission.run_id:
             raise RuntimeError("Gatekeeper submission did not produce a run id")
-        return await self.runtime.wait_for_run(submission.run_id)
+        result = await self.runtime.wait_for_run(submission.run_id)
+        result_error = getattr(result, "error", None)
+        if result_error:
+            self._last_error = result_error
+            return result
+        if submission.question_id is not None:
+            record = self.artifacts.question_store.get(submission.question_id)
+            if record is not None and record.status is QuestionStatus.PENDING:
+                self.artifacts.question_store.resolve(
+                    submission.question_id,
+                    answer=submission.answer_text,
+                )
+        self._last_error = None
+        return result
 
     async def restart(self, reason: str | None = None) -> GatekeeperLoopState:
         await self.lifecycle.restart_session(reason=reason)

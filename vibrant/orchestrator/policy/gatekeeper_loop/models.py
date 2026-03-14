@@ -24,6 +24,8 @@ class GatekeeperSubmission:
     run_id: str | None
     accepted: bool
     active_turn_id: str | None
+    question_id: str | None = None
+    answer_text: str | None = None
     error: str | None = None
 
 

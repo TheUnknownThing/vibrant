@@ -53,6 +53,7 @@ class AttemptStatus(str, Enum):
     REVIEW_PENDING = "review_pending"
     MERGE_PENDING = "merge_pending"
     RETRY_PENDING = "retry_pending"
+    FAILED = "failed"
     ACCEPTED = "accepted"
     ESCALATED = "escalated"
     CANCELLED = "cancelled"
@@ -105,7 +106,7 @@ class BoundAgentCapabilities:
 @dataclass(slots=True)
 class ValidationOutcome:
     status: Literal["passed", "failed", "skipped", "cancelled"]
-    agent_ids: list[str]
+    run_ids: list[str]
     summary: str | None = None
     results_ref: str | None = None
 
@@ -116,9 +117,9 @@ class AttemptRecord:
     task_id: str
     status: AttemptStatus
     workspace_id: str
-    code_agent_id: str | None
-    validation_agent_ids: list[str]
-    merge_agent_id: str | None
+    code_run_id: str | None
+    validation_run_ids: list[str]
+    merge_run_id: str | None
     task_definition_version: int
     conversation_id: str | None
     created_at: str
@@ -130,7 +131,7 @@ class AttemptCompletion:
     attempt_id: str
     task_id: str
     status: Literal["succeeded", "failed", "awaiting_input", "cancelled"]
-    code_agent_id: str
+    code_run_id: str
     workspace_ref: str
     diff_ref: str | None
     validation: ValidationOutcome | None
@@ -168,7 +169,7 @@ class ReviewTicket:
     ticket_id: str
     task_id: str
     attempt_id: str
-    agent_id: str
+    run_id: str
     review_kind: Literal["task_result", "merge_failure"]
     conversation_id: str | None
     status: ReviewTicketStatus = ReviewTicketStatus.PENDING
@@ -275,6 +276,7 @@ class WorkflowState:
     workflow_status: WorkflowStatus
     concurrency_limit: int
     gatekeeper_session: GatekeeperSessionSnapshot
+    resume_status: WorkflowStatus | None = None
     total_agent_spawns: int = 0
 
 

@@ -72,6 +72,17 @@ def test_workflow_state_commands_are_sync(tmp_path: Path) -> None:
     assert resumed.status.value == "executing"
 
 
+def test_resume_workflow_restores_planning_phase(tmp_path: Path) -> None:
+    orchestrator = _prepare_project(tmp_path)
+
+    orchestrator.control_plane.set_workflow_status(WorkflowStatus.PLANNING)
+    paused = orchestrator.pause_workflow()
+    resumed = orchestrator.resume_workflow()
+
+    assert paused.status.value == "paused"
+    assert resumed.status.value == "planning"
+
+
 def test_facade_surfaces_failed_workflow_without_paused_fallback(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)

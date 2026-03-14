@@ -92,6 +92,7 @@ class GatekeeperLifecycleService:
         submission_id: str,
         resume: bool = True,
     ):
+        self._ensure_no_active_submission()
         session = await self.resume_or_start()
         prompt = self.gatekeeper.render_prompt(request)
         agent_record = self.gatekeeper.build_run_record(
@@ -309,6 +310,17 @@ class GatekeeperLifecycleService:
         binding_id = self._binding_ids_by_run_id.pop(run_id, None)
         if binding_id is not None and self.mcp_host is not None:
             self.mcp_host.unregister_binding(binding_id)
+
+    def _ensure_no_active_submission(self) -> None:
+        if self._active_handle_run_id is None:
+            return
+        try:
+            snapshot = self.runtime_service.snapshot_handle(self._active_handle_run_id)
+        except KeyError:
+            self._active_handle_run_id = None
+            self._active_handle = None
+            return
+        raise RuntimeError(f"Gatekeeper already has an active run: {snapshot.run_id}")
 
     def _persist_run(self, run_record) -> None:
         self.run_store.upsert(run_record)

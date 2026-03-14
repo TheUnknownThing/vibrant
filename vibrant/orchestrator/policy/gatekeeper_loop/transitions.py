@@ -32,10 +32,13 @@ def end_planning(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
 
 
 def resume_workflow(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
-    status = infer_resume_workflow_status(
-        consensus=artifacts.consensus_store.load(),
-        roadmap=artifacts.roadmap_store.load(),
-    )
+    state = artifacts.workflow_state_store.load()
+    status = state.resume_status
+    if status is None:
+        status = infer_resume_workflow_status(
+            consensus=artifacts.consensus_store.load(),
+            roadmap=artifacts.roadmap_store.load(),
+        )
     return apply_workflow_status(artifacts, status)
 
 
@@ -59,11 +62,16 @@ def plan_ui_transition(current: OrchestratorStatus, next_status: OrchestratorSta
         return UITransitionPlan(action="noop")
     if next_status is OrchestratorStatus.PAUSED:
         return UITransitionPlan(action="pause")
-    if current is OrchestratorStatus.PAUSED and next_status in {
-        OrchestratorStatus.PLANNING,
-        OrchestratorStatus.EXECUTING,
-    }:
-        return UITransitionPlan(action="resume")
+    if current is OrchestratorStatus.PAUSED and next_status is OrchestratorStatus.PLANNING:
+        return UITransitionPlan(
+            action="set_status",
+            workflow_status=WorkflowStatus.PLANNING,
+        )
+    if current is OrchestratorStatus.PAUSED and next_status is OrchestratorStatus.EXECUTING:
+        return UITransitionPlan(
+            action="set_status",
+            workflow_status=WorkflowStatus.EXECUTING,
+        )
     if next_status is OrchestratorStatus.EXECUTING and current in {
         OrchestratorStatus.INIT,
         OrchestratorStatus.PLANNING,

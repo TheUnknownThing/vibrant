@@ -20,8 +20,10 @@ The target design is:
 - inject the relevant MCP server configuration into Codex for that specific run
   instead of relying on a shared static `.codex/config.toml`
 
-This aligns with the orchestrator redesign in
-[`docs/orchestrator-rebirth.md`](/home/color/workspace/vibrant/docs/orchestrator-rebirth.md)
+This aligns with the layered orchestrator architecture in
+[`docs/architecture-layer-refactor-plan.md`](/home/rogerw/project/vibrant/docs/architecture-layer-refactor-plan.md)
+and the role / agent / run model in
+[`docs/agent-role-architecture.md`](/home/rogerw/project/vibrant/docs/agent-role-architecture.md),
 while removing the separate auth scaffolding that is currently not wired into
 the orchestrator runtime.
 

@@ -18,7 +18,6 @@ ACTIVE_ATTEMPT_STATUSES = {
     AttemptStatus.VALIDATING,
     AttemptStatus.REVIEW_PENDING,
     AttemptStatus.MERGE_PENDING,
-    AttemptStatus.RETRY_PENDING,
 }
 
 
@@ -36,9 +35,9 @@ class AttemptStore:
         task_definition_version: int,
         status: AttemptStatus = AttemptStatus.LEASED,
         attempt_id: str | None = None,
-        code_agent_id: str | None = None,
-        validation_agent_ids: list[str] | None = None,
-        merge_agent_id: str | None = None,
+        code_run_id: str | None = None,
+        validation_run_ids: list[str] | None = None,
+        merge_run_id: str | None = None,
         conversation_id: str | None = None,
     ) -> AttemptRecord:
         records = self._load_records()
@@ -48,9 +47,9 @@ class AttemptStore:
             task_id=task_id,
             status=status,
             workspace_id=workspace_id,
-            code_agent_id=code_agent_id,
-            validation_agent_ids=list(validation_agent_ids or []),
-            merge_agent_id=merge_agent_id,
+            code_run_id=code_run_id,
+            validation_run_ids=list(validation_run_ids or []),
+            merge_run_id=merge_run_id,
             task_definition_version=task_definition_version,
             conversation_id=conversation_id,
             created_at=now,
@@ -81,9 +80,9 @@ class AttemptStore:
         *,
         status: AttemptStatus | None = None,
         workspace_id: str | None = None,
-        code_agent_id: str | None = None,
-        validation_agent_ids: list[str] | None = None,
-        merge_agent_id: str | None = None,
+        code_run_id: str | None = None,
+        validation_run_ids: list[str] | None = None,
+        merge_run_id: str | None = None,
         task_definition_version: int | None = None,
         conversation_id: str | None = None,
     ) -> AttemptRecord:
@@ -97,12 +96,12 @@ class AttemptStore:
             record.status = status
         if workspace_id is not None:
             record.workspace_id = workspace_id
-        if code_agent_id is not None:
-            record.code_agent_id = code_agent_id
-        if validation_agent_ids is not None:
-            record.validation_agent_ids = list(validation_agent_ids)
-        if merge_agent_id is not None:
-            record.merge_agent_id = merge_agent_id
+        if code_run_id is not None:
+            record.code_run_id = code_run_id
+        if validation_run_ids is not None:
+            record.validation_run_ids = list(validation_run_ids)
+        if merge_run_id is not None:
+            record.merge_run_id = merge_run_id
         if task_definition_version is not None:
             record.task_definition_version = task_definition_version
         if conversation_id is not None:
@@ -128,9 +127,9 @@ class AttemptStore:
                     task_id=str(payload["task_id"]),
                     status=AttemptStatus(str(payload["status"])),
                     workspace_id=str(payload["workspace_id"]),
-                    code_agent_id=_optional_string(payload.get("code_agent_id")),
-                    validation_agent_ids=_string_list(payload.get("validation_agent_ids")),
-                    merge_agent_id=_optional_string(payload.get("merge_agent_id")),
+                    code_run_id=_optional_string(payload.get("code_run_id") or payload.get("code_agent_id")),
+                    validation_run_ids=_string_list(payload.get("validation_run_ids") or payload.get("validation_agent_ids")),
+                    merge_run_id=_optional_string(payload.get("merge_run_id") or payload.get("merge_agent_id")),
                     task_definition_version=int(payload["task_definition_version"]),
                     conversation_id=_optional_string(payload.get("conversation_id")),
                     created_at=str(payload.get("created_at") or utc_now()),

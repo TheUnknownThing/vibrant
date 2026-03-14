@@ -21,17 +21,17 @@ class AgentRuntimeCapability:
     async def resume_run(self, **kwargs: Any) -> Any:
         return await self.service.resume_run(**kwargs)
 
-    async def wait_for_run(self, agent_id: str) -> RuntimeExecutionResult:
-        return await self.service.wait_for_run(agent_id)
+    async def wait_for_run(self, run_id: str) -> RuntimeExecutionResult:
+        return await self.service.wait_for_run(run_id)
 
-    async def interrupt_run(self, agent_id: str) -> RuntimeHandleSnapshot:
-        return await self.service.interrupt_run(agent_id)
+    async def interrupt_run(self, run_id: str) -> RuntimeHandleSnapshot:
+        return await self.service.interrupt_run(run_id)
 
-    async def kill_run(self, agent_id: str) -> RuntimeHandleSnapshot:
-        return await self.service.kill_run(agent_id)
+    async def kill_run(self, run_id: str) -> RuntimeHandleSnapshot:
+        return await self.service.kill_run(run_id)
 
-    def snapshot_handle(self, agent_id: str) -> RuntimeHandleSnapshot:
-        return self.service.snapshot_handle(agent_id)
+    def snapshot_handle(self, run_id: str) -> RuntimeHandleSnapshot:
+        return self.service.snapshot_handle(run_id)
 
     def subscribe_canonical_events(
         self,

@@ -132,8 +132,8 @@ class AgentRuntimeService:
         )
         return handle
 
-    async def wait_for_run(self, identifier: str) -> RuntimeExecutionResult:
-        run_id, live_run = self._resolve_live_run(identifier)
+    async def wait_for_run(self, run_id: str) -> RuntimeExecutionResult:
+        live_run = self._resolve_live_run(run_id)
         result = await live_run.handle.wait()
         provider_thread = result.provider_thread
         execution_result = RuntimeExecutionResult(
@@ -154,18 +154,18 @@ class AgentRuntimeService:
             self._forget_live_run(run_id, live_run.agent_record.identity.agent_id)
         return execution_result
 
-    async def interrupt_run(self, identifier: str) -> RuntimeHandleSnapshot:
-        _, live_run = self._resolve_live_run(identifier)
+    async def interrupt_run(self, run_id: str) -> RuntimeHandleSnapshot:
+        live_run = self._resolve_live_run(run_id)
         await live_run.handle.interrupt()
         return self.snapshot_handle(live_run.agent_record.identity.run_id)
 
-    async def kill_run(self, identifier: str) -> RuntimeHandleSnapshot:
-        _, live_run = self._resolve_live_run(identifier)
+    async def kill_run(self, run_id: str) -> RuntimeHandleSnapshot:
+        live_run = self._resolve_live_run(run_id)
         await live_run.handle.kill()
         return self.snapshot_handle(live_run.agent_record.identity.run_id)
 
-    def snapshot_handle(self, identifier: str) -> RuntimeHandleSnapshot:
-        run_id, live_run = self._resolve_live_run(identifier)
+    def snapshot_handle(self, run_id: str) -> RuntimeHandleSnapshot:
+        live_run = self._resolve_live_run(run_id)
         provider_thread = live_run.handle.provider_thread
         return RuntimeHandleSnapshot(
             agent_id=live_run.agent_record.identity.agent_id,
@@ -285,12 +285,8 @@ class AgentRuntimeService:
         if self._active_runs_by_agent_id.get(agent_id) == run_id:
             self._active_runs_by_agent_id.pop(agent_id, None)
 
-    def _resolve_live_run(self, identifier: str) -> tuple[str, _LiveRun]:
-        live_run = self._runs.get(identifier)
-        if live_run is not None:
-            return identifier, live_run
-
-        run_id = self._active_runs_by_agent_id.get(identifier)
-        if run_id is None:
-            raise KeyError(identifier)
-        return run_id, self._runs[run_id]
+    def _resolve_live_run(self, run_id: str) -> _LiveRun:
+        try:
+            return self._runs[run_id]
+        except KeyError as exc:
+            raise KeyError(run_id) from exc

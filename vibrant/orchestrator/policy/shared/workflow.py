@@ -74,16 +74,30 @@ def infer_resume_workflow_status(
 
 
 def apply_workflow_status(artifacts: ArtifactsCapability, status: WorkflowStatus) -> WorkflowSnapshot:
-    artifacts.workflow_state_store.update_workflow_status(status)
+    current_state = artifacts.workflow_state_store.load()
+    next_resume_status = (
+        current_state.workflow_status
+        if status is WorkflowStatus.PAUSED and current_state.workflow_status is not WorkflowStatus.PAUSED
+        else current_state.resume_status
+        if status is WorkflowStatus.PAUSED
+        else None
+    )
+    artifacts.workflow_state_store.update_workflow_status(
+        status,
+        resume_status=next_resume_status,
+    )
     artifacts.consensus_store.set_status_projection(workflow_to_consensus_status(status))
     return artifacts.workflow_snapshot()
 
 
 def resume_workflow(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
-    status = infer_resume_workflow_status(
-        consensus=artifacts.consensus_store.load(),
-        roadmap=artifacts.roadmap_store.load(),
-    )
+    state = artifacts.workflow_state_store.load()
+    status = state.resume_status
+    if status is None:
+        status = infer_resume_workflow_status(
+            consensus=artifacts.consensus_store.load(),
+            roadmap=artifacts.roadmap_store.load(),
+        )
     return apply_workflow_status(artifacts, status)
 
 

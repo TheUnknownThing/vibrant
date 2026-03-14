@@ -19,11 +19,17 @@ from vibrant.providers.codex.adapter import CodexProviderAdapter
 def _make_agent_record(
     *,
     agent_id: str,
+    run_id: str | None = None,
     task_id: str,
     provider: dict[str, Any] | None = None,
 ) -> AgentRecord:
     return AgentRecord(
-        identity={"agent_id": agent_id, "task_id": task_id, "type": AgentType.CODE},
+        identity={
+            "agent_id": agent_id,
+            "run_id": run_id or agent_id,
+            "task_id": task_id,
+            "type": AgentType.CODE,
+        },
         provider=provider or {},
     )
 
@@ -75,6 +81,7 @@ class TestCodexProviderLogging:
 
         agent = _make_agent_record(
             agent_id="agent-task-001",
+            run_id="run-task-001",
             task_id="task-001",
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),
@@ -104,6 +111,24 @@ class TestCodexProviderLogging:
         assert any(line["event"] == "jsonrpc.request.sent" for line in native_lines)
         assert any(line["event"] == "stderr.line" for line in native_lines)
         assert [line["event"] for line in canonical_lines[:3]] == ["session.started", "thread.started", "content.delta"]
+        assert {line["data"]["run_id"] for line in canonical_lines} == {"run-task-001"}
+
+    @pytest.mark.asyncio
+    async def test_adapter_defaults_log_paths_to_run_scoped_files(self, tmp_path: Path) -> None:
+        client = LoggingFakeCodexClient()
+        client.responses["initialize"] = {"serverInfo": {"name": "codex"}}
+
+        agent = _make_agent_record(
+            agent_id="agent-task-002",
+            run_id="run-task-002",
+            task_id="task-002",
+        )
+        adapter = CodexProviderAdapter(client=client, cwd=str(tmp_path), agent_record=agent)
+
+        await adapter.start_session(cwd=str(tmp_path))
+
+        assert Path(agent.provider.native_event_log or "").name == "run-task-002.ndjson"
+        assert Path(agent.provider.canonical_event_log or "").name == "run-task-002.ndjson"
 
     @pytest.mark.asyncio
     async def test_adapter_redacts_auth_secrets_in_native_log(self, tmp_path: Path):
@@ -113,6 +138,7 @@ class TestCodexProviderLogging:
 
         agent = _make_agent_record(
             agent_id="agent-auth-redact",
+            run_id="run-auth-redact",
             task_id="task-auth-redact",
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),

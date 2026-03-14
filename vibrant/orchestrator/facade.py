@@ -84,8 +84,8 @@ class OrchestratorFacade:
     def list_agent_records(self) -> list[AgentRunRecord]:
         return self.control_plane.list_agent_records()
 
-    def get_agent(self, agent_id: str) -> OrchestratorAgentSnapshot | None:
-        record = self.control_plane.get_agent_record(agent_id)
+    def get_agent(self, run_id: str) -> OrchestratorAgentSnapshot | None:
+        record = self.control_plane.get_agent_record(run_id)
         if record is None:
             return None
         return self._snapshot_agent(record)
@@ -328,6 +328,12 @@ class OrchestratorFacade:
         self.control_plane.set_workflow_status(plan.workflow_status)
 
     def infer_resume_status(self) -> OrchestratorStatus:
+        workflow_state = self.orchestrator.workflow_state_store.load()
+        if (
+            workflow_state.workflow_status is WorkflowStatus.PAUSED
+            and workflow_state.resume_status is not None
+        ):
+            return orchestrator_status_from_workflow(workflow_state.resume_status)
         return infer_resume_status(
             self.get_consensus_document(),
             self.snapshot().roadmap,

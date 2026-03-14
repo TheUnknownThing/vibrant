@@ -80,31 +80,35 @@ class ExecutionCoordinator:
         self.attempt_store.update(
             attempt.attempt_id,
             status=AttemptStatus.RUNNING,
-            code_agent_id=instance.identity.agent_id,
+            code_run_id=agent_record.identity.run_id,
             conversation_id=conversation_id,
         )
-        await self.runtime_service.start_run(
-            agent_record=agent_record,
-            prompt=prepared.prompt,
-            cwd=workspace.path,
-            runtime=BaseAgentRuntime(code_agent),
-            on_record_updated=self._persist_run,
-        )
+        try:
+            await self.runtime_service.start_run(
+                agent_record=agent_record,
+                prompt=prepared.prompt,
+                cwd=workspace.path,
+                runtime=BaseAgentRuntime(code_agent),
+                on_record_updated=self._persist_run,
+            )
+        except Exception:
+            self.attempt_store.update(attempt.attempt_id, status=AttemptStatus.FAILED)
+            raise
         return self.attempt_store.get(attempt.attempt_id)
 
     async def await_attempt_completion(self, attempt_id: str) -> AttemptCompletion:
         attempt = self.attempt_store.get(attempt_id)
         if attempt is None:
             raise KeyError(f"Attempt not found: {attempt_id}")
-        if attempt.code_agent_id is None:
-            raise ValueError(f"Attempt has no code agent: {attempt_id}")
+        if attempt.code_run_id is None:
+            raise ValueError(f"Attempt has no code run: {attempt_id}")
 
-        runtime_result = await self.runtime_service.wait_for_run(attempt.code_agent_id)
+        runtime_result = await self.runtime_service.wait_for_run(attempt.code_run_id)
         completion = AttemptCompletion(
             attempt_id=attempt.attempt_id,
             task_id=attempt.task_id,
             status="awaiting_input" if runtime_result.awaiting_input else ("failed" if runtime_result.error else "succeeded"),
-            code_agent_id=attempt.code_agent_id,
+            code_run_id=attempt.code_run_id,
             workspace_ref=attempt.workspace_id,
             diff_ref=None,
             validation=None,

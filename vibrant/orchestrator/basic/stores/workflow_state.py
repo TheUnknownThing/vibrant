@@ -15,6 +15,8 @@ from ...types import (
     utc_now,
 )
 
+_UNSET = object()
+
 
 class WorkflowStateStore:
     """Persist non-derivable workflow session state in ``.vibrant/state.json``."""
@@ -35,6 +37,7 @@ class WorkflowStateStore:
             "session_id": state.session_id,
             "started_at": state.started_at,
             "workflow_status": state.workflow_status.value,
+            "resume_status": state.resume_status.value if state.resume_status is not None else None,
             "concurrency_limit": state.concurrency_limit,
             "gatekeeper_session": {
                 **asdict(state.gatekeeper_session),
@@ -44,9 +47,16 @@ class WorkflowStateStore:
         }
         write_json(self.path, payload)
 
-    def update_workflow_status(self, status: WorkflowStatus) -> WorkflowState:
+    def update_workflow_status(
+        self,
+        status: WorkflowStatus,
+        *,
+        resume_status: WorkflowStatus | None | object = _UNSET,
+    ) -> WorkflowState:
         state = self.load()
         state.workflow_status = status
+        if resume_status is not _UNSET:
+            state.resume_status = resume_status
         self.save(state)
         return state
 
@@ -80,6 +90,7 @@ class WorkflowStateStore:
             workflow_status=WorkflowStatus.INIT,
             concurrency_limit=4,
             gatekeeper_session=GatekeeperSessionSnapshot(),
+            resume_status=None,
             total_agent_spawns=0,
         )
 
@@ -99,6 +110,7 @@ class WorkflowStateStore:
             workflow_status=_parse_workflow_status(status_raw),
             concurrency_limit=_as_positive_int(raw.get("concurrency_limit"), default=4),
             gatekeeper_session=gatekeeper_session,
+            resume_status=_parse_optional_workflow_status(raw.get("resume_status")),
             total_agent_spawns=_as_non_negative_int(raw.get("total_agent_spawns"), default=0),
         )
 
@@ -149,6 +161,22 @@ def _parse_workflow_status(value: object) -> WorkflowStatus:
         except ValueError:
             return WorkflowStatus.INIT
     return WorkflowStatus.INIT
+
+
+def _parse_optional_workflow_status(value: object) -> WorkflowStatus | None:
+    if value is None:
+        return None
+    if isinstance(value, WorkflowStatus):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        try:
+            return WorkflowStatus(normalized)
+        except ValueError:
+            return None
+    return None
 
 
 def _as_non_empty_string(value: object) -> str | None:

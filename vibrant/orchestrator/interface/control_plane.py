@@ -138,8 +138,8 @@ class InterfaceControlPlane:
     def gatekeeper_busy(self) -> bool:
         return self.backend.queries.gatekeeper_busy()
 
-    def runtime_handle(self, agent_id: str):
-        return self.backend.queries.runtime_handle(agent_id)
+    def runtime_handle(self, run_id: str):
+        return self.backend.queries.runtime_handle(run_id)
 
     def add_task(self, task, *, index: int | None = None):
         return self.backend.commands.add_task(task, index=index)

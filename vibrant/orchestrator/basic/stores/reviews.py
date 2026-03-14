@@ -21,7 +21,7 @@ class ReviewTicketStore:
         *,
         task_id: str,
         attempt_id: str,
-        agent_id: str,
+        run_id: str,
         review_kind: str,
         conversation_id: str | None,
         ticket_id: str | None = None,
@@ -33,7 +33,7 @@ class ReviewTicketStore:
             ticket_id=ticket_id or f"review-{uuid4()}",
             task_id=task_id,
             attempt_id=attempt_id,
-            agent_id=agent_id,
+            run_id=run_id,
             review_kind=_normalize_review_kind(review_kind),
             conversation_id=_optional_string(conversation_id),
             summary=_optional_string(summary),
@@ -96,7 +96,7 @@ class ReviewTicketStore:
                     ticket_id=str(payload.get("ticket_id") or ticket_id),
                     task_id=str(payload["task_id"]),
                     attempt_id=str(payload["attempt_id"]),
-                    agent_id=str(payload["agent_id"]),
+                    run_id=str(payload.get("run_id") or payload["agent_id"]),
                     review_kind=_normalize_review_kind(payload.get("review_kind", "task_result")),
                     conversation_id=_optional_string(payload.get("conversation_id")),
                     status=ReviewTicketStatus(str(payload.get("status", ReviewTicketStatus.PENDING.value))),
@@ -127,6 +127,8 @@ def _normalize_review_kind(value: object) -> str:
         if normalized in {"task_result", "merge_failure"}:
             return normalized
     return "task_result"
+
+
 def _optional_string(value: object) -> str | None:
     if isinstance(value, str):
         normalized = value.strip()

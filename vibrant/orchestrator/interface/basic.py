@@ -114,5 +114,5 @@ class BasicQueryAdapter:
     def gatekeeper_busy(self) -> bool:
         return self.gatekeeper_loop.snapshot().busy
 
-    def runtime_handle(self, agent_id: str):
-        return self.runtime_service.snapshot_handle(agent_id)
+    def runtime_handle(self, run_id: str):
+        return self.runtime_service.snapshot_handle(run_id)
