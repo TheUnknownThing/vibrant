@@ -72,7 +72,7 @@ class RoadmapStore:
         }
         changed = False
         combined_patch = dict(patch or {})
-        combined_patch.update({key: value for key, value in kwargs.items() if value is not None})
+        combined_patch = {key: value for key, value in kwargs.items() if value is not None}
         for key, value in combined_patch.items():
             if key not in allowed_fields:
                 continue
