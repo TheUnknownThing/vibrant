@@ -15,7 +15,7 @@ from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.types import QuestionRecord
+from vibrant.orchestrator.types import QuestionRecord, QuestionStatus, RuntimeExecutionResult
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
@@ -98,7 +98,6 @@ class VibrantApp(App):
             return (
                 (planning_screen is not None or vibing_screen is not None)
                 and self._gatekeeper_is_busy()
-                and self._gatekeeper_interrupt_supported()
             )
         if action in {"show_task_status", "show_chat_history", "show_agent_logs"}:
             return vibing_screen is not None
@@ -426,7 +425,7 @@ class VibrantApp(App):
     def _roadmap_execution_mode(self) -> RoadmapExecutionMode:
         if self.orchestrator is None:
             return RoadmapExecutionMode.AUTOMATIC
-        mode = getattr(self.orchestrator, "execution_mode", RoadmapExecutionMode.AUTOMATIC)
+        mode = self.orchestrator.execution_mode
         if isinstance(mode, RoadmapExecutionMode):
             return mode
         return RoadmapExecutionMode(str(mode).strip().lower())
@@ -514,7 +513,7 @@ class VibrantApp(App):
             self.notify("Consensus edits require an initialized project.", severity="warning")
             return
 
-        if not getattr(event, "already_saved", False):
+        if not event.already_saved:
             try:
                 orchestrator.write_consensus_document(event.document)
             except Exception as exc:
@@ -540,7 +539,7 @@ class VibrantApp(App):
     def _on_runtime_event(self, event: CanonicalEvent) -> None:
         self.call_after_refresh(self._handle_runtime_event, dict(event))
 
-    def _handle_runtime_event(self, event: dict[str, Any]) -> None:
+    def _handle_runtime_event(self, event: CanonicalEvent) -> None:
         vibing_screen = self._vibing_screen()
         if vibing_screen is not None:
             with suppress(Exception):
@@ -742,9 +741,7 @@ class VibrantApp(App):
 
         snapshot = orchestrator.snapshot()
         if agent_output is not None:
-            agents = getattr(snapshot, "agent_records", None)
-            if agents is None:
-                agents = getattr(snapshot, "instances", ())
+            agents = snapshot.agent_records
             agent_output.sync_agents(agents)
             for event in self._pending_runtime_bootstrap_events:
                 agent_output.ingest_canonical_event(event)
@@ -753,10 +750,11 @@ class VibrantApp(App):
         roadmap = snapshot.roadmap
         roadmap_tasks = roadmap.tasks if roadmap is not None else []
         consensus_document = snapshot.consensus
-        consensus_path = getattr(snapshot, "consensus_path", None)
+        consensus_path = snapshot.consensus_path
 
         if vibing_screen is not None:
-            sync_task_views = getattr(vibing_screen, "sync_task_views", None)
+            # TODO: vibing_screen doesn't has `sync_task_views` method
+            sync_task_views  = getattr(vibing_screen, "sync_task_views", None)
             if callable(sync_task_views):
                 sync_task_views(
                     roadmap_tasks,
@@ -818,15 +816,8 @@ class VibrantApp(App):
         return []
 
     def _record_command_history_entry(self, text: str) -> None:
-        normalized = text.strip()
-        orchestrator = self.orchestrator_facade
-        if not normalized or orchestrator is None:
-            return
-
-        record_entry = getattr(orchestrator, "record_command_history_entry", None)
-        if callable(record_entry):
-            with suppress(Exception):
-                record_entry(normalized)
+        # TODO: Implement a persistent command history
+        pass
 
     def _handle_task_result(self, result: TaskResult | None) -> None:
         orchestrator = self.orchestrator_facade
@@ -859,7 +850,7 @@ class VibrantApp(App):
             self.notify(f"Task {task_label} escalated to the user.", severity="warning")
             self._set_status(f"Task {task_label} escalated to the user")
         elif result.outcome == "review_pending":
-            worktree_path = getattr(result, "worktree_path", None)
+            worktree_path = result.worktree_path
             if isinstance(worktree_path, str) and worktree_path.strip():
                 self.notify(f"Task {task_label} is awaiting review in {worktree_path}.")
             else:
@@ -871,7 +862,7 @@ class VibrantApp(App):
                 severity="warning",
             )
         elif result.outcome == "failed":
-            error = getattr(result, "error", None) or "Task failed."
+            error = result.error or "Task failed."
             self.notify(str(error), severity="error")
             self._set_status(f"Task {task_label} failed")
         else:
@@ -948,31 +939,13 @@ class VibrantApp(App):
         return list_pending
 
     def _notification_bell_enabled(self) -> bool:
-        facade = self.orchestrator_facade
-        if facade is None:
-            return False
-
-        bell_method = getattr(facade, "is_notification_bell_enabled", None)
-        if callable(bell_method):
-            try:
-                return bool(bell_method())
-            except Exception:
-                return False
-
-        try:
-            snapshot = facade.snapshot()
-        except Exception:
-            return False
-        return bool(getattr(snapshot, "notification_bell_enabled", False))
+        # TODO: Orchestrator have no related setting yet.
+        return False
 
     def _gatekeeper_is_busy(self) -> bool:
-        return bool(
-            self._gatekeeper_request_task is not None and not self._gatekeeper_request_task.done()
-        ) or bool(getattr(self.orchestrator, "gatekeeper_busy", False))
-
-    def _gatekeeper_interrupt_supported(self) -> bool:
-        orchestrator = self.orchestrator_facade
-        return callable(getattr(orchestrator, "interrupt_gatekeeper", None))
+        if self.orchestrator is None:
+            return False
+        return self.orchestrator.gatekeeper_busy
 
     def _refresh_gatekeeper_state(self, *, force_flash: bool = False) -> None:
         chat_panel = self._chat_panel()
@@ -981,7 +954,7 @@ class VibrantApp(App):
             return
 
         question_records = self._list_question_records()
-        questions = [record.text for record in question_records if getattr(record.status, "value", record.status) == "pending"]
+        questions = [record.text for record in question_records if record.status == QuestionStatus.PENDING]
         status = self.orchestrator_facade.get_workflow_status() if self.orchestrator_facade is not None else None
 
         normalized_status = _normalize_orchestrator_status(status)
@@ -1016,12 +989,8 @@ class VibrantApp(App):
         elif self._gatekeeper_is_busy():
             self._set_banner("Gatekeeper is responding…")
             input_bar.set_enabled(False)
-            if self._gatekeeper_interrupt_supported():
-                input_bar.set_context("gatekeeper", "running… · Esc to interrupt")
-                input_bar.set_placeholder("Gatekeeper is responding… Press Esc to interrupt.")
-            else:
-                input_bar.set_context("gatekeeper", "running…")
-                input_bar.set_placeholder("Gatekeeper is responding…")
+            input_bar.set_context("gatekeeper", "running… · Esc to interrupt")
+            input_bar.set_placeholder("Gatekeeper is responding… Press Esc to interrupt.")
         else:
             self._set_banner(None)
             if normalized_status is OrchestratorStatus.INIT:
@@ -1189,8 +1158,8 @@ def _error_text_from_event(event: dict[str, Any]) -> str:
     return str(error or "").strip()
 
 
-def _extract_planning_completion_request(result: object) -> str | None:
-    events = getattr(result, "events", None)
+def _extract_planning_completion_request(result: RuntimeExecutionResult) -> str | None:
+    events = result.events
     if isinstance(events, list):
         for event in events:
             if _event_requests_planning_completion(event):
