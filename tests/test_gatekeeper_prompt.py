@@ -30,5 +30,7 @@ def test_gatekeeper_prompt_uses_centralized_template(tmp_path):
     assert "## Current Roadmap" in prompt
     assert "## MCP Tools" in prompt
     assert all(tool_name in prompt for tool_name in MCP_TOOL_NAMES)
+    assert "Use these tools for durable roadmap, workflow, question, and review decisions." in prompt
+    assert "when the MCP bridge is available" not in prompt
     assert "api-design: Prefer additive API changes over rewrites." in prompt
     assert "Implementation is ready for review." in prompt

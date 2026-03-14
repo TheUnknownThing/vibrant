@@ -19,7 +19,7 @@ class TextPart(Static):
     """Plain text message part widget."""
 
     def __init__(self, text: str, **kwargs: object) -> None:
-        super().__init__("", markup=False, classes="conversation-part text-part", **kwargs)
+        super().__init__("", markup=False, classes="conversation-part text-part msg-content", **kwargs)
         self.styles.height = "auto"
         self.text = text
         self._refresh()
@@ -79,7 +79,7 @@ class ToolCallPart(Static):
     """Tool-call status part widget."""
 
     def __init__(self, tool_name: str, status: ToolCallStatus, **kwargs: object) -> None:
-        super().__init__("", markup=False, classes="conversation-part tool-call-part", **kwargs)
+        super().__init__("", markup=False, classes="conversation-part tool-call-part msg-tool", **kwargs)
         self.styles.height = "auto"
         self.tool_name = tool_name
         self.status = status
@@ -148,7 +148,7 @@ class MessageBlockWidget(Vertical):
         self._role: MessageRole = block.role
         self._timestamp = block.timestamp
         self._parts: list[MessagePart] = [part.clone() for part in block.parts]
-        self._role_header = Static("", markup=False, classes="conversation-role")
+        self._role_header = Static("", markup=False, classes="conversation-role msg-role")
         self._parts_region = Vertical(classes="conversation-parts")
         self._parts_region.styles.height = "auto"
 
@@ -157,6 +157,7 @@ class MessageBlockWidget(Vertical):
         yield self._parts_region
 
     def on_mount(self) -> None:
+        self._sync_role_classes()
         self._role_header.update(role_label(self._role))
         self._rebuild_parts()
 
@@ -164,8 +165,14 @@ class MessageBlockWidget(Vertical):
         self._timestamp = block.timestamp
         if self._role != block.role:
             self._role = block.role
+            self._sync_role_classes()
             self._role_header.update(role_label(self._role))
         self._sync_parts(block.parts)
+
+    def _sync_role_classes(self) -> None:
+        for role_class in ("user-msg", "assistant-msg", "system-msg"):
+            self.remove_class(role_class)
+        self.add_class(f"{self._role}-msg")
 
     def _sync_parts(self, updated_parts: list[MessagePart]) -> None:
         if len(self._parts) != len(updated_parts):

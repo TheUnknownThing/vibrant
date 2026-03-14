@@ -8,19 +8,7 @@ from rich.style import Style
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
-from vibrant.tui.screens import PlanningScreen, VibingScreen
 from vibrant.tui.widgets.input_bar import InputBar, _ChatInput
-
-
-class ScreenInputBarHarness(App[None]):
-    orchestrator_facade = None
-
-    def __init__(self, screen_type: type[PlanningScreen] | type[VibingScreen]) -> None:
-        super().__init__()
-        self._screen_type = screen_type
-
-    def compose(self) -> ComposeResult:
-        yield self._screen_type()
 
 
 class InputBarHarness(App[None]):
@@ -215,28 +203,6 @@ async def test_file_tokens_render_underlined_with_primary_background(tmp_path: P
         assert file_span.style.bgcolor is not None
         assert file_span.style.color.triplet == Color.parse(app.theme_variables["primary"]).triplet
         assert file_span.style.bgcolor.triplet == Color.parse(app.theme_variables["primary-background"]).triplet
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("screen_type", [PlanningScreen, VibingScreen], ids=["planning", "vibing"])
-async def test_autocomplete_dropdown_stays_within_input_panel(screen_type: type[PlanningScreen] | type[VibingScreen]) -> None:
-    app = ScreenInputBarHarness(screen_type)
-
-    async with app.run_test(size=(100, 24)) as pilot:
-        await pilot.pause()
-        bar = app.query_one(InputBar)
-        field = bar.query_one("#message-input", Input)
-        suggestions = bar.query_one("#input-suggestions", OptionList)
-        panel_bottom = bar.region.y + bar.region.height
-
-        bar.focus_input()
-        await pilot.press("/")
-        await pilot.pause()
-
-        assert suggestions.display is True
-        assert field.region.y >= bar.region.y
-        assert suggestions.region.y >= bar.region.y
-        assert suggestions.region.y + suggestions.region.height <= panel_bottom
 
 
 @pytest.mark.asyncio

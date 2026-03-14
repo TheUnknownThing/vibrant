@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
 
-from vibrant.models.agent import AgentRunRecord, AgentStatus
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.tui.widgets.agent_output import AgentOutput
 
 
@@ -16,41 +16,11 @@ class AgentOutputHarness(App[None]):
         yield AgentOutput()
 
 
-def _append_ndjson(path: Path, entry: dict) -> None:
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-
 @pytest.mark.asyncio
-async def test_agent_output_displays_streaming_reasoning_with_spinner(tmp_path: Path):
-    native_log = tmp_path / "native.ndjson"
-    _append_ndjson(
-        native_log,
-        {
-            "timestamp": "2026-03-11T10:00:00Z",
-            "event": "jsonrpc.notification.received",
-            "data": {
-                "method": "item/started",
-                "params": {"item": {"id": "reason-1", "type": "reasoning"}},
-            },
-        },
-    )
-    _append_ndjson(
-        native_log,
-        {
-            "timestamp": "2026-03-11T10:00:01Z",
-            "event": "jsonrpc.notification.received",
-            "data": {
-                "method": "item/reasoning/textDelta",
-                "params": {"itemId": "reason-1", "delta": "Thinking through the refactor"},
-            },
-        },
-    )
-
-    record = AgentRunRecord(
-        identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"},
+async def test_agent_output_displays_streaming_reasoning_with_spinner():
+    record = AgentRecord(
+        identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE},
         lifecycle={"status": AgentStatus.RUNNING, "started_at": datetime.now(timezone.utc)},
-        provider={"native_event_log": str(native_log)},
     )
 
     app = AgentOutputHarness()
@@ -58,29 +28,34 @@ async def test_agent_output_displays_streaming_reasoning_with_spinner(tmp_path: 
         await pilot.pause()
         widget = app.query_one(AgentOutput)
         widget.sync_agents([record])
+        widget.ingest_canonical_event(
+            {
+                "agent_id": "agent-task-001",
+                "task_id": "task-001",
+                "type": "reasoning.summary.delta",
+                "timestamp": "2026-03-11T10:00:01Z",
+                "item_id": "reason-1",
+                "delta": "Thinking through the refactor",
+            }
+        )
         await pilot.pause()
 
         assert widget.get_thoughts_text() == "Thinking through the refactor"
         assert widget.thoughts_running() is True
 
-        _append_ndjson(
-            native_log,
+        widget.ingest_canonical_event(
             {
+                "agent_id": "agent-task-001",
+                "task_id": "task-001",
                 "timestamp": "2026-03-11T10:00:02Z",
-                "event": "jsonrpc.notification.received",
-                "data": {
-                    "method": "item/completed",
-                    "params": {
-                        "item": {
-                            "id": "reason-1",
-                            "type": "reasoning",
-                            "summary": ["Refactor plan finalized"],
-                        }
-                    },
+                "type": "task.progress",
+                "item": {
+                    "id": "reason-1",
+                    "type": "reasoning",
+                    "summary": ["Refactor plan finalized"],
                 },
-            },
+            }
         )
-        widget.poll_native_logs_now()
         await pilot.pause()
 
         assert widget.get_thoughts_text() == "Refactor plan finalized"
@@ -167,3 +142,59 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         assert "✏ Modified src/app.py" in rendered
         assert "✗ boom" in rendered
         assert "✓ Task completed" in rendered
+
+
+@pytest.mark.asyncio
+async def test_agent_output_debug_view_renders_canonical_payloads():
+    record = AgentRecord(
+        identity={"agent_id": "agent-task-003", "task_id": "task-003", "type": AgentType.CODE},
+        lifecycle={"status": AgentStatus.RUNNING, "started_at": datetime.now(timezone.utc)},
+    )
+
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+        widget.sync_agents([record])
+        widget.ingest_canonical_event(
+            {
+                "agent_id": "agent-task-003",
+                "task_id": "task-003",
+                "type": "tool.call.started",
+                "timestamp": "2026-03-11T12:00:00Z",
+                "tool_name": "vibrant.ask_question",
+                "arguments": {"prompt": "Need clarification"},
+            }
+        )
+        await pilot.pause()
+
+        debug_text = widget.get_rendered_text(debug=True)
+
+        assert "tool.call.started" in debug_text
+        assert "vibrant.ask_question" in debug_text
+
+
+@pytest.mark.asyncio
+async def test_agent_output_syncs_runtime_snapshot_like_agents():
+    older_start = datetime(2026, 3, 11, 9, 0, tzinfo=timezone.utc)
+    newer_start = datetime(2026, 3, 11, 9, 5, tzinfo=timezone.utc)
+    completed = SimpleNamespace(
+        identity=SimpleNamespace(agent_id="agent-task-010", task_id="task-010"),
+        runtime=SimpleNamespace(status=AgentStatus.COMPLETED.value, started_at=older_start),
+        provider=SimpleNamespace(thread_id="thread-010"),
+    )
+    running = SimpleNamespace(
+        identity=SimpleNamespace(agent_id="agent-task-011", task_id="task-011"),
+        runtime=SimpleNamespace(status=AgentStatus.RUNNING.value, started_at=newer_start),
+        provider=SimpleNamespace(thread_id="thread-011"),
+    )
+
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+        widget.sync_agents([completed, running])
+        await pilot.pause()
+
+        assert widget.active_agent_id == "agent-task-011"
+        assert widget.get_rendered_text() == "Operational activity will appear here…"

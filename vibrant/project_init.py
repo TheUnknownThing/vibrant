@@ -14,15 +14,12 @@ from .models.state import OrchestratorState, OrchestratorStatus
 GITIGNORE_ENTRIES = [
     "logs/",
     "conversations/",
-    "agent-runs/*.json",
-    "agent-instances/*.json",
+    "agents/*.json",
     "state.json",
 ]
 
 DIRECTORIES = [
     Path("skills"),
-    Path("agent-instances"),
-    Path("agent-runs"),
     Path("agents"),
     Path("conversations"),
     Path("prompts"),
@@ -98,7 +95,6 @@ def _render_default_config() -> str:
         "[provider]",
         f'kind = "{config.provider_kind.value}"',
         f'codex-binary = "{config.codex_binary}"',
-        f'mock-responses = {"true" if config.mock_responses else "false"}',
         "launch-args = []",
         f'model = "{config.model}"',
         f'approval-policy = "{config.approval_policy}"',

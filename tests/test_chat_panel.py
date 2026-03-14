@@ -1,143 +1,269 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from types import SimpleNamespace
+import pytest
+from textual.app import App, ComposeResult
 
-from vibrant.orchestrator.types import AgentOutput, AgentOutputSegment, AgentThinkingState
-from vibrant.tui.utility.gatekeeper import GatekeeperSnapshot
-from vibrant.tui.widgets.chat_panel import _assistant_messages, _block_from_run, _overlay_output
-from vibrant.tui.widgets.conversation_renderer import MessageBlock, ReasoningPart, TextPart, ToolCallPart
 from vibrant.orchestrator.types import (
-    AgentRunSnapshot,
-    AgentSnapshotIdentity,
-    AgentRunContextSnapshot,
-    AgentRunOutcomeSnapshot,
-    AgentRunRetrySnapshot,
-    RunEnvelope,
-    RunLifecycleSnapshot,
-    RunProviderSnapshot,
-    RunRuntimeSnapshot,
-    RunWorkspaceSnapshot,
+    AgentConversationEntry,
+    AgentConversationView,
+    AgentStreamEvent,
+    QuestionPriority,
+    QuestionRecord,
+    QuestionStatus,
 )
+from vibrant.tui.widgets.chat_panel import ChatPanel
+from vibrant.tui.widgets.conversation_renderer import ConversationRegion, MessageBlockWidget, ReasoningPart, ToolCallPart
+from vibrant.tui.widgets.conversation_view import ConversationView
 
 
-def test_overlay_output_uses_committed_segments_after_completion() -> None:
-    block = MessageBlock(
-        message_id="run-1",
-        role="assistant",
-        parts=[
-            ReasoningPart(status="completed", content=TextPart("Reasoned through the options.")),
-            ToolCallPart(tool_name="functions.exec_command", status="success"),
-            TextPart("Persisted final answer."),
+class ChatPanelHarness(App[None]):
+    def compose(self) -> ComposeResult:
+        yield ChatPanel()
+
+
+def test_conversation_view_applies_streamed_gatekeeper_messages():
+    view = ConversationView()
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-1",
+            source_event_id=None,
+            sequence=1,
+            agent_id=None,
+            task_id=None,
+            turn_id=None,
+            item_id=None,
+            type="conversation.user.message",
+            text="Plan the refactor",
+            payload={"role": "user"},
+            created_at="2026-03-13T00:00:00Z",
+        )
+    )
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-2",
+            source_event_id=None,
+            sequence=2,
+            agent_id="gatekeeper-agent",
+            task_id=None,
+            turn_id="turn-1",
+            item_id=None,
+            type="conversation.assistant.message.delta",
+            text="Working through the redesign.",
+            payload=None,
+            created_at="2026-03-13T00:00:01Z",
+        )
+    )
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-3",
+            source_event_id=None,
+            sequence=3,
+            agent_id="gatekeeper-agent",
+            task_id=None,
+            turn_id="turn-1",
+            item_id=None,
+            type="conversation.assistant.message.completed",
+            text="Working through the redesign.",
+            payload=None,
+            created_at="2026-03-13T00:00:02Z",
+        )
+    )
+
+    assert view.current_conversation_id == "gatekeeper-1"
+    assert view.entry_count == 2
+    assert view._conversation is not None
+    assert [entry.role for entry in view._conversation.entries] == ["user", "assistant"]
+    assert view._conversation.entries[1].text == "Working through the redesign."
+    assert view._conversation.entries[1].finished_at == "2026-03-13T00:00:02Z"
+
+
+def test_conversation_view_records_request_events_as_status_entries():
+    view = ConversationView()
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-1",
+            source_event_id=None,
+            sequence=1,
+            agent_id="gatekeeper-agent",
+            task_id=None,
+            turn_id="turn-1",
+            item_id=None,
+            type="conversation.request.opened",
+            text=None,
+            payload=None,
+            created_at="2026-03-13T00:00:03Z",
+        )
+    )
+
+    assert view.current_conversation_id == "gatekeeper-1"
+    assert view.entry_count == 1
+    assert view._conversation is not None
+    assert view._conversation.entries[0].role == "system"
+    assert view._conversation.entries[0].kind == "status"
+    assert view._conversation.entries[0].text == "User input requested"
+
+
+def test_chat_panel_uses_question_records_for_summary():
+    panel = ChatPanel()
+    panel.set_gatekeeper_state(
+        status="planning",
+        question_records=[
+            QuestionRecord(
+                question_id="q-1",
+                text="What should happen after login?",
+                priority=QuestionPriority.BLOCKING,
+                source_role="gatekeeper",
+                source_agent_id="gatekeeper-agent",
+                source_conversation_id="gatekeeper-1",
+                source_turn_id="turn-1",
+                blocking_scope="planning",
+                status=QuestionStatus.RESOLVED,
+                answer="Take the user to the dashboard.",
+            ),
+            QuestionRecord(
+                question_id="q-2",
+                text="Should the roadmap include mobile support?",
+                priority=QuestionPriority.BLOCKING,
+                source_role="gatekeeper",
+                source_agent_id="gatekeeper-agent",
+                source_conversation_id="gatekeeper-1",
+                source_turn_id="turn-2",
+                blocking_scope="planning",
+                status=QuestionStatus.PENDING,
+            ),
         ],
-        timestamp=datetime.now(timezone.utc),
-    )
-    output = AgentOutput(
-        agent_id="gatekeeper-project",
-        task_id="gatekeeper-user_conversation",
-        status="completed",
-        partial_text="",
-        segments=[AgentOutputSegment(kind="response", text="Persisted final answer.")],
-        thinking=AgentThinkingState(text="Reasoned through the options.", status="completed"),
+        flash=False,
     )
 
-    enriched = _overlay_output(block, output=output, message_id="run-1")
+    summary = panel.get_question_summary_text()
 
-    assert enriched is not None
-    rendered_text_parts = [part.text for part in enriched.parts if isinstance(part, TextPart)]
-    assert rendered_text_parts == ["Persisted final answer."]
-
-
-def test_block_from_run_keeps_precise_lifecycle_timestamp_over_coarse_event_timestamp() -> None:
-    started_at = datetime(2026, 3, 13, 12, 0, 0, 800000, tzinfo=timezone.utc)
-    run = AgentRunSnapshot(
-        run_id="run-1",
-        agent_id="gatekeeper-project",
-        task_id="gatekeeper-user_conversation",
-        role="gatekeeper",
-        lifecycle=RunLifecycleSnapshot(status="completed", started_at=started_at, finished_at=started_at),
-        runtime=RunRuntimeSnapshot(state="completed", active=False, done=True, awaiting_input=False),
-        workspace=RunWorkspaceSnapshot(),
-        provider=RunProviderSnapshot(),
-        envelope=RunEnvelope(state="completed"),
-        payload=None,
-        identity=AgentSnapshotIdentity(agent_id="gatekeeper-project", task_id="gatekeeper-user_conversation", role="gatekeeper"),
-        context=AgentRunContextSnapshot(),
-        outcome=AgentRunOutcomeSnapshot(summary="Final reply."),
-        retry=AgentRunRetrySnapshot(),
-        state="completed",
-        summary="Final reply.",
-        error=None,
-    )
-    events = [
-        {
-            "type": "content.delta",
-            "timestamp": "2026-03-13T12:00:00Z",
-            "delta": "Final reply.",
-        }
-    ]
-
-    block = _block_from_run(run, events)
-
-    assert block is not None
-    assert block.timestamp == started_at
+    assert "What should happen after login?" in summary
+    assert "Take the user to the dashboard." in summary
+    assert "Should the roadmap include mobile support?" in summary
+    assert "awaiting your answer" in summary
 
 
-def test_assistant_messages_reuses_existing_stream_block_for_delta_events() -> None:
-    run = AgentRunSnapshot(
-        run_id="run-live",
-        agent_id="gatekeeper-project",
-        task_id="gatekeeper-user_conversation",
-        role="gatekeeper",
-        lifecycle=RunLifecycleSnapshot(status="running"),
-        runtime=RunRuntimeSnapshot(state="running", active=True, done=False, awaiting_input=False),
-        workspace=RunWorkspaceSnapshot(),
-        provider=RunProviderSnapshot(),
-        envelope=RunEnvelope(state="running"),
-        payload=None,
-        identity=AgentSnapshotIdentity(agent_id="gatekeeper-project", task_id="gatekeeper-user_conversation", role="gatekeeper"),
-        context=AgentRunContextSnapshot(),
-        outcome=AgentRunOutcomeSnapshot(summary=None),
-        retry=AgentRunRetrySnapshot(),
-        state="running",
-        summary=None,
-        error=None,
-    )
-    snapshot = GatekeeperSnapshot(
-        workflow_status=None,
-        questions=(),
-        pending_questions=(),
-        instance=SimpleNamespace(active_run_id="run-live", latest_run_id="run-live"),
-        runs=(run,),
-        output=AgentOutput(
-            agent_id="gatekeeper-project",
-            task_id="gatekeeper-user_conversation",
-            status="running",
-            partial_text="Streaming right now",
-        ),
-        provider_thread_id=None,
-    )
-    existing_block = MessageBlock(
-        message_id="run-live",
-        role="assistant",
-        parts=[
-            ToolCallPart(tool_name="functions.exec_command", status="executing"),
-            TextPart("Old text"),
+def test_chat_panel_summary_shows_recent_withdrawn_questions() -> None:
+    panel = ChatPanel()
+    panel.set_gatekeeper_state(
+        status="executing",
+        question_records=[
+            QuestionRecord(
+                question_id="q-1",
+                text="Legacy question",
+                priority=QuestionPriority.BLOCKING,
+                source_role="gatekeeper",
+                source_agent_id="gatekeeper-agent",
+                source_conversation_id="gatekeeper-1",
+                source_turn_id="turn-1",
+                blocking_scope="planning",
+                status=QuestionStatus.RESOLVED,
+                answer="Ignore it.",
+            ),
+            QuestionRecord(
+                question_id="q-2",
+                text="Keep desktop only?",
+                priority=QuestionPriority.BLOCKING,
+                source_role="gatekeeper",
+                source_agent_id="gatekeeper-agent",
+                source_conversation_id="gatekeeper-1",
+                source_turn_id="turn-2",
+                blocking_scope="workflow",
+                status=QuestionStatus.RESOLVED,
+                answer="No, include mobile.",
+            ),
+            QuestionRecord(
+                question_id="q-3",
+                text="Do we need offline mode?",
+                priority=QuestionPriority.NORMAL,
+                source_role="gatekeeper",
+                source_agent_id="gatekeeper-agent",
+                source_conversation_id="gatekeeper-1",
+                source_turn_id="turn-3",
+                blocking_scope="workflow",
+                status=QuestionStatus.PENDING,
+            ),
+            QuestionRecord(
+                question_id="q-4",
+                text="Should we add import/export in v1?",
+                priority=QuestionPriority.NORMAL,
+                source_role="gatekeeper",
+                source_agent_id="gatekeeper-agent",
+                source_conversation_id="gatekeeper-1",
+                source_turn_id="turn-4",
+                blocking_scope="workflow",
+                status=QuestionStatus.WITHDRAWN,
+            ),
         ],
-    )
-    facade = SimpleNamespace(
-        runs=SimpleNamespace(events=lambda _run_id: (_ for _ in ()).throw(AssertionError("streamed run log should not be reread"))),
+        flash=False,
     )
 
-    messages = _assistant_messages(
-        snapshot,
-        facade,
-        existing_messages=[existing_block],
-        stream_run_id="run-live",
+    summary = panel.get_question_summary_text()
+
+    assert "Legacy question" not in summary
+    assert "Keep desktop only?" in summary
+    assert "Do we need offline mode?" in summary
+    assert "Should we add import/export in v1?" in summary
+    assert "Status: no longer needed" in summary
+
+
+@pytest.mark.asyncio
+async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
+    conversation = AgentConversationView(
+        conversation_id="gatekeeper-1",
+        agent_ids=["gatekeeper-agent"],
+        task_ids=[],
+        active_turn_id="turn-1",
+        entries=[
+            AgentConversationEntry(
+                role="user",
+                kind="message",
+                turn_id="turn-1",
+                text="Plan the refactor",
+                payload={"role": "user"},
+                started_at="2026-03-13T00:00:00Z",
+                finished_at="2026-03-13T00:00:00Z",
+            ),
+            AgentConversationEntry(
+                role="assistant",
+                kind="thinking",
+                turn_id="turn-1",
+                text="Comparing both branches before I merge.",
+                payload=None,
+                started_at="2026-03-13T00:00:01Z",
+                finished_at=None,
+            ),
+            AgentConversationEntry(
+                role="tool",
+                kind="tool_call",
+                turn_id="turn-1",
+                text="git diff",
+                payload={"tool_name": "git diff", "result": "diff --git a/file.py b/file.py"},
+                started_at="2026-03-13T00:00:02Z",
+                finished_at="2026-03-13T00:00:03Z",
+            ),
+        ],
+        updated_at="2026-03-13T00:00:03Z",
     )
 
-    assert len(messages) == 1
-    assert messages[0].message_id == "run-live"
-    assert any(isinstance(part, ToolCallPart) for part in messages[0].parts)
-    text_parts = [part.text for part in messages[0].parts if isinstance(part, TextPart)]
-    assert text_parts == ["Streaming right now"]
+    app = ChatPanelHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel = app.query_one(ChatPanel)
+
+        panel.bind_conversation(conversation)
+        await pilot.pause()
+
+        region = panel.query_one(ConversationRegion)
+        blocks = list(region.query(MessageBlockWidget))
+
+        assert len(blocks) == 3
+        assert blocks[0].has_class("user-msg") is True
+        assert blocks[1].has_class("assistant-msg") is True
+        assert blocks[2].has_class("system-msg") is True
+        assert blocks[1].query_one(ReasoningPart).plain_text().startswith("Reasoning...")
+        assert blocks[2].query_one(ToolCallPart).plain_text() == "Tool · git diff · done"

@@ -17,19 +17,14 @@ class ConsensusStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
-DEFAULT_CONSENSUS_CONTEXT = """\
-## Objectives
-
-TODO: Fill in the objectives of this consensus document.
-
+DEFAULT_CONSENSUS_CONTEXT = """## Objectives
+<!-- OBJECTIVES:START -->
+<!-- OBJECTIVES:END -->
 ## Design Choices
-
-TODO: Fill in the design choices and rationale for this consensus document.
-
+<!-- DECISIONS:START -->
+<!-- DECISIONS:END -->
 ## Getting Started
-
-Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`.
-"""
+Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."""
 
 
 class ConsensusDocument(BaseModel):

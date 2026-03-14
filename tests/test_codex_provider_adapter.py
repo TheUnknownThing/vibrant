@@ -9,11 +9,21 @@ from typing import Any
 
 import pytest
 
-from vibrant.models.agent import AgentRunRecord
+from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.wire import JsonRpcNotification
 from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
 from vibrant.providers.codex.client import CodexClientError
+from vibrant.providers.invocation import ProviderInvocationPlan
+
+
+def _make_agent_record(
+    *,
+    agent_id: str,
+    task_id: str,
+    agent_type: AgentType = AgentType.CODE,
+) -> AgentRecord:
+    return AgentRecord(identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type})
 
 
 class FakeCodexClient:
@@ -47,6 +57,54 @@ class FakeCodexClient:
 
 class TestCodexProviderAdapter:
     @pytest.mark.asyncio
+    async def test_start_session_passes_composed_launch_config_to_client(self):
+        captured: dict[str, Any] = {}
+
+        class CapturingClient(FakeCodexClient):
+            def __init__(self, **kwargs: Any) -> None:
+                super().__init__()
+                captured.update(kwargs)
+                self.responses["initialize"] = {"serverInfo": {"name": "codex"}}
+
+        adapter = CodexProviderAdapter(
+            cwd="/tmp/project",
+            launch_args=["--verbose"],
+            invocation_plan=ProviderInvocationPlan(
+                launch_args=["--config", "mcp_servers.local.command='uvx fastmcp'"],
+                launch_env={"CODEX_TRACE": "1"},
+            ),
+            client_factory=CapturingClient,
+        )
+
+        await adapter.start_session(cwd="/tmp/project")
+
+        assert captured["launch_args"] == [
+            "--verbose",
+            "--config",
+            "mcp_servers.local.command='uvx fastmcp'",
+        ]
+        assert captured["launch_env"] == {"CODEX_TRACE": "1"}
+
+    @pytest.mark.asyncio
+    async def test_start_thread_applies_invocation_thread_overrides(self):
+        client = FakeCodexClient()
+        client.responses["thread/start"] = {"thread": {"id": "thread_abc123"}}
+        adapter = CodexProviderAdapter(
+            client=client,
+            invocation_plan=ProviderInvocationPlan(session_options={"thread": {"foo": "bar"}}),
+        )
+
+        await adapter.start_thread(
+            model="gpt-5.3-codex",
+            cwd="/tmp/project",
+            runtime_mode=RuntimeMode.WORKSPACE_WRITE,
+            approval_policy="never",
+        )
+
+        assert client.calls[0][0] == "thread/start"
+        assert client.calls[0][1]["foo"] == "bar"
+
+    @pytest.mark.asyncio
     async def test_start_session_handshake_and_start_thread(self):
         client = FakeCodexClient()
         client.responses["initialize"] = {"serverInfo": {"name": "codex"}}
@@ -57,7 +115,7 @@ class TestCodexProviderAdapter:
                 "rolloutPath": ".codex/threads/thread_abc123/rollout.jsonl",
             }
         }
-        agent = AgentRunRecord(identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"})
+        agent = _make_agent_record(agent_id="agent-task-001", task_id="task-001")
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=client, agent_record=agent, on_canonical_event=events.append)
 
@@ -392,7 +450,7 @@ async def test_codex_app_server_handshake_integration(tmp_path: Path):
     if not codex_binary:
         pytest.skip("codex CLI is not available")
 
-    agent = AgentRunRecord(identity={"agent_id": "agent-task-real", "task_id": "task-real", "role": "code"})
+    agent = _make_agent_record(agent_id="agent-task-real", task_id="task-real")
     events: list[dict[str, Any]] = []
     adapter = CodexProviderAdapter(
         cwd=str(tmp_path),

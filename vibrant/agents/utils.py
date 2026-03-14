@@ -12,7 +12,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from vibrant.models.agent import AgentRunRecord, AgentStatus
+from vibrant.models.agent import AgentRecord, AgentStatus
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 
 
@@ -86,7 +86,7 @@ async def maybe_forward_event(
 
 
 def transition_terminal_agent(
-    agent_record: AgentRunRecord,
+    agent_record: AgentRecord,
     status: AgentStatus,
     *,
     exit_code: int,

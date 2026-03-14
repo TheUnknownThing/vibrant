@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
-from ...models.agent import AgentRunRecord, ProviderResumeHandle
+from ...models.agent import AgentRecord, ProviderResumeHandle
 from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
+from ..invocation import ProviderInvocationPlan
 from .client import CodexClient
 
 DEFAULT_CLIENT_INFO = {"name": "vibrant", "title": "Vibrant", "version": "0.1.0"}
@@ -30,8 +31,9 @@ class CodexProviderAdapter(ProviderAdapter):
         codex_binary: str = "codex",
         launch_args: Sequence[str] | None = None,
         codex_home: str | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
         resume_thread_id: str | None = None,
-        agent_record: AgentRunRecord | None = None,
+        agent_record: AgentRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
         on_raw_notification: NotificationHandler | None = None,
         on_stderr_line: StderrHandler | None = None,
@@ -45,10 +47,10 @@ class CodexProviderAdapter(ProviderAdapter):
         self._client_factory = client_factory or CodexClient
         self._cwd = cwd
         self._codex_binary = codex_binary
-        self._launch_args = list(launch_args) if launch_args is not None else None
+        self._launch_args = list(launch_args or [])
         self._codex_home = codex_home
+        self._invocation_plan = invocation_plan
         self.agent_record = agent_record
-        self._initial_resume_thread_id = resume_thread_id
         self.provider_thread_id: str | None = None
         self.thread_metadata: dict[str, Any] = {}
         self.current_turn_id: str | None = None
@@ -89,8 +91,12 @@ class CodexProviderAdapter(ProviderAdapter):
                 "on_stderr": self._handle_stderr,
                 "on_raw_event": self._handle_native_event,
             }
-            if self._launch_args is not None:
-                kwargs["launch_args"] = self._launch_args
+            launch_args = self._effective_launch_args()
+            if launch_args:
+                kwargs["launch_args"] = launch_args
+            launch_env = self._effective_launch_env()
+            if launch_env:
+                kwargs["launch_env"] = launch_env
             if self._codex_home is not None:
                 kwargs["codex_home"] = self._codex_home
             self.client = self._client_factory(**kwargs)
@@ -106,10 +112,10 @@ class CodexProviderAdapter(ProviderAdapter):
 
         base_cwd = Path(cwd or self._cwd or Path.cwd()).expanduser().resolve()
         native_path = self.agent_record.provider.native_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.run_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.agent_id}.ndjson"
         )
         canonical_path = self.agent_record.provider.canonical_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.run_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.agent_id}.ndjson"
         )
 
         self.agent_record.provider.native_event_log = native_path
@@ -135,6 +141,7 @@ class CodexProviderAdapter(ProviderAdapter):
             "capabilities": capabilities,
             **kwargs,
         }
+        initialize_params.update(self._invocation_scope_options("initialize"))
         result = await client.send_request("initialize", initialize_params)
         client.send_notification("initialized")
         self._session_started = True
@@ -221,6 +228,7 @@ class CodexProviderAdapter(ProviderAdapter):
             payload["effort"] = effort
         if summary is not None:
             payload["summary"] = summary
+        payload.update(self._invocation_scope_options("turn"))
         if self.provider_thread_id and "threadId" not in payload:
             payload["threadId"] = self.provider_thread_id
         return await client.send_request("turn/start", payload)
@@ -308,6 +316,11 @@ class CodexProviderAdapter(ProviderAdapter):
         if limit is not None:
             params["limit"] = int(limit)
         return await self.send_request("mcpServerStatus/list", params or None)
+
+    async def start_mcp_oauth_login(self, *, name: str) -> Any:
+        """Start an MCP OAuth login via ``mcpServer/oauth/login``."""
+
+        return await self.send_request("mcpServer/oauth/login", {"name": name})
 
     async def detect_external_agent_config(
         self,
@@ -522,7 +535,7 @@ class CodexProviderAdapter(ProviderAdapter):
     def _build_thread_payload(
         self,
         kwargs: dict[str, Any],
-    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRunRecord | None]:
+    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRecord | None]:
         data = dict(kwargs)
         runtime_mode = RuntimeMode(data.pop("runtime_mode", RuntimeMode.WORKSPACE_WRITE))
         approval_policy = data.pop("approval_policy", "never")
@@ -546,7 +559,27 @@ class CodexProviderAdapter(ProviderAdapter):
         if persist_extended_history is not None:
             payload["persistExtendedHistory"] = persist_extended_history
         payload.update(extra_config)
+        payload.update(self._invocation_scope_options("thread"))
         return payload, runtime_mode, approval_policy, agent_record
+
+    def _effective_launch_args(self) -> list[str]:
+        launch_args = list(self._launch_args)
+        if self._invocation_plan is not None:
+            launch_args.extend(self._invocation_plan.launch_args)
+        return launch_args
+
+    def _effective_launch_env(self) -> dict[str, str]:
+        if self._invocation_plan is None:
+            return {}
+        return dict(self._invocation_plan.launch_env)
+
+    def _invocation_scope_options(self, scope: str) -> dict[str, Any]:
+        if self._invocation_plan is None:
+            return {}
+        scoped = self._invocation_plan.session_options.get(scope)
+        if not isinstance(scoped, Mapping):
+            return {}
+        return dict(scoped)
 
     def _persist_thread_metadata(
         self,
@@ -554,7 +587,7 @@ class CodexProviderAdapter(ProviderAdapter):
         *,
         runtime_mode: RuntimeMode | None = None,
         approval_policy: str | None = None,
-        agent_record: AgentRunRecord | None = None,
+        agent_record: AgentRecord | None = None,
         fallback_thread_id: str | None = None,
     ) -> None:
         thread_payload = self._extract_thread_payload(result)
@@ -806,7 +839,6 @@ class CodexProviderAdapter(ProviderAdapter):
         }
         if self.agent_record is not None:
             event["agent_id"] = self.agent_record.identity.agent_id
-            event["run_id"] = self.agent_record.identity.run_id
             event["task_id"] = self.agent_record.identity.task_id
         if self.provider_thread_id is not None:
             event["provider_thread_id"] = self.provider_thread_id

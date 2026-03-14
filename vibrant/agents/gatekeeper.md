@@ -242,11 +242,14 @@ Good examples:
 
 - end_planning_phase
 - request_user_decision
-- set_pending_questions
-- review_task_outcome
-- mark_task_for_retry
+- withdraw_question
 - update_consensus
-- update_roadmap
+- add_task
+- update_task_definition
+- reorder_tasks
+- accept_review_ticket
+- retry_review_ticket
+- escalate_review_ticket
 
 Bad examples:
 
@@ -291,7 +294,7 @@ Introduce a Gatekeeper agent implementation as an AgentBase subclass.
 
 It should:
 
-- return the `gatekeeper` role
+- return AgentType.GATEKEEPER
 - use read-only runtime modes
 - disable automatic rejection of provider requests
 - expose Gatekeeper-specific prompt construction

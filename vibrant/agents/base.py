@@ -18,10 +18,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from vibrant.config import VibrantConfig
-from vibrant.models.agent import AgentRunRecord, AgentStatus
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.providers.invocation import ProviderInvocationPlan
 
-from .role_results import RoleResultPayload, build_generic_role_result
 from .utils import (
     extract_error_message,
     extract_exit_code,
@@ -47,7 +47,7 @@ class AgentRunResult:
 
     transcript: str = ""
     events: list[CanonicalEvent] = field(default_factory=list)
-    agent_record: AgentRunRecord | None = None
+    agent_record: AgentRecord | None = None
     turn_result: Any | None = None
     exit_code: int | None = None
     pid: int | None = None
@@ -69,7 +69,7 @@ class AgentBase(ABC):
         *,
         adapter_factory: Any,
         on_canonical_event: Callable[[CanonicalEvent], Any] | None = None,
-        on_agent_record_updated: Callable[[AgentRunRecord], Any] | None = None,
+        on_agent_record_updated: Callable[[AgentRecord], Any] | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
         self.project_root = Path(project_root)
@@ -85,8 +85,8 @@ class AgentBase(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def get_agent_role(self) -> str:
-        """Return the agent role for this implementation."""
+    def get_agent_type(self) -> AgentType:
+        """Return the agent type for this implementation."""
 
     # ------------------------------------------------------------------
     # Overridable hooks (sensible defaults)
@@ -124,11 +124,10 @@ class AgentBase(ABC):
     def enrich_event(
         self,
         event: dict[str, Any],
-        agent_record: AgentRunRecord,
+        agent_record: AgentRecord,
     ) -> dict[str, Any]:
         """Add agent-specific metadata to a canonical event before forwarding."""
         event.setdefault("agent_id", agent_record.identity.agent_id)
-        event.setdefault("run_id", agent_record.identity.run_id)
         event.setdefault("task_id", agent_record.identity.task_id)
         return event
 
@@ -142,29 +141,11 @@ class AgentBase(ABC):
             return transcript
         return extract_summary_from_turn_result(turn_result)
 
-    def on_run_started(self, agent_record: AgentRunRecord) -> None:
+    def on_run_started(self, agent_record: AgentRecord) -> None:
         """Hook called when the adapter session starts. No-op by default."""
 
     def on_run_completed(self, result: AgentRunResult) -> None:
         """Hook called after the run finishes (success or failure). No-op by default."""
-
-    def build_role_result(
-        self,
-        *,
-        result: AgentRunResult,
-        agent_record: AgentRunRecord,
-        input_requests: list[object],
-    ) -> RoleResultPayload | None:
-        """Build the role-owned semantic payload for one run."""
-
-        return build_generic_role_result(
-            role=agent_record.identity.role,
-            transcript=result.transcript,
-            summary=agent_record.outcome.summary,
-            error=result.error,
-            exit_code=result.exit_code,
-            awaiting_input=agent_record.lifecycle.status is AgentStatus.AWAITING_INPUT,
-        )
 
     # ------------------------------------------------------------------
     # Core run method
@@ -174,9 +155,10 @@ class AgentBase(ABC):
         self,
         *,
         prompt: str,
-        agent_record: AgentRunRecord,
+        agent_record: AgentRecord,
         cwd: str | Path | None = None,
         resume_thread_id: str | None = None,
+        invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentRunResult:
         """Execute a full adapter lifecycle and return the result.
 
@@ -252,6 +234,7 @@ class AgentBase(ABC):
             adapter = self.adapter_factory(
                 cwd=working_dir,
                 codex_binary=self.config.codex_binary,
+                launch_args=self.config.launch_args,
                 codex_home=self.config.codex_home,
                 resume_thread_id=resume_thread_id,
                 claude_cli_path=self.config.claude_cli_path,
@@ -264,6 +247,7 @@ class AgentBase(ABC):
                 claude_model=self.config.model,
                 claude_effort=self.config.reasoning_effort,
                 claude_extra_config=self.config.extra_config,
+                invocation_plan=invocation_plan,
                 agent_record=agent_record,
                 on_canonical_event=handle_event,
             )
@@ -339,7 +323,7 @@ class AgentBase(ABC):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _notify_record_updated(self, agent_record: AgentRunRecord) -> None:
+    def _notify_record_updated(self, agent_record: AgentRecord) -> None:
         if self.on_agent_record_updated is not None:
             self.on_agent_record_updated(agent_record)
 

@@ -1,20 +1,21 @@
-"""Consensus editor/viewer widget for the redesigned TUI."""
+"""Consensus editor/viewer widget for orchestrator-owned consensus state."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Sequence
 from datetime import timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Sequence
 
 from textual.app import ComposeResult
 from textual.containers import Center, Horizontal, Vertical
 from textual.message import Message
 from textual.widgets import Button, Markdown, Static, TextArea
 
-from vibrant.orchestrator.facade import OrchestratorFacade
-
 from ...models.consensus import DEFAULT_CONSENSUS_CONTEXT, ConsensusDocument, ConsensusStatus
 from ...models.task import TaskInfo
+
+if TYPE_CHECKING:
+    from ...orchestrator.facade import OrchestratorFacade
 
 
 class ConsensusView(Static):
@@ -132,7 +133,7 @@ class ConsensusView(Static):
             with Vertical(id="consensus-empty-copy"):
                 yield Static("", id="consensus-empty-message")
                 with Center():
-                    yield Button("➕ Create File", id="consensus-empty-action", compact=True, flat=True)
+                    yield Button("+ Create File", id="consensus-empty-action", compact=True, flat=True)
 
         with Vertical(id="consensus-content"):
             with Horizontal(id="consensus-header"):
@@ -202,7 +203,7 @@ class ConsensusView(Static):
         self._tasks = tuple(tasks)
         if source_path is not None:
             self._source_path = Path(source_path)
-        elif self._source_path is None:
+        elif self._source_path is None and self._orchestrator_facade is not None:
             self._source_path = self._orchestrator_facade.get_consensus_source_path()
 
         if not self._is_editing:
@@ -279,6 +280,7 @@ class ConsensusView(Static):
 
         self._document = self._get_consensus()
         self._reload_preview_from_disk()
+        self._refresh_view()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         if event.text_area.id != "consensus-editor":
@@ -288,6 +290,9 @@ class ConsensusView(Static):
         self._refresh_view()
 
     def _refresh_view(self) -> None:
+        if not self.is_mounted:
+            return
+
         empty_state = self.query_one("#consensus-empty-state", Vertical)
         content = self.query_one("#consensus-content", Vertical)
         preview = self.query_one("#consensus-preview", Markdown)
@@ -303,7 +308,7 @@ class ConsensusView(Static):
         empty_state.display = not has_document
         content.display = has_document
 
-        create_message.update("Consensus.md does not exist.")
+        create_message.update("consensus.md does not exist.")
         title.update(self._source_label())
 
         toggle.label = "Preview" if self._is_editing else "Edit"
@@ -352,9 +357,13 @@ class ConsensusView(Static):
 
     def _reload_preview_from_disk(self, *, fallback: str | None = None) -> None:
         self._document = self._get_consensus() or self._document
+        if not self.is_mounted:
+            return
         self._refresh_preview(self._load_markdown_from_disk(fallback=fallback))
 
     def _refresh_preview(self, markdown_text: str) -> None:
+        if not self.is_mounted:
+            return
         preview = self.query_one("#consensus-preview", Markdown)
         preview.update(markdown_text or "_Consensus is empty._")
 
@@ -386,15 +395,22 @@ class ConsensusView(Static):
             status=ConsensusStatus.INIT,
             context=DEFAULT_CONSENSUS_CONTEXT,
         )
-    
+
     @property
     def _orchestrator_facade(self) -> OrchestratorFacade | None:
-        """Access the app's orchestrator facade"""
-        assert self.app is not None
-        return self.app.orchestrator_facade
-    
+        """Access the app's orchestrator facade."""
+
+        app = getattr(self, "app", None)
+        if app is None:
+            return None
+        facade = getattr(app, "orchestrator_facade", None)
+        if facade is not None:
+            return facade
+        return getattr(app, "_orchestrator_facade", None)
+
     def _get_consensus(self) -> ConsensusDocument | None:
         """Get the current consensus from the orchestrator."""
+
         facade = self._orchestrator_facade
         if facade is None:
             return None
@@ -440,5 +456,4 @@ def _infer_project_name(source_path: Path | None) -> str:
 
 
 def _normalize_markdown(text: str) -> str:
-    # Placeholder for any future normalization logic, if needed.
     return text
