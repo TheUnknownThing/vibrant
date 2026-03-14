@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
@@ -170,3 +172,29 @@ async def test_agent_output_debug_view_renders_canonical_payloads():
 
         assert "tool.call.started" in debug_text
         assert "vibrant.ask_question" in debug_text
+
+
+@pytest.mark.asyncio
+async def test_agent_output_syncs_runtime_snapshot_like_agents():
+    older_start = datetime(2026, 3, 11, 9, 0, tzinfo=timezone.utc)
+    newer_start = datetime(2026, 3, 11, 9, 5, tzinfo=timezone.utc)
+    completed = SimpleNamespace(
+        identity=SimpleNamespace(agent_id="agent-task-010", task_id="task-010"),
+        runtime=SimpleNamespace(status=AgentStatus.COMPLETED.value, started_at=older_start),
+        provider=SimpleNamespace(thread_id="thread-010"),
+    )
+    running = SimpleNamespace(
+        identity=SimpleNamespace(agent_id="agent-task-011", task_id="task-011"),
+        runtime=SimpleNamespace(status=AgentStatus.RUNNING.value, started_at=newer_start),
+        provider=SimpleNamespace(thread_id="thread-011"),
+    )
+
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+        widget.sync_agents([completed, running])
+        await pilot.pause()
+
+        assert widget.active_agent_id == "agent-task-011"
+        assert widget.get_rendered_text() == "Operational activity will appear here…"

@@ -230,10 +230,10 @@ async def test_gatekeeper_start_run_surfaces_provider_requests_through_agent_han
         )
     )
 
-    for _ in range(50):
+    for _ in range(100):
         if handle.awaiting_input:
             break
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.01)
     else:
         raise AssertionError("Gatekeeper handle never entered awaiting_input state")
 

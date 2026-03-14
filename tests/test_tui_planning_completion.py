@@ -37,12 +37,12 @@ def test_runtime_tool_events_do_not_drive_planning_completion(monkeypatch) -> No
 
 def test_workspace_mode_tracks_workflow_status() -> None:
     app = _ScreenlessApp()
-    app._orchestrator = object()
-    app._orchestrator_facade = SimpleNamespace(get_workflow_status=lambda: OrchestratorStatus.PLANNING)
+    app.orchestrator = object()
+    app.orchestrator_facade = SimpleNamespace(get_workflow_status=lambda: OrchestratorStatus.PLANNING)
 
     app._sync_workspace_screen()
     assert isinstance(app._workspace_screen, PlanningScreen)
 
-    app._orchestrator_facade = SimpleNamespace(get_workflow_status=lambda: OrchestratorStatus.EXECUTING)
+    app.orchestrator_facade = SimpleNamespace(get_workflow_status=lambda: OrchestratorStatus.EXECUTING)
     app._sync_workspace_screen()
     assert isinstance(app._workspace_screen, VibingScreen)

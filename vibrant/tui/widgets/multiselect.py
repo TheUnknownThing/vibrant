@@ -1,12 +1,10 @@
 """General-purpose multiline selection widget for Textual"""
 
 from textual import events
-from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widget import Widget
-from textual.widgets import Header, Footer, Static
 from rich.text import Text
 
 class Multiselect(Widget, can_focus=True):

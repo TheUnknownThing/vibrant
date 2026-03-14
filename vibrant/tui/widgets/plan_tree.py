@@ -8,6 +8,7 @@ from typing import Any
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Markdown, Static, Tree
 
@@ -117,6 +118,20 @@ class TaskDetailScreen(ModalScreen[None]):
 class PlanTree(Static):
     """Tree view of roadmap tasks with detail overlays and live refresh support."""
 
+    class TaskHighlighted(Message):
+        """Raised when the tree cursor moves onto a task node."""
+
+        def __init__(self, task: TaskInfo) -> None:
+            super().__init__()
+            self.task = task
+
+    class TaskSelected(Message):
+        """Raised when the user explicitly selects a task node."""
+
+        def __init__(self, task: TaskInfo) -> None:
+            super().__init__()
+            self.task = task
+
     BINDINGS = [
         Binding("enter", "open_selected_task", "Details", show=False),
     ]
@@ -163,12 +178,15 @@ class PlanTree(Static):
         tasks: list[TaskInfo],
         *,
         agent_summaries: dict[str, str] | None = None,
+        selected_task_id: str | None = None,
     ) -> None:
         """Refresh the tree from the latest roadmap tasks."""
 
         self._tasks_by_id = {task.id: task for task in tasks}
         self._summaries_by_task_id = dict(agent_summaries or {})
         self._rebuild_tree(tasks)
+        if selected_task_id:
+            self.select_task(selected_task_id)
 
     def clear_tasks(self, message: str = "No roadmap tasks found.") -> None:
         """Clear the tree and show a single informational row."""
@@ -196,6 +214,19 @@ class PlanTree(Static):
             return
         self.app.push_screen(TaskDetailScreen(task, agent_summary=self._summaries_by_task_id.get(task_id)))
 
+    def select_task(self, task_id: str) -> None:
+        """Move the tree cursor to a specific task id."""
+
+        if self._tree is None:
+            return
+        node_id = self._node_ids_by_task_id.get(task_id)
+        if node_id is None:
+            return
+        node = self._tree.get_node_by_id(node_id)
+        if node is None:
+            return
+        self._tree.move_cursor(node, animate=False)
+
     def get_task_label(self, task_id: str) -> str | None:
         """Return the plain-text label for a task, for testing and diagnostics."""
 
@@ -210,8 +241,17 @@ class PlanTree(Static):
         label = node.label
         return label.plain if isinstance(label, Text) else str(label)
 
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted[TaskTreeNodeData | None]) -> None:
+        data = getattr(event.node, "data", None)
+        if not isinstance(data, TaskTreeNodeData):
+            return
+        self.post_message(self.TaskHighlighted(data.task))
+
     def on_tree_node_selected(self, event: Tree.NodeSelected[TaskTreeNodeData | None]) -> None:
-        self._open_node_details(event.node)
+        data = getattr(event.node, "data", None)
+        if not isinstance(data, TaskTreeNodeData):
+            return
+        self.post_message(self.TaskSelected(data.task))
 
     def _open_node_details(self, node: Any) -> None:
         data = getattr(node, "data", None)

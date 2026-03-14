@@ -12,7 +12,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Collapsible, ContentSwitcher, LoadingIndicator, Static
 
-from ...models.agent import AgentRecord, AgentStatus
+from ...models.agent import AgentStatus
 
 MAX_BUFFER_LINES = 10_000
 
@@ -176,24 +176,24 @@ class AgentOutput(Static):
 
         return self._debug_view_enabled
 
-    def sync_agents(self, agent_records: Iterable[AgentRecord]) -> None:
+    def sync_agents(self, agents: Iterable[object]) -> None:
         """Refresh known agents from orchestrator-owned runtime records."""
 
-        ordered_records = sorted(
-            list(agent_records),
-            key=lambda record: (
-                record.lifecycle.started_at.timestamp() if record.lifecycle.started_at is not None else 0.0,
-                record.identity.agent_id,
-            ),
+        ordered_agents = sorted(
+            [agent for agent in agents if self._agent_id(agent) is not None],
+            key=self._agent_sort_key,
         )
 
-        for record in ordered_records:
-            stream = self._ensure_stream(record.identity.agent_id)
-            stream.task_id = record.identity.task_id
-            stream.status = record.lifecycle.status.value
-            stream.provider_thread_id = record.provider.provider_thread_id
+        for agent in ordered_agents:
+            agent_id = self._agent_id(agent)
+            if agent_id is None:
+                continue
+            stream = self._ensure_stream(agent_id)
+            stream.task_id = self._task_id(agent)
+            stream.status = self._status(agent)
+            stream.provider_thread_id = self._provider_thread_id(agent)
 
-        self._agent_order = [record.identity.agent_id for record in ordered_records]
+        self._agent_order = [agent_id for agent in (self._agent_id(agent) for agent in ordered_agents) if agent_id]
         self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
         self._refresh_view()
 
@@ -321,6 +321,58 @@ class AgentOutput(Static):
         if stream is None:
             return False
         return bool(stream.active_thought_item_id and stream.status == AgentStatus.RUNNING.value)
+
+    def _agent_sort_key(self, agent: object) -> tuple[float, str]:
+        agent_id = self._agent_id(agent) or ""
+        started_at = self._started_at(agent)
+        return (started_at.timestamp() if started_at is not None else 0.0, agent_id)
+
+    def _agent_id(self, agent: object) -> str | None:
+        identity = getattr(agent, "identity", None)
+        agent_id = getattr(identity, "agent_id", None)
+        return agent_id if isinstance(agent_id, str) and agent_id else None
+
+    def _task_id(self, agent: object) -> str | None:
+        identity = getattr(agent, "identity", None)
+        task_id = getattr(identity, "task_id", None)
+        return task_id if isinstance(task_id, str) and task_id else None
+
+    def _status(self, agent: object) -> str | None:
+        lifecycle = getattr(agent, "lifecycle", None)
+        if lifecycle is not None:
+            status = getattr(lifecycle, "status", None)
+            if isinstance(status, str):
+                return status
+            value = getattr(status, "value", None)
+            if isinstance(value, str):
+                return value
+        runtime = getattr(agent, "runtime", None)
+        if runtime is not None:
+            status = getattr(runtime, "status", None)
+            if isinstance(status, str) and status:
+                return status
+        return None
+
+    def _provider_thread_id(self, agent: object) -> str | None:
+        provider = getattr(agent, "provider", None)
+        if provider is None:
+            return None
+        for field_name in ("provider_thread_id", "thread_id"):
+            value = getattr(provider, field_name, None)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    def _started_at(self, agent: object):
+        lifecycle = getattr(agent, "lifecycle", None)
+        if lifecycle is not None:
+            started_at = getattr(lifecycle, "started_at", None)
+            if started_at is not None:
+                return started_at
+        runtime = getattr(agent, "runtime", None)
+        if runtime is not None:
+            return getattr(runtime, "started_at", None)
+        return None
 
     def _ensure_stream(self, agent_id: str) -> AgentStreamState:
         stream = self._streams.get(agent_id)
@@ -493,7 +545,6 @@ def _render_canonical_event_lines(event: dict[str, Any]) -> list[str]:
 
 
 def _render_task_progress_lines(event: dict[str, Any]) -> list[str]:
-    event_type = str(event.get("type") or "event")
     item = event.get("item") if isinstance(event.get("item"), dict) else {}
     item_type = str(item.get("type") or event.get("item_type") or "").strip().lower()
 
@@ -579,6 +630,7 @@ def _error_text(event: dict[str, Any]) -> str:
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "")
+
 
 def _render_debug_event_line(event: dict[str, Any]) -> str:
     prefix = _timestamp_prefix(_timestamp_text(event.get("timestamp")))

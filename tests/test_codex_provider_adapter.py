@@ -17,6 +17,15 @@ from vibrant.providers.codex.client import CodexClientError
 from vibrant.providers.invocation import ProviderInvocationPlan
 
 
+def _make_agent_record(
+    *,
+    agent_id: str,
+    task_id: str,
+    agent_type: AgentType = AgentType.CODE,
+) -> AgentRecord:
+    return AgentRecord(identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type})
+
+
 class FakeCodexClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -106,7 +115,7 @@ class TestCodexProviderAdapter:
                 "rolloutPath": ".codex/threads/thread_abc123/rollout.jsonl",
             }
         }
-        agent = AgentRecord(identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE})
+        agent = _make_agent_record(agent_id="agent-task-001", task_id="task-001")
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=client, agent_record=agent, on_canonical_event=events.append)
 
@@ -441,7 +450,7 @@ async def test_codex_app_server_handshake_integration(tmp_path: Path):
     if not codex_binary:
         pytest.skip("codex CLI is not available")
 
-    agent = AgentRecord(identity={"agent_id": "agent-task-real", "task_id": "task-real", "type": AgentType.CODE})
+    agent = _make_agent_record(agent_id="agent-task-real", task_id="task-real")
     events: list[dict[str, Any]] = []
     adapter = CodexProviderAdapter(
         cwd=str(tmp_path),

@@ -14,6 +14,15 @@ from vibrant.providers.base import RuntimeMode
 from vibrant.providers.claude.adapter import ClaudeProviderAdapter
 
 
+def _make_agent_record(
+    *,
+    agent_id: str,
+    task_id: str,
+    agent_type: AgentType,
+) -> AgentRecord:
+    return AgentRecord(identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type})
+
+
 class FakeClaudeClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
@@ -116,7 +125,11 @@ class TestClaudeProviderAdapter:
             ),
         ]
 
-        agent = AgentRecord(identity={"agent_id": "agent-claude-1", "task_id": "task-claude-1", "type": AgentType.CODE})
+        agent = _make_agent_record(
+            agent_id="agent-claude-1",
+            task_id="task-claude-1",
+            agent_type=AgentType.CODE,
+        )
         events: list[dict[str, Any]] = []
         adapter = ClaudeProviderAdapter(client=client, cwd=str(tmp_path), agent_record=agent, on_canonical_event=events.append)
 
@@ -172,7 +185,11 @@ class TestClaudeProviderAdapter:
             )
         ]
 
-        agent = AgentRecord(identity={"agent_id": "agent-claude-2", "task_id": "task-claude-2", "type": AgentType.GATEKEEPER})
+        agent = _make_agent_record(
+            agent_id="agent-claude-2",
+            task_id="task-claude-2",
+            agent_type=AgentType.GATEKEEPER,
+        )
         events: list[dict[str, Any]] = []
         adapter = ClaudeProviderAdapter(
             client=client,
