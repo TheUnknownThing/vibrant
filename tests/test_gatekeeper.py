@@ -277,7 +277,7 @@ async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_pat
     )
 
     assert forwarded
-    assert str(forwarded[0]["agent_id"]).startswith("gatekeeper-project_start-")
+    assert forwarded[0]["agent_id"] == "gatekeeper"
     assert forwarded[0]["task_id"] == "gatekeeper-project_start"
     assert any(event["type"] == "content.delta" for event in forwarded)
     assert result.agent_record is not None

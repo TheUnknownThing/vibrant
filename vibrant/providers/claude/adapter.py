@@ -244,10 +244,10 @@ class ClaudeProviderAdapter(ProviderAdapter):
 
         base_cwd = Path(cwd or self._cwd or Path.cwd()).expanduser().resolve()
         native_path = self.agent_record.provider.native_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "native" / f"{self.agent_record.identity.run_id}.ndjson"
         )
         canonical_path = self.agent_record.provider.canonical_event_log or str(
-            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.agent_id}.ndjson"
+            base_cwd / ".vibrant" / "logs" / "providers" / "canonical" / f"{self.agent_record.identity.run_id}.ndjson"
         )
 
         self.agent_record.provider.native_event_log = native_path
@@ -613,6 +613,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         }
         if self.agent_record is not None:
             event["agent_id"] = self.agent_record.identity.agent_id
+            event["run_id"] = self.agent_record.identity.run_id
             event["task_id"] = self.agent_record.identity.task_id
         if self.provider_thread_id is not None:
             event["provider_thread_id"] = self.provider_thread_id

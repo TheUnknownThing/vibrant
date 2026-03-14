@@ -17,10 +17,18 @@ from vibrant.providers.claude.adapter import ClaudeProviderAdapter
 def _make_agent_record(
     *,
     agent_id: str,
+    run_id: str | None = None,
     task_id: str,
     agent_type: AgentType,
 ) -> AgentRecord:
-    return AgentRecord(identity={"agent_id": agent_id, "task_id": task_id, "type": agent_type})
+    return AgentRecord(
+        identity={
+            "agent_id": agent_id,
+            "run_id": run_id or agent_id,
+            "task_id": task_id,
+            "type": agent_type,
+        }
+    )
 
 
 class FakeClaudeClient:
@@ -127,6 +135,7 @@ class TestClaudeProviderAdapter:
 
         agent = _make_agent_record(
             agent_id="agent-claude-1",
+            run_id="run-claude-1",
             task_id="task-claude-1",
             agent_type=AgentType.CODE,
         )
@@ -156,6 +165,11 @@ class TestClaudeProviderAdapter:
         assert agent.provider.kind == "claude"
         assert agent.provider.provider_thread_id == "session-123"
         assert agent.provider.resume_cursor == {"sessionId": "session-123"}
+        assert agent.provider.native_event_log is not None and agent.provider.native_event_log.endswith("run-claude-1.ndjson")
+        assert (
+            agent.provider.canonical_event_log is not None
+            and agent.provider.canonical_event_log.endswith("run-claude-1.ndjson")
+        )
         assert [event["type"] for event in events] == [
             "session.started",
             "turn.started",
@@ -166,6 +180,7 @@ class TestClaudeProviderAdapter:
             "turn.completed",
             "task.completed",
         ]
+        assert {event["run_id"] for event in events} == {"run-claude-1"}
         assert events[2]["thread"]["id"] == "session-123"
         assert events[5]["delta"] == "Implemented the requested change."
         assert events[6]["turn_status"] == "completed"

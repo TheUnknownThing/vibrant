@@ -17,6 +17,7 @@ class OrchestratorStatus(str, enum.Enum):
     VALIDATING = "validating"
     PAUSED = "paused"
     COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class GatekeeperStatus(str, enum.Enum):

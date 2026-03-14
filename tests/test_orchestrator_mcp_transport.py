@@ -8,10 +8,11 @@ import httpx
 import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from vibrant.agents.gatekeeper import GatekeeperRequest, GatekeeperTrigger
 
 from vibrant.orchestrator import create_orchestrator
 from vibrant.orchestrator.mcp import BINDING_HEADER_NAME
-from vibrant.orchestrator.types import GatekeeperMessageKind
+from vibrant.orchestrator.policy.shared.capabilities import gatekeeper_binding_preset, worker_binding_preset
 from vibrant.project_init import initialize_project
 
 
@@ -27,7 +28,8 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
         orchestrator.mcp_host.transport.port = 8765
         orchestrator.mcp_host.fastmcp.settings.port = 8765
         app = orchestrator.mcp_host.fastmcp.streamable_http_app()
-        bound = orchestrator.binding_service.bind_gatekeeper(
+        bound = orchestrator.binding_service.bind_preset(
+            preset=gatekeeper_binding_preset(orchestrator.mcp_server, "gatekeeper-test"),
             session_id="gatekeeper-test",
             conversation_id="gatekeeper-test",
         )
@@ -80,10 +82,10 @@ async def test_fastmcp_host_filters_worker_bindings_server_side(tmp_path: Path) 
         orchestrator.mcp_host.transport.port = 8765
         orchestrator.mcp_host.fastmcp.settings.port = 8765
         app = orchestrator.mcp_host.fastmcp.streamable_http_app()
-        bound = orchestrator.binding_service.bind_worker(
-            agent_id="worker-1",
-            task_id="task-1",
-            agent_type="code",
+        bound = orchestrator.binding_service.bind_preset(
+            preset=worker_binding_preset(orchestrator.mcp_server, "worker-1", "code"),
+            session_id="task-1",
+            conversation_id=None,
         )
         orchestrator.mcp_host.register_binding(bound)
 
@@ -140,8 +142,11 @@ async def test_gatekeeper_lifecycle_compiles_and_passes_invocation_plan(tmp_path
 
     try:
         await orchestrator.gatekeeper_lifecycle.submit(
-            message_kind=GatekeeperMessageKind.USER_MESSAGE,
-            text="Plan the next phase",
+            request=GatekeeperRequest(
+                trigger=GatekeeperTrigger.USER_CONVERSATION,
+                trigger_description="Plan the next phase",
+                agent_summary="Plan the next phase",
+            ),
             submission_id="submission-1",
             resume=False,
         )

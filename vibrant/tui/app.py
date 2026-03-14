@@ -378,7 +378,11 @@ class VibrantApp(App):
             return
 
         snapshot = orchestrator.snapshot()
-        if snapshot.pending_questions or snapshot.status in {OrchestratorStatus.PAUSED, OrchestratorStatus.COMPLETED}:
+        if snapshot.pending_questions or snapshot.status in {
+            OrchestratorStatus.PAUSED,
+            OrchestratorStatus.COMPLETED,
+            OrchestratorStatus.FAILED,
+        }:
             return
 
         self._launch_roadmap_runner(notify_when_idle=False)
@@ -405,28 +409,25 @@ class VibrantApp(App):
         pending_question = self._current_pending_gatekeeper_question_record()
         try:
             if pending_question is not None:
-                submission = await self.orchestrator.control_plane.answer_user_decision(
+                submission = await self.orchestrator.answer_user_decision(
                     pending_question.question_id,
                     text,
                 )
             else:
-                submission = await self.orchestrator.control_plane.submit_user_message(text)
+                submission = await self.orchestrator.submit_user_message(text)
             self._sync_gatekeeper_conversation_binding(
                 conversation_id=submission.conversation_id,
                 force=True,
             )
             self._refresh_gatekeeper_state()
 
-            if not submission.agent_id:
-                raise RuntimeError("Gatekeeper submission did not produce an agent id")
-
-            result = await self.orchestrator.runtime_service.wait_for_run(submission.agent_id)
+            result = await self.orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
+            self._refresh_project_views()
             if _extract_planning_completion_request(result):
                 self._transition_to_vibing(prefer_chat_history=True)
                 return
             if self._maybe_sync_post_planning_transition():
                 return
-
             self.notify("Message sent to Gatekeeper.")
             self._set_status("Gatekeeper updated the plan")
             self._start_automatic_workflow_if_needed()
@@ -560,10 +561,6 @@ class VibrantApp(App):
             with suppress(Exception):
                 vibing_screen.agent_output.ingest_canonical_event(event)
 
-        if _event_requests_planning_completion(event):
-            self._transition_to_vibing(prefer_chat_history=True)
-            return
-
         event_type = str(event.get("type") or "")
         if _is_gatekeeper_event(event):
             self._sync_gatekeeper_conversation_binding()
@@ -622,10 +619,8 @@ class VibrantApp(App):
         self._close_orchestrator_subscriptions()
         if self._orchestrator is None:
             return
-        self._pending_runtime_bootstrap_events = self._orchestrator.list_recent_events(limit=200)
-        self._runtime_event_subscription = self._orchestrator.runtime_service.subscribe_canonical_events(
-            self._on_runtime_event
-        )
+        self._pending_runtime_bootstrap_events = self._orchestrator.control_plane.list_recent_events(limit=200)
+        self._runtime_event_subscription = self._orchestrator.control_plane.subscribe_runtime_events(self._on_runtime_event)
 
     def _initialize_project_setup(self) -> None:
         self._close_orchestrator_subscriptions()
@@ -931,7 +926,7 @@ class VibrantApp(App):
 
         resolved_conversation_id = conversation_id
         if resolved_conversation_id is None:
-            resolved_conversation_id = self._orchestrator.snapshot().gatekeeper.conversation_id
+            resolved_conversation_id = self._orchestrator.control_plane.gatekeeper_conversation_id()
 
         if not resolved_conversation_id:
             if force or self._gatekeeper_conversation_id is not None:
@@ -1136,20 +1131,7 @@ class VibrantApp(App):
         orchestrator = self.orchestrator_facade
         if orchestrator is None:
             return OrchestratorStatus.EXECUTING
-
-        consensus = orchestrator.get_consensus_document()
-        if consensus is not None:
-            mapped = {
-                ConsensusStatus.PLANNING: OrchestratorStatus.PLANNING,
-                ConsensusStatus.EXECUTING: OrchestratorStatus.EXECUTING,
-            }.get(consensus.status)
-            if mapped is not None:
-                return mapped
-
-        roadmap_document = getattr(orchestrator, "roadmap_document", None)
-        if roadmap_document is None:
-            roadmap_document = orchestrator.snapshot().roadmap
-        return OrchestratorStatus.EXECUTING if getattr(roadmap_document, "tasks", None) else OrchestratorStatus.PLANNING
+        return orchestrator.infer_resume_status()
 
     def _transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
         orchestrator = self.orchestrator_facade
@@ -1158,12 +1140,6 @@ class VibrantApp(App):
 
         current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
         if current_status is next_status:
-            return
-        if next_status is OrchestratorStatus.PAUSED:
-            orchestrator.pause_workflow()
-            return
-        if current_status is OrchestratorStatus.PAUSED and next_status is OrchestratorStatus.EXECUTING:
-            orchestrator.resume_workflow()
             return
         orchestrator.transition_workflow_state(next_status)
 
@@ -1229,7 +1205,6 @@ class VibrantApp(App):
     def get_todo_exit_message(self) -> str | None:
         return self._todo_exit_message
 
-
 def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
     if isinstance(status, OrchestratorStatus):
         return status
@@ -1244,7 +1219,7 @@ def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
 
 def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
     agent_id = event.get("agent_id")
-    if isinstance(agent_id, str) and agent_id.startswith("gatekeeper-"):
+    if isinstance(agent_id, str) and (agent_id == "gatekeeper" or agent_id.startswith("gatekeeper-")):
         return True
 
     task_id = event.get("task_id")

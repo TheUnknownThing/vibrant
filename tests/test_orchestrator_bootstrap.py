@@ -4,6 +4,7 @@ from pathlib import Path
 
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator import OrchestratorFacade, create_orchestrator
+from vibrant.orchestrator.types import WorkflowStatus
 from vibrant.project_init import initialize_project
 
 
@@ -38,3 +39,54 @@ def test_facade_manages_tasks_questions_and_status_projection(tmp_path: Path) ->
     assert snapshot.pending_questions == ("Pick the first subsystem to implement",)
     assert facade.get_task("task-1") is not None
     assert facade.get_consensus_document() is not None
+
+
+def test_ui_surface_excludes_mcp_only_compatibility_aliases(tmp_path: Path) -> None:
+    orchestrator = _prepare_project(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+
+    assert not hasattr(orchestrator, "workflow_policy")
+    assert not hasattr(orchestrator, "review_control")
+    assert not hasattr(orchestrator, "set_pending_questions")
+    assert not hasattr(orchestrator, "review_task_outcome")
+    assert not hasattr(orchestrator, "mark_task_for_retry")
+    assert not hasattr(orchestrator.control_plane, "set_pending_questions")
+    assert not hasattr(orchestrator.control_plane, "review_task_outcome")
+    assert not hasattr(orchestrator.control_plane, "mark_task_for_retry")
+    assert not hasattr(facade, "set_pending_questions")
+    assert not hasattr(facade, "resolve_question")
+    assert not hasattr(facade, "update_task")
+    assert not hasattr(facade, "review_task_outcome")
+    assert not hasattr(facade, "mark_task_for_retry")
+
+
+def test_workflow_state_commands_are_sync(tmp_path: Path) -> None:
+    orchestrator = _prepare_project(tmp_path)
+
+    started = orchestrator.start_execution()
+    paused = orchestrator.pause_workflow()
+    resumed = orchestrator.resume_workflow()
+
+    assert started.status.value == "executing"
+    assert paused.status.value == "paused"
+    assert resumed.status.value == "executing"
+
+
+def test_resume_workflow_restores_planning_phase(tmp_path: Path) -> None:
+    orchestrator = _prepare_project(tmp_path)
+
+    orchestrator.control_plane.set_workflow_status(WorkflowStatus.PLANNING)
+    paused = orchestrator.pause_workflow()
+    resumed = orchestrator.resume_workflow()
+
+    assert paused.status.value == "paused"
+    assert resumed.status.value == "planning"
+
+
+def test_facade_surfaces_failed_workflow_without_paused_fallback(tmp_path: Path) -> None:
+    orchestrator = _prepare_project(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+
+    orchestrator.control_plane.set_workflow_status(WorkflowStatus.FAILED)
+
+    assert facade.get_workflow_status().value == "failed"
