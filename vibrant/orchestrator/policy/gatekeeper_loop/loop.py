@@ -9,7 +9,10 @@ from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.task import TaskInfo
 
-from ...basic import ArtifactsCapability, ConversationCapability, AgentRuntimeCapability
+from ...basic.artifacts import build_workflow_snapshot
+from ...basic.conversation import ConversationStreamService
+from ...basic.runtime import AgentRuntimeService
+from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, RoadmapStore, WorkflowStateStore
 from ...types import QuestionPriority, QuestionStatus, WorkflowSnapshot, WorkflowStatus
 from .lifecycle import GatekeeperLifecycleService
 from .models import GatekeeperLoopState, GatekeeperSubmission
@@ -25,9 +28,14 @@ class GatekeeperUserLoop:
     """Own the authoritative user <-> Gatekeeper submission flow."""
 
     project_name: str
-    artifacts: ArtifactsCapability
-    conversations: ConversationCapability
-    runtime: AgentRuntimeCapability
+    workflow_state_store: WorkflowStateStore
+    agent_run_store: AgentRunStore
+    attempt_store: AttemptStore
+    question_store: QuestionStore
+    consensus_store: ConsensusStore
+    roadmap_store: RoadmapStore
+    conversation_service: ConversationStreamService
+    runtime_service: AgentRuntimeService
     lifecycle: GatekeeperLifecycleService
     _last_submission_id: str | None = None
     _last_error: str | None = None
@@ -36,12 +44,12 @@ class GatekeeperUserLoop:
         session = await self.lifecycle.resume_or_start()
         conversation_id = session.conversation_id or f"gatekeeper-{uuid4().hex[:12]}"
         if question_id is None:
-            pending_question = current_pending_question(self.artifacts.question_store.list_pending())
+            pending_question = current_pending_question(self.question_store.list_pending())
         else:
-            pending_question = require_pending_question(self.artifacts.question_store.get(question_id), question_id)
+            pending_question = require_pending_question(self.question_store.get(question_id), question_id)
         prepared = build_user_submission_request(text, pending_question)
 
-        self.conversations.record_host_message(
+        self.conversation_service.record_host_message(
             conversation_id=conversation_id,
             role="user",
             text=text,
@@ -78,15 +86,15 @@ class GatekeeperUserLoop:
     async def wait_for_submission(self, submission: GatekeeperSubmission):
         if not submission.run_id:
             raise RuntimeError("Gatekeeper submission did not produce a run id")
-        result = await self.runtime.wait_for_run(submission.run_id)
+        result = await self.runtime_service.wait_for_run(submission.run_id)
         result_error = getattr(result, "error", None)
         if result_error:
             self._last_error = result_error
             return result
         if submission.question_id is not None:
-            record = self.artifacts.question_store.get(submission.question_id)
+            record = self.question_store.get(submission.question_id)
             if record is not None and record.status is QuestionStatus.PENDING:
-                self.artifacts.question_store.resolve(
+                self.question_store.resolve(
                     submission.question_id,
                     answer=submission.answer_text,
                 )
@@ -115,7 +123,7 @@ class GatekeeperUserLoop:
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
     ):
-        return self.artifacts.question_store.create(
+        return self.question_store.create(
             text=text,
             priority=priority,
             source_role=source_role,
@@ -127,32 +135,52 @@ class GatekeeperUserLoop:
         )
 
     def withdraw_question(self, question_id: str, *, reason: str | None = None):
-        return self.artifacts.question_store.withdraw(question_id, reason=reason)
+        return self.question_store.withdraw(question_id, reason=reason)
 
     def transition_workflow(self, status: WorkflowStatus) -> WorkflowSnapshot:
-        return set_workflow_status(self.artifacts, status)
+        return set_workflow_status(
+            workflow_state_store=self.workflow_state_store,
+            agent_run_store=self.agent_run_store,
+            consensus_store=self.consensus_store,
+            question_store=self.question_store,
+            attempt_store=self.attempt_store,
+            status=status,
+        )
 
     def end_planning(self) -> WorkflowSnapshot:
-        return end_planning_transition(self.artifacts)
+        return end_planning_transition(
+            workflow_state_store=self.workflow_state_store,
+            agent_run_store=self.agent_run_store,
+            consensus_store=self.consensus_store,
+            question_store=self.question_store,
+            attempt_store=self.attempt_store,
+        )
 
     def resume_workflow(self) -> WorkflowSnapshot:
-        return resume_workflow_transition(self.artifacts)
+        return resume_workflow_transition(
+            workflow_state_store=self.workflow_state_store,
+            agent_run_store=self.agent_run_store,
+            consensus_store=self.consensus_store,
+            roadmap_store=self.roadmap_store,
+            question_store=self.question_store,
+            attempt_store=self.attempt_store,
+        )
 
     def add_task(self, task: TaskInfo, *, index: int | None = None) -> TaskInfo:
-        self.artifacts.roadmap_store.add_task(task, index=index)
-        created = self.artifacts.roadmap_store.get_task(task.id)
+        self.roadmap_store.add_task(task, index=index)
+        created = self.roadmap_store.get_task(task.id)
         if created is None:
             raise KeyError(task.id)
         return created
 
     def update_task_definition(self, task_id: str, **patch: object) -> TaskInfo:
-        return self.artifacts.roadmap_store.update_task_definition(task_id, patch)
+        return self.roadmap_store.update_task_definition(task_id, patch)
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
-        return self.artifacts.roadmap_store.reorder_tasks(ordered_task_ids)
+        return self.roadmap_store.reorder_tasks(ordered_task_ids)
 
     def replace_roadmap(self, *, tasks: list[TaskInfo], project: str | None = None) -> RoadmapDocument:
-        return self.artifacts.roadmap_store.replace(tasks=tasks, project=project or self.project_name)
+        return self.roadmap_store.replace(tasks=tasks, project=project or self.project_name)
 
     def update_consensus(
         self,
@@ -160,22 +188,22 @@ class GatekeeperUserLoop:
         status: ConsensusStatus | str | None = None,
         context: str | None = None,
     ) -> ConsensusDocument:
-        document = self.artifacts.consensus_store.load() or ConsensusDocument(project=self.project_name)
+        document = self.consensus_store.load() or ConsensusDocument(project=self.project_name)
         if context is not None:
             document.context = context
         if status is not None:
             document.status = status if isinstance(status, ConsensusStatus) else ConsensusStatus(str(status).upper())
-        return self.artifacts.consensus_store.write(document)
+        return self.consensus_store.write(document)
 
     def append_decision(self, **kwargs: object) -> ConsensusDocument:
-        return self.artifacts.consensus_store.append_decision(**kwargs)
+        return self.consensus_store.append_decision(**kwargs)
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
-        return self.artifacts.consensus_store.write(document)
+        return self.consensus_store.write(document)
 
     def snapshot(self) -> GatekeeperLoopState:
         session = self.lifecycle.snapshot()
-        pending_questions = tuple(self.artifacts.question_store.list_pending())
+        pending_questions = tuple(self.question_store.list_pending())
         return GatekeeperLoopState(
             session=session,
             conversation_id=session.conversation_id,
@@ -186,8 +214,16 @@ class GatekeeperUserLoop:
             busy=self.lifecycle.busy,
         )
 
+    def workflow_snapshot(self) -> WorkflowSnapshot:
+        return build_workflow_snapshot(
+            workflow_state_store=self.workflow_state_store,
+            agent_run_store=self.agent_run_store,
+            question_store=self.question_store,
+            attempt_store=self.attempt_store,
+        )
+
     def conversation(self, conversation_id: str):
-        return self.conversations.rebuild(conversation_id)
+        return self.conversation_service.rebuild(conversation_id)
 
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
-        return self.conversations.subscribe(conversation_id, callback, replay=replay)
+        return self.conversation_service.subscribe(conversation_id, callback, replay=replay)

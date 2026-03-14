@@ -6,7 +6,8 @@ from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 
-from ...basic import ArtifactsCapability
+from ...basic.artifacts import build_workflow_snapshot
+from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, RoadmapStore, WorkflowStateStore
 from ...types import WorkflowSnapshot, WorkflowStatus
 
 
@@ -73,8 +74,16 @@ def infer_resume_workflow_status(
     return WorkflowStatus.PLANNING
 
 
-def apply_workflow_status(artifacts: ArtifactsCapability, status: WorkflowStatus) -> WorkflowSnapshot:
-    current_state = artifacts.workflow_state_store.load()
+def apply_workflow_status(
+    *,
+    workflow_state_store: WorkflowStateStore,
+    agent_run_store: AgentRunStore,
+    consensus_store: ConsensusStore,
+    question_store: QuestionStore,
+    attempt_store: AttemptStore,
+    status: WorkflowStatus,
+) -> WorkflowSnapshot:
+    current_state = workflow_state_store.load()
     next_resume_status = (
         current_state.workflow_status
         if status is WorkflowStatus.PAUSED and current_state.workflow_status is not WorkflowStatus.PAUSED
@@ -82,23 +91,43 @@ def apply_workflow_status(artifacts: ArtifactsCapability, status: WorkflowStatus
         if status is WorkflowStatus.PAUSED
         else None
     )
-    artifacts.workflow_state_store.update_workflow_status(
+    workflow_state_store.update_workflow_status(
         status,
         resume_status=next_resume_status,
     )
-    artifacts.consensus_store.set_status_projection(workflow_to_consensus_status(status))
-    return artifacts.workflow_snapshot()
+    consensus_store.set_status_projection(workflow_to_consensus_status(status))
+    return build_workflow_snapshot(
+        workflow_state_store=workflow_state_store,
+        agent_run_store=agent_run_store,
+        question_store=question_store,
+        attempt_store=attempt_store,
+    )
 
 
-def resume_workflow(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
-    state = artifacts.workflow_state_store.load()
+def resume_workflow(
+    *,
+    workflow_state_store: WorkflowStateStore,
+    agent_run_store: AgentRunStore,
+    consensus_store: ConsensusStore,
+    roadmap_store: RoadmapStore,
+    question_store: QuestionStore,
+    attempt_store: AttemptStore,
+) -> WorkflowSnapshot:
+    state = workflow_state_store.load()
     status = state.resume_status
     if status is None:
         status = infer_resume_workflow_status(
-            consensus=artifacts.consensus_store.load(),
-            roadmap=artifacts.roadmap_store.load(),
+            consensus=consensus_store.load(),
+            roadmap=roadmap_store.load(),
         )
-    return apply_workflow_status(artifacts, status)
+    return apply_workflow_status(
+        workflow_state_store=workflow_state_store,
+        agent_run_store=agent_run_store,
+        consensus_store=consensus_store,
+        question_store=question_store,
+        attempt_store=attempt_store,
+        status=status,
+    )
 
 
 def is_execution_workflow_status(status: WorkflowStatus) -> bool:

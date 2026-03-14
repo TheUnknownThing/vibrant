@@ -307,7 +307,6 @@ class WorkflowSnapshot:
     gatekeeper: GatekeeperSessionSnapshot
     pending_question_ids: tuple[str, ...]
     active_attempt_ids: tuple[str, ...]
-    active_agent_ids: tuple[str, ...]
 
 
 @dataclass(slots=True)

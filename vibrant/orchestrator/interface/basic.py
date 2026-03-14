@@ -1,4 +1,4 @@
-"""Read/query adapter over basic capabilities and public snapshots."""
+"""Read/query adapter over basic services and public snapshots."""
 
 from __future__ import annotations
 
@@ -6,8 +6,18 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from ..basic import ArtifactsCapability, ConversationCapability, EventLogCapability
+from ..basic.artifacts import build_workflow_snapshot
+from ..basic.events import EventLogService
 from ..basic.runtime import AgentRuntimeService
+from ..basic.stores import (
+    AgentInstanceStore,
+    AgentRunStore,
+    AttemptStore,
+    ConsensusStore,
+    QuestionStore,
+    RoadmapStore,
+    WorkflowStateStore,
+)
 from ..policy.gatekeeper_loop.roles import GATEKEEPER_ROLE
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop.roles import DEFAULT_TASK_AGENT_ROLE
@@ -31,21 +41,31 @@ from ..types import (
 class BasicQueryAdapter:
     """Expose coherent read models for first-party consumers."""
 
-    artifacts: ArtifactsCapability
-    conversations: ConversationCapability
+    workflow_state_store: WorkflowStateStore
+    attempt_store: AttemptStore
+    question_store: QuestionStore
+    consensus_store: ConsensusStore
+    roadmap_store: RoadmapStore
+    agent_instance_store: AgentInstanceStore
+    agent_run_store: AgentRunStore
     runtime_service: AgentRuntimeService
-    event_log: EventLogCapability
+    event_log: EventLogService
     gatekeeper_loop: GatekeeperUserLoop
     task_loop: TaskLoop
 
     def workflow_snapshot(self):
-        return self.artifacts.workflow_snapshot()
+        return build_workflow_snapshot(
+            workflow_state_store=self.workflow_state_store,
+            agent_run_store=self.agent_run_store,
+            question_store=self.question_store,
+            attempt_store=self.attempt_store,
+        )
 
     def workflow_session(self):
-        return self.artifacts.workflow_snapshot()
+        return self.workflow_snapshot()
 
     def get_workflow_status(self):
-        return self.artifacts.workflow_state_store.load().workflow_status
+        return self.workflow_state_store.load().workflow_status
 
     def gatekeeper_state(self):
         return self.gatekeeper_loop.snapshot()
@@ -87,7 +107,7 @@ class BasicQueryAdapter:
 
         async def _task_filtered(event):
             event_run_id = event.get("run_id")
-            if not isinstance(event_run_id, str) or self.artifacts.attempt_store.task_id_for_run(event_run_id) != task_id:
+            if not isinstance(event_run_id, str) or self.attempt_store.task_id_for_run(event_run_id) != task_id:
                 return None
             result = callback(event)
             if inspect.isawaitable(result):
@@ -105,19 +125,19 @@ class BasicQueryAdapter:
         return self.event_log.list_recent_events(limit=limit)
 
     def get_consensus_document(self):
-        return self.artifacts.consensus_store.load()
+        return self.consensus_store.load()
 
     def get_roadmap(self):
-        return self.artifacts.roadmap_store.load()
+        return self.roadmap_store.load()
 
     def get_task(self, task_id: str):
-        return self.artifacts.roadmap_store.get_task(task_id)
+        return self.roadmap_store.get_task(task_id)
 
     def list_roles(self) -> list[RoleSnapshot]:
-        instances = self.artifacts.agent_instance_store.list()
-        runs = self.artifacts.agent_run_store.list()
-        active_runs = self.artifacts.agent_run_store.list_active()
-        roadmap = self.artifacts.roadmap_store.load()
+        instances = self.agent_instance_store.list()
+        runs = self.agent_run_store.list()
+        active_runs = self.agent_run_store.list_active()
+        roadmap = self.roadmap_store.load()
         task_roles = {
             task.agent_role or DEFAULT_TASK_AGENT_ROLE
             for task in getattr(roadmap, "tasks", ())
@@ -157,34 +177,34 @@ class BasicQueryAdapter:
         return next((snapshot for snapshot in self.list_roles() if snapshot.role == normalized), None)
 
     def list_instances(self) -> list[AgentInstanceSnapshot]:
-        return [self._project_instance(record) for record in self.artifacts.agent_instance_store.list()]
+        return [self._project_instance(record) for record in self.agent_instance_store.list()]
 
     def get_instance(self, agent_id: str) -> AgentInstanceSnapshot | None:
-        record = self.artifacts.agent_instance_store.get(agent_id)
+        record = self.agent_instance_store.get(agent_id)
         if record is None:
             return None
         return self._project_instance(record)
 
     def list_runs(self) -> list[AgentRunSnapshot]:
-        return [self._project_run(record) for record in self.artifacts.agent_run_store.list()]
+        return [self._project_run(record) for record in self.agent_run_store.list()]
 
     def list_active_runs(self) -> list[AgentRunSnapshot]:
-        return [self._project_run(record) for record in self.artifacts.agent_run_store.list_active()]
+        return [self._project_run(record) for record in self.agent_run_store.list_active()]
 
     def get_run(self, run_id: str) -> AgentRunSnapshot | None:
-        record = self.artifacts.agent_run_store.get(run_id)
+        record = self.agent_run_store.get(run_id)
         if record is None:
             return None
         return self._project_run(record)
 
     def list_question_records(self):
-        return self.artifacts.question_store.list()
+        return self.question_store.list()
 
     def list_pending_question_records(self):
-        return self.artifacts.question_store.list_pending()
+        return self.question_store.list_pending()
 
     def list_active_attempts(self):
-        return self.artifacts.attempt_store.list_active()
+        return self.attempt_store.list_active()
 
     def get_attempt_execution(self, attempt_id: str):
         return self.task_loop.execution.attempt_execution(attempt_id)

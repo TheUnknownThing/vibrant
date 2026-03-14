@@ -14,16 +14,9 @@ from vibrant.models.task import TaskInfo
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.registry import resolve_provider_adapter
 
-from .basic import (
-    AgentRuntimeCapability,
-    ArtifactsCapability,
-    BindingCapability,
-    ConversationCapability,
-    EventLogCapability,
-    WorkspaceCapability,
-)
 from .basic.binding import AgentSessionBindingService
 from .basic.conversation import ConversationStore, ConversationStreamService
+from .basic.events import EventLogService
 from .basic.runtime import AgentRuntimeService
 from .basic.stores import (
     AgentInstanceStore,
@@ -52,12 +45,20 @@ class Orchestrator:
     project_root: Path
     vibrant_dir: Path
     config: VibrantConfig
-    artifacts: ArtifactsCapability
-    conversations: ConversationCapability
-    runtime: AgentRuntimeCapability
-    workspace: WorkspaceCapability
-    bindings: BindingCapability
-    event_log: EventLogCapability
+    workflow_state_store: WorkflowStateStore
+    attempt_store: AttemptStore
+    question_store: QuestionStore
+    consensus_store: ConsensusStore
+    roadmap_store: RoadmapStore
+    review_ticket_store: ReviewTicketStore
+    agent_instance_store: AgentInstanceStore
+    agent_run_store: AgentRunStore
+    conversation_store: ConversationStore
+    conversation_stream: ConversationStreamService
+    runtime_service: AgentRuntimeService
+    workspace_service: WorkspaceService
+    binding_service: AgentSessionBindingService
+    event_log: EventLogService
     gatekeeper_lifecycle: GatekeeperLifecycleService
     execution_coordinator: ExecutionCoordinator
     gatekeeper_loop: GatekeeperUserLoop
@@ -66,7 +67,6 @@ class Orchestrator:
     control_plane: InterfaceControlPlane
     mcp_server: OrchestratorMCPServer
     mcp_host: OrchestratorFastMCPHost
-    session_binding: AgentSessionBindingService
     gatekeeper: Gatekeeper
     adapter_factory: Any
 
@@ -107,20 +107,7 @@ class Orchestrator:
             runtime_service=runtime_service,
         )
 
-        artifacts = ArtifactsCapability(
-            workflow_state_store=workflow_state_store,
-            attempt_store=attempt_store,
-            question_store=question_store,
-            consensus_store=consensus_store,
-            roadmap_store=roadmap_store,
-            review_ticket_store=review_ticket_store,
-            agent_instance_store=agent_instance_store,
-            agent_run_store=agent_run_store,
-        )
-        conversations = ConversationCapability(store=conversation_store, stream=conversation_stream)
-        runtime = AgentRuntimeCapability(service=runtime_service)
-        workspace = WorkspaceCapability(service=workspace_service)
-        event_log = EventLogCapability(on_canonical_event=on_canonical_event)
+        event_log = EventLogService(on_canonical_event=on_canonical_event)
 
         resolved_gatekeeper = gatekeeper or Gatekeeper(root)
         gatekeeper_lifecycle = GatekeeperLifecycleService(
@@ -148,14 +135,25 @@ class Orchestrator:
         )
         gatekeeper_loop = GatekeeperUserLoop(
             project_name=root.name,
-            artifacts=artifacts,
-            conversations=conversations,
-            runtime=runtime,
+            workflow_state_store=workflow_state_store,
+            agent_run_store=agent_run_store,
+            attempt_store=attempt_store,
+            question_store=question_store,
+            consensus_store=consensus_store,
+            roadmap_store=roadmap_store,
+            conversation_service=conversation_stream,
+            runtime_service=runtime_service,
             lifecycle=gatekeeper_lifecycle,
         )
         task_loop = TaskLoop(
-            artifacts=artifacts,
-            workspace=workspace,
+            workflow_state_store=workflow_state_store,
+            agent_run_store=agent_run_store,
+            attempt_store=attempt_store,
+            question_store=question_store,
+            consensus_store=consensus_store,
+            roadmap_store=roadmap_store,
+            review_ticket_store=review_ticket_store,
+            workspace_service=workspace_service,
             execution=execution_coordinator,
         )
 
@@ -164,8 +162,13 @@ class Orchestrator:
             task_loop=task_loop,
         )
         queries = BasicQueryAdapter(
-            artifacts=artifacts,
-            conversations=conversations,
+            workflow_state_store=workflow_state_store,
+            attempt_store=attempt_store,
+            question_store=question_store,
+            consensus_store=consensus_store,
+            roadmap_store=roadmap_store,
+            agent_instance_store=agent_instance_store,
+            agent_run_store=agent_run_store,
             runtime_service=runtime_service,
             event_log=event_log,
             gatekeeper_loop=gatekeeper_loop,
@@ -181,17 +184,24 @@ class Orchestrator:
         )
         gatekeeper_lifecycle.binding_service = session_binding
         gatekeeper_lifecycle.mcp_host = mcp_host
-        bindings = BindingCapability(service=session_binding)
 
         orchestrator = cls(
             project_root=root,
             vibrant_dir=vibrant_dir,
             config=config,
-            artifacts=artifacts,
-            conversations=conversations,
-            runtime=runtime,
-            workspace=workspace,
-            bindings=bindings,
+            workflow_state_store=workflow_state_store,
+            attempt_store=attempt_store,
+            question_store=question_store,
+            consensus_store=consensus_store,
+            roadmap_store=roadmap_store,
+            review_ticket_store=review_ticket_store,
+            agent_instance_store=agent_instance_store,
+            agent_run_store=agent_run_store,
+            conversation_store=conversation_store,
+            conversation_stream=conversation_stream,
+            runtime_service=runtime_service,
+            workspace_service=workspace_service,
+            binding_service=session_binding,
             event_log=event_log,
             gatekeeper_lifecycle=gatekeeper_lifecycle,
             execution_coordinator=execution_coordinator,
@@ -201,7 +211,6 @@ class Orchestrator:
             control_plane=control_plane,
             mcp_server=mcp_server,
             mcp_host=mcp_host,
-            session_binding=session_binding,
             gatekeeper=resolved_gatekeeper,
             adapter_factory=resolved_adapter_factory,
         )
@@ -211,60 +220,8 @@ class Orchestrator:
         return orchestrator
 
     @property
-    def workflow_state_store(self) -> WorkflowStateStore:
-        return self.artifacts.workflow_state_store
-
-    @property
-    def attempt_store(self) -> AttemptStore:
-        return self.artifacts.attempt_store
-
-    @property
-    def question_store(self) -> QuestionStore:
-        return self.artifacts.question_store
-
-    @property
-    def consensus_store(self) -> ConsensusStore:
-        return self.artifacts.consensus_store
-
-    @property
-    def roadmap_store(self) -> RoadmapStore:
-        return self.artifacts.roadmap_store
-
-    @property
-    def review_ticket_store(self) -> ReviewTicketStore:
-        return self.artifacts.review_ticket_store
-
-    @property
-    def agent_instance_store(self) -> AgentInstanceStore:
-        return self.artifacts.agent_instance_store
-
-    @property
-    def agent_run_store(self) -> AgentRunStore:
-        return self.artifacts.agent_run_store
-
-    @property
     def agent_record_store(self) -> AgentRunStore:
-        return self.artifacts.agent_run_store
-
-    @property
-    def conversation_store(self) -> ConversationStore:
-        return self.conversations.store
-
-    @property
-    def conversation_stream(self) -> ConversationStreamService:
-        return self.conversations.stream
-
-    @property
-    def runtime_service(self) -> AgentRuntimeService:
-        return self.runtime.service
-
-    @property
-    def workspace_service(self) -> WorkspaceService:
-        return self.workspace.service
-
-    @property
-    def binding_service(self) -> AgentSessionBindingService:
-        return self.session_binding
+        return self.agent_run_store
 
     @property
     def roadmap_path(self) -> Path:

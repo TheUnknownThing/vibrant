@@ -7,7 +7,7 @@ from typing import Literal
 
 from vibrant.models.state import OrchestratorStatus
 
-from ...basic import ArtifactsCapability
+from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, RoadmapStore, WorkflowStateStore
 from ...types import WorkflowSnapshot, WorkflowStatus
 from ..shared.workflow import (
     apply_workflow_status,
@@ -24,16 +24,60 @@ class UITransitionPlan:
     workflow_status: WorkflowStatus | None = None
 
 
-def set_workflow_status(artifacts: ArtifactsCapability, status: WorkflowStatus) -> WorkflowSnapshot:
-    return apply_workflow_status(artifacts, status)
+def set_workflow_status(
+    *,
+    workflow_state_store: WorkflowStateStore,
+    agent_run_store: AgentRunStore,
+    consensus_store: ConsensusStore,
+    question_store: QuestionStore,
+    attempt_store: AttemptStore,
+    status: WorkflowStatus,
+) -> WorkflowSnapshot:
+    return apply_workflow_status(
+        workflow_state_store=workflow_state_store,
+        agent_run_store=agent_run_store,
+        consensus_store=consensus_store,
+        question_store=question_store,
+        attempt_store=attempt_store,
+        status=status,
+    )
 
 
-def end_planning(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
-    return apply_workflow_status(artifacts, WorkflowStatus.EXECUTING)
+def end_planning(
+    *,
+    workflow_state_store: WorkflowStateStore,
+    agent_run_store: AgentRunStore,
+    consensus_store: ConsensusStore,
+    question_store: QuestionStore,
+    attempt_store: AttemptStore,
+) -> WorkflowSnapshot:
+    return apply_workflow_status(
+        workflow_state_store=workflow_state_store,
+        agent_run_store=agent_run_store,
+        consensus_store=consensus_store,
+        question_store=question_store,
+        attempt_store=attempt_store,
+        status=WorkflowStatus.EXECUTING,
+    )
 
 
-def resume_workflow(artifacts: ArtifactsCapability) -> WorkflowSnapshot:
-    return resume_workflow_session(artifacts)
+def resume_workflow(
+    *,
+    workflow_state_store: WorkflowStateStore,
+    agent_run_store: AgentRunStore,
+    consensus_store: ConsensusStore,
+    roadmap_store: RoadmapStore,
+    question_store: QuestionStore,
+    attempt_store: AttemptStore,
+) -> WorkflowSnapshot:
+    return resume_workflow_session(
+        workflow_state_store=workflow_state_store,
+        agent_run_store=agent_run_store,
+        consensus_store=consensus_store,
+        roadmap_store=roadmap_store,
+        question_store=question_store,
+        attempt_store=attempt_store,
+    )
 
 
 def can_transition_ui_status(current: OrchestratorStatus, next_status: OrchestratorStatus) -> bool:
