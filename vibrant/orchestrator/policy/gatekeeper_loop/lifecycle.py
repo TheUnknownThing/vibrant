@@ -57,7 +57,6 @@ class GatekeeperLifecycleService:
         self.run_store = run_store
         self._session_loader = session_loader
         self._session_saver = session_saver
-        self._legacy_provider_thread_id: str | None = None
         self._session = self._load_session()
         self._active_handle = None
         self._active_handle_run_id: str | None = None
@@ -120,11 +119,7 @@ class GatekeeperLifecycleService:
 
         provider_thread = None
         if resume:
-            provider_thread = self._resolve_resume_handle(
-                session=session,
-                fallback_agent_id=instance.identity.agent_id,
-                provider_kind=agent_record.provider.kind,
-            )
+            provider_thread = self._resolve_resume_handle(session=session)
 
         self._session.agent_id = instance.identity.agent_id
         self._session.run_id = agent_record.identity.run_id
@@ -212,7 +207,6 @@ class GatekeeperLifecycleService:
         self._session.run_id = None
         self._session.provider_thread_id = None
         self._session.resumable = False
-        self._legacy_provider_thread_id = None
         self._session.lifecycle_state = GatekeeperLifecycleStatus.NOT_STARTED
         self._session.last_error = reason
         self._session.updated_at = utc_now()
@@ -234,8 +228,6 @@ class GatekeeperLifecycleService:
                 updated_at=self._session.updated_at,
             ),
             run_record=run_record,
-            cached_provider_thread_id=self._legacy_provider_thread_id,
-            cached_resumable=self._session.resumable,
         )
 
     async def _monitor_handle(self, run_id: str, handle) -> None:
@@ -251,7 +243,6 @@ class GatekeeperLifecycleService:
 
         self._session.provider_thread_id = result.provider_thread.thread_id
         self._session.resumable = bool(result.provider_thread.thread_id)
-        self._legacy_provider_thread_id = result.provider_thread.thread_id
         self._session.run_id = result.run_id
         self._session.updated_at = utc_now()
         if result.awaiting_input:
@@ -293,7 +284,6 @@ class GatekeeperLifecycleService:
         if isinstance(provider_thread_id, str) and provider_thread_id:
             self._session.provider_thread_id = provider_thread_id
             self._session.resumable = True
-            self._legacy_provider_thread_id = provider_thread_id
         self._session.updated_at = utc_now()
         self._persist()
 
@@ -301,12 +291,9 @@ class GatekeeperLifecycleService:
         if self._session_loader is None:
             return GatekeeperSessionSnapshot()
         loaded = self._session_loader()
-        self._legacy_provider_thread_id = loaded.provider_thread_id
         projected = project_gatekeeper_session(
             loaded,
             run_record=self._run_record_for_session(loaded),
-            cached_provider_thread_id=self._legacy_provider_thread_id,
-            cached_resumable=loaded.resumable,
         )
         return GatekeeperSessionSnapshot(
             agent_id=projected.agent_id,
@@ -361,23 +348,10 @@ class GatekeeperLifecycleService:
         self,
         *,
         session: GatekeeperSessionSnapshot,
-        fallback_agent_id: str,
-        provider_kind: str,
     ) -> ProviderResumeHandle | None:
-        if session.run_id is not None:
-            run_handle = self.run_store.resume_handle_for_run(session.run_id)
-            if run_handle is not None:
-                return run_handle
-        agent_id = session.agent_id or fallback_agent_id
-        latest_run = self.run_store.latest_resumable_run(agent_id)
-        if latest_run is not None:
-            return self.run_store.resume_handle_for_run(latest_run.identity.run_id)
-        if self._legacy_provider_thread_id:
-            return ProviderResumeHandle(
-                kind=provider_kind,
-                thread_id=self._legacy_provider_thread_id,
-            )
-        return None
+        if session.run_id is None:
+            return None
+        return self.run_store.resume_handle_for_run(session.run_id)
 
     def _run_record_for_session(self, session: GatekeeperSessionSnapshot) -> AgentRunRecord | None:
         if session.run_id is None:

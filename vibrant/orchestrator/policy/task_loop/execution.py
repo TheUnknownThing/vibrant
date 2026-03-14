@@ -8,7 +8,7 @@ from typing import Any
 from vibrant.agents.code_agent import CodeAgent
 from vibrant.agents.runtime import BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR
-from vibrant.models.agent import AgentInstanceProviderConfig, ProviderResumeHandle
+from vibrant.models.agent import AgentInstanceProviderConfig, AgentStatus, ProviderResumeHandle
 from vibrant.providers.registry import provider_transport
 
 from ...types import AttemptCompletion, AttemptExecutionView, AttemptRecord, AttemptRecoveryState, AttemptStatus
@@ -145,6 +145,45 @@ class ExecutionCoordinator:
                 return snapshot
         return None
 
+    def durable_attempt_completion(self, attempt_id: str) -> AttemptCompletion | None:
+        attempt = self.attempt_store.get(attempt_id)
+        if attempt is None:
+            return None
+        if attempt.status not in {AttemptStatus.LEASED, AttemptStatus.RUNNING}:
+            return None
+        session = self.attempt_recovery_state(attempt_id)
+        if session is None or session.live or session.run_id is None:
+            return None
+        run_record = self.agent_run_store.get(session.run_id)
+        if run_record is None:
+            return None
+
+        status = run_record.lifecycle.status
+        if status is AgentStatus.AWAITING_INPUT:
+            completion_status = "awaiting_input"
+        elif status is AgentStatus.COMPLETED:
+            completion_status = "succeeded"
+        elif status is AgentStatus.KILLED:
+            completion_status = "cancelled"
+        elif status is AgentStatus.FAILED:
+            completion_status = "failed"
+        else:
+            return None
+
+        return AttemptCompletion(
+            attempt_id=attempt.attempt_id,
+            task_id=attempt.task_id,
+            status=completion_status,
+            code_run_id=session.run_id,
+            workspace_ref=attempt.workspace_id,
+            diff_ref=None,
+            validation=None,
+            summary=run_record.outcome.summary,
+            error=run_record.outcome.error,
+            conversation_ref=attempt.conversation_id,
+            provider_events_ref=run_record.provider.canonical_event_log,
+        )
+
     async def recover_attempt(
         self,
         attempt_id: str,
@@ -201,12 +240,6 @@ class ExecutionCoordinator:
             conversation_id=conversation_id,
             run_id=agent_record.identity.run_id,
         )
-        updated_attempt = self.attempt_store.update(
-            attempt_id,
-            status=AttemptStatus.RUNNING,
-            code_run_id=agent_record.identity.run_id,
-            conversation_id=conversation_id,
-        )
         resume_handle = (
             self.agent_run_store.resume_handle_for_run(session.run_id)
             if session.run_id is not None
@@ -220,8 +253,13 @@ class ExecutionCoordinator:
                 provider_thread=resume_handle,
             )
         except Exception:
-            self.attempt_store.update(updated_attempt.attempt_id, status=AttemptStatus.FAILED)
             raise
+        updated_attempt = self.attempt_store.update(
+            attempt_id,
+            status=AttemptStatus.RUNNING,
+            code_run_id=agent_record.identity.run_id,
+            conversation_id=conversation_id,
+        )
         return self.attempt_store.get(updated_attempt.attempt_id)
 
     async def await_attempt_completion(self, attempt_id: str) -> AttemptCompletion:

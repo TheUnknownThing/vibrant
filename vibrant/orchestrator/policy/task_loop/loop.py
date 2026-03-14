@@ -191,6 +191,9 @@ class TaskLoop:
             )
             return TaskResult(task_id=attempt.task_id, outcome="failed", error=reason)
 
+        return self._consume_attempt_completion(lease, completion)
+
+    def _consume_attempt_completion(self, lease: DispatchLease, completion: AttemptCompletion) -> TaskResult:
         if completion.status == "awaiting_input":
             reason = completion.error or "Agent is awaiting input"
             self.attempt_store.update(completion.attempt_id, status=AttemptStatus.AWAITING_INPUT)
@@ -283,6 +286,23 @@ class TaskLoop:
         if workflow.status is not WorkflowStatus.EXECUTING:
             self._set_blocked_if_needed(None)
             return _AttemptRecoveryResult()
+
+        list_selector = getattr(self.execution, "list_active_attempt_executions", None)
+        active_sessions = list_selector() if callable(list_selector) else []
+        durable_completion_getter = getattr(self.execution, "durable_attempt_completion", None)
+        if callable(durable_completion_getter):
+            for session in active_sessions:
+                durable_completion = durable_completion_getter(session.attempt_id)
+                if durable_completion is None:
+                    continue
+                attempt = self.attempt_store.get(session.attempt_id)
+                if attempt is None:
+                    continue
+                lease = self._build_attempt_lease(attempt)
+                return _AttemptRecoveryResult(
+                    task_result=self._consume_attempt_completion(lease, durable_completion),
+                )
+
         recover_selector = getattr(self.execution, "next_attempt_to_recover", None)
         session = recover_selector() if callable(recover_selector) else None
         if session is None:

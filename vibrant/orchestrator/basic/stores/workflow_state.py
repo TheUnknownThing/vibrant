@@ -138,16 +138,6 @@ class WorkflowStateStore:
         else:
             mapped = GatekeeperLifecycleStatus.NOT_STARTED.value
 
-        provider_thread_id = None
-        if isinstance(raw.get("provider_thread_id"), str):
-            provider_thread_id = str(raw["provider_thread_id"])
-        elif isinstance(raw.get("provider_runtime"), dict):
-            provider_runtime = raw["provider_runtime"]
-            if isinstance(provider_runtime, dict):
-                gatekeeper_runtime = provider_runtime.get("gatekeeper")
-                if isinstance(gatekeeper_runtime, dict) and isinstance(gatekeeper_runtime.get("provider_thread_id"), str):
-                    provider_thread_id = gatekeeper_runtime["provider_thread_id"]
-
         active_turn_id = _as_non_empty_string(raw.get("active_turn_id"))
         resumable = raw.get("resumable")
         return GatekeeperSessionSnapshot(
@@ -155,9 +145,9 @@ class WorkflowStateStore:
             run_id=_as_non_empty_string(raw.get("run_id")),
             conversation_id=_as_non_empty_string(raw.get("conversation_id")),
             lifecycle_state=GatekeeperLifecycleStatus(mapped),
-            provider_thread_id=provider_thread_id,
+            provider_thread_id=None,
             active_turn_id=active_turn_id,
-            resumable=bool(provider_thread_id) or resumable is True,
+            resumable=resumable is True,
             last_error=_as_non_empty_string(raw.get("last_error")),
             updated_at=_as_non_empty_string(raw.get("updated_at")) or utc_now(),
         )

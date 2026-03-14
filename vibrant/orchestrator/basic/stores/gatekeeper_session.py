@@ -24,8 +24,6 @@ def project_gatekeeper_session(
     session: GatekeeperSessionSnapshot,
     *,
     run_record: AgentRunRecord | None = None,
-    cached_provider_thread_id: str | None = None,
-    cached_resumable: bool | None = None,
 ) -> GatekeeperSessionSnapshot:
     """Project derived resume metadata onto a session snapshot."""
 
@@ -33,12 +31,12 @@ def project_gatekeeper_session(
     provider_thread_id = (
         resume_handle.thread_id
         if resume_handle is not None
-        else _normalize_string(cached_provider_thread_id) or _normalize_string(session.provider_thread_id)
+        else _normalize_string(session.provider_thread_id)
     )
     resumable = (
         resume_handle.resumable
         if resume_handle is not None
-        else bool(cached_resumable if cached_resumable is not None else session.resumable or provider_thread_id)
+        else bool(session.resumable or provider_thread_id)
     )
     agent_id = session.agent_id
     if agent_id is None and run_record is not None:
