@@ -190,6 +190,8 @@ def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_que
         return "Paused · Review history"
     if normalized == OrchestratorStatus.COMPLETED.value:
         return "Completed · Review history"
+    if normalized == OrchestratorStatus.FAILED.value:
+        return "Failed · Review history"
     return "Gatekeeper conversation"
 
 
@@ -217,4 +219,3 @@ def _render_gatekeeper_summary(question_records: Sequence[QuestionRecord]) -> st
         rendered_blocks.append("\n".join(lines))
 
     return "\n\n".join(rendered_blocks)
-

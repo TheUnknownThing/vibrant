@@ -128,6 +128,7 @@ class AgentBase(ABC):
     ) -> dict[str, Any]:
         """Add agent-specific metadata to a canonical event before forwarding."""
         event.setdefault("agent_id", agent_record.identity.agent_id)
+        event.setdefault("run_id", agent_record.identity.run_id)
         event.setdefault("task_id", agent_record.identity.task_id)
         return event
 

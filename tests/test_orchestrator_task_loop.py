@@ -32,7 +32,8 @@ async def _queue_review_pending_attempt(orchestrator, monkeypatch):
 
     monkeypatch.setattr(orchestrator.attempt_store, "update", record_update)
 
-    async def fake_start_attempt(lease):
+    async def fake_start_attempt(prepared):
+        lease = prepared.lease
         workspace = orchestrator.workspace_service.prepare_task_workspace(lease.task_id, branch_hint=lease.branch_hint)
         attempt = orchestrator.attempt_store.create(
             task_id=lease.task_id,

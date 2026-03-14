@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from vibrant.orchestrator import OrchestratorFacade, create_orchestrator
+from vibrant.orchestrator.policy.shared.capabilities import gatekeeper_principal
 from vibrant.project_init import initialize_project
 
 
@@ -13,7 +14,7 @@ def _build_server(tmp_path: Path):
     orchestrator = create_orchestrator(tmp_path)
     facade = OrchestratorFacade(orchestrator)
     assert orchestrator.mcp_server is not None
-    return facade, orchestrator.mcp_server, orchestrator.mcp_server.gatekeeper_principal()
+    return facade, orchestrator.mcp_server, gatekeeper_principal()
 
 
 @pytest.mark.asyncio
@@ -47,7 +48,7 @@ async def test_mcp_server_supports_semantic_tools_and_resources(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_mcp_compatibility_aliases_delegate_to_new_backend(tmp_path: Path) -> None:
+async def test_mcp_surface_keeps_only_name_level_update_roadmap_alias(tmp_path: Path) -> None:
     facade, server, principal = _build_server(tmp_path)
 
     roadmap = await server.call_tool(
@@ -62,11 +63,15 @@ async def test_mcp_compatibility_aliases_delegate_to_new_backend(tmp_path: Path)
         ],
     )
     questions = await server.call_tool(
-        "vibrant.set_pending_questions",
+        "vibrant.request_user_decision",
         principal=principal,
-        questions=["Need approval for runtime API"],
+        text="Need approval for runtime API",
     )
 
     assert roadmap["tasks"][0]["id"] == "task-1"
-    assert questions[0]["text"] == "Need approval for runtime API"
+    assert questions["text"] == "Need approval for runtime API"
+    assert "vibrant.update_roadmap" in server.tool_definitions
+    assert "vibrant.set_pending_questions" not in server.tool_definitions
+    assert "vibrant.review_task_outcome" not in server.tool_definitions
+    assert "vibrant.mark_task_for_retry" not in server.tool_definitions
     assert not hasattr(facade, "set_pending_questions")

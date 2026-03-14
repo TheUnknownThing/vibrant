@@ -20,7 +20,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.registry import provider_transport, resolve_provider_adapter
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
@@ -89,7 +89,7 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         *,
         adapter_factory: Any,
         on_canonical_event: Callable[[CanonicalEvent], Any] | None = None,
-        on_agent_record_updated: Callable[[AgentRecord], Any] | None = None,
+        on_agent_record_updated: Callable[[AgentRunRecord], Any] | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
         super().__init__(
@@ -115,16 +115,26 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         kwargs["persist_extended_history"] = True
         return kwargs
 
-    def build_agent_record(self, request: GatekeeperRequest) -> AgentRecord:
-        agent_id = f"gatekeeper-{request.trigger.value}-{uuid4().hex[:8]}"
+    def build_run_record(
+        self,
+        request: GatekeeperRequest,
+        *,
+        agent_id: str | None = None,
+        role: str = AgentType.GATEKEEPER.value,
+        run_id: str | None = None,
+    ) -> AgentRunRecord:
+        resolved_agent_id = agent_id or AgentType.GATEKEEPER.value
+        resolved_run_id = run_id or f"gatekeeper-{request.trigger.value}-{uuid4().hex[:8]}"
         task_id = f"gatekeeper-{request.trigger.value}"
-        native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{agent_id}.ndjson"
-        canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
+        native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{resolved_run_id}.ndjson"
+        canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{resolved_run_id}.ndjson"
 
-        return AgentRecord(
+        return AgentRunRecord(
             identity={
-                "agent_id": agent_id,
+                "run_id": resolved_run_id,
+                "agent_id": resolved_agent_id,
                 "task_id": task_id,
+                "role": role,
                 "type": AgentType.GATEKEEPER,
             },
             lifecycle={"status": AgentStatus.SPAWNING},
@@ -137,6 +147,9 @@ class GatekeeperAgent(ReadOnlyAgentBase):
                 canonical_event_log=str(canonical_log),
             ),
         )
+
+    def build_agent_record(self, request: GatekeeperRequest) -> AgentRunRecord:
+        return self.build_run_record(request)
 
     def render_prompt(self, request: GatekeeperRequest) -> str:
         consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
@@ -179,7 +192,8 @@ class Gatekeeper:
     ) -> None:
         self.project_root = find_project_root(project_root)
         self.vibrant_dir = self.project_root / DEFAULT_CONFIG_DIR
-        self.agents_dir = self.vibrant_dir / "agents"
+        self.agent_runs_dir = self.vibrant_dir / "agent-runs"
+        self.legacy_agents_dir = self.vibrant_dir / "agents"
         self.config = config or load_config(start_path=self.project_root)
 
         self.agent = GatekeeperAgent(
@@ -194,8 +208,18 @@ class Gatekeeper:
     def render_prompt(self, request: GatekeeperRequest) -> str:
         return self.agent.render_prompt(request)
 
-    def build_agent_record(self, request: GatekeeperRequest) -> AgentRecord:
-        return self.agent.build_agent_record(request)
+    def build_run_record(
+        self,
+        request: GatekeeperRequest,
+        *,
+        agent_id: str | None = None,
+        role: str = AgentType.GATEKEEPER.value,
+        run_id: str | None = None,
+    ) -> AgentRunRecord:
+        return self.agent.build_run_record(request, agent_id=agent_id, role=role, run_id=run_id)
+
+    def build_agent_record(self, request: GatekeeperRequest) -> AgentRunRecord:
+        return self.build_run_record(request)
 
     async def run(
         self,
@@ -214,11 +238,11 @@ class Gatekeeper:
         request: GatekeeperRequest,
         *,
         resume_latest_thread: bool | None = None,
-        on_record_updated: Callable[[AgentRecord], Any] | None = None,
+        on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
         on_result: Callable[[GatekeeperRunResult], Any] | None = None,
     ) -> GatekeeperRunHandle:
         prompt = self.render_prompt(request)
-        agent_record = self.build_agent_record(request)
+        agent_record = self.build_run_record(request)
         agent_record.context.prompt_used = prompt
 
         should_resume = (
@@ -261,7 +285,7 @@ class Gatekeeper:
         question: str,
         answer: str,
         *,
-        on_record_updated: Callable[[AgentRecord], Any] | None = None,
+        on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
         on_result: Callable[[GatekeeperRunResult], Any] | None = None,
     ) -> GatekeeperRunHandle:
         request = GatekeeperRequest(
@@ -287,17 +311,22 @@ class Gatekeeper:
             await callback_result
 
     def _find_latest_gatekeeper_thread_id(self) -> str | None:
-        if not self.agents_dir.exists():
+        candidate_paths: list[Path] = []
+        if self.agent_runs_dir.exists():
+            candidate_paths.extend(sorted(self.agent_runs_dir.glob("*.json")))
+        if self.legacy_agents_dir.exists():
+            candidate_paths.extend(sorted(self.legacy_agents_dir.glob("gatekeeper-*.json")))
+        if not candidate_paths:
             return None
 
-        latest_record: AgentRecord | None = None
+        latest_record: AgentRunRecord | None = None
         latest_sort_key: tuple[datetime, datetime] | None = None
-        for path in sorted(self.agents_dir.glob("gatekeeper-*.json")):
+        for path in candidate_paths:
             try:
-                record = AgentRecord.model_validate_json(path.read_text(encoding="utf-8"))
+                record = AgentRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if record.identity.type is not AgentType.GATEKEEPER:
+            if record.identity.role != AgentType.GATEKEEPER.value:
                 continue
 
             thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
@@ -318,9 +347,9 @@ class Gatekeeper:
             latest_record.provider.resume_cursor
         )
 
-    def _persist_agent_record(self, agent_record: AgentRecord) -> None:
-        self.agents_dir.mkdir(parents=True, exist_ok=True)
-        path = self.agents_dir / f"{agent_record.identity.agent_id}.json"
+    def _persist_agent_record(self, agent_record: AgentRunRecord) -> None:
+        self.agent_runs_dir.mkdir(parents=True, exist_ok=True)
+        path = self.agent_runs_dir / f"{agent_record.identity.run_id}.json"
         _atomic_write_text(path, agent_record.model_dump_json(indent=2) + "\n")
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator import create_orchestrator
-from vibrant.orchestrator.types import QuestionPriority
+from vibrant.orchestrator.types import QuestionPriority, WorkflowStatus
 from vibrant.project_init import initialize_project
 
 
@@ -14,9 +14,9 @@ def test_workflow_policy_selects_ready_tasks_and_blocks_on_questions(tmp_path: P
 
     orchestrator.roadmap_store.add_task(TaskInfo(id="task-1", title="First"), index=0)
     orchestrator.roadmap_store.add_task(TaskInfo(id="task-2", title="Second", dependencies=["task-1"]), index=1)
-    orchestrator.workflow_state_store.update_workflow_status(orchestrator.workflow_policy.state_store.load().workflow_status.EXECUTING)
+    orchestrator.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
 
-    leases = orchestrator.workflow_policy.select_next(limit=5)
+    leases = orchestrator.task_loop.select_next(limit=5)
 
     assert [lease.task_id for lease in leases] == ["task-1"]
 
@@ -31,4 +31,4 @@ def test_workflow_policy_selects_ready_tasks_and_blocks_on_questions(tmp_path: P
         task_id=None,
     )
 
-    assert orchestrator.workflow_policy.select_next(limit=5) == []
+    assert orchestrator.task_loop.select_next(limit=5) == []

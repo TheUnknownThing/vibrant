@@ -9,7 +9,17 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from .agent import (
+    AgentInstanceProviderConfig,
+    AgentInstanceRecord,
+    AgentInstanceScope,
+    AgentProviderMetadata,
+    AgentRecord,
+    AgentRunRecord,
+    AgentStatus,
+    AgentType,
+    ProviderResumeHandle,
+)
 from .consensus import (
     ConsensusDocument,
     ConsensusPool,
@@ -109,8 +119,12 @@ class ThreadInfo(BaseModel):
 
 
 __all__ = [
+    "AgentInstanceProviderConfig",
+    "AgentInstanceRecord",
+    "AgentInstanceScope",
     "AgentProviderMetadata",
     "AgentRecord",
+    "AgentRunRecord",
     "AgentStatus",
     "AgentType",
     "AppSettings",
@@ -127,6 +141,7 @@ __all__ = [
     "OrchestratorState",
     "OrchestratorStatus",
     "ProviderRuntimeState",
+    "ProviderResumeHandle",
     "SessionConfig",
     "TaskInfo",
     "TaskLifecycle",

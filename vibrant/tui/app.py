@@ -14,7 +14,6 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
-from ..agents import PLANNING_COMPLETE_MCP_TOOL
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus
 from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT
@@ -125,7 +124,6 @@ class VibrantApp(App):
         self._known_pending_questions: tuple[str, ...] = ()
         self._paused_return_status: OrchestratorStatus | None = None
         self._banner_text: str | None = None
-        self._todo_exit_message: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -342,7 +340,11 @@ class VibrantApp(App):
             return
 
         snapshot = orchestrator.snapshot()
-        if snapshot.pending_questions or snapshot.status in {OrchestratorStatus.PAUSED, OrchestratorStatus.COMPLETED}:
+        if snapshot.pending_questions or snapshot.status in {
+            OrchestratorStatus.PAUSED,
+            OrchestratorStatus.COMPLETED,
+            OrchestratorStatus.FAILED,
+        }:
             return
 
         self._launch_roadmap_runner(notify_when_idle=False)
@@ -374,13 +376,7 @@ class VibrantApp(App):
             )
             self._refresh_gatekeeper_state()
 
-            result = await self._orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
-            if _extract_planning_completion_request(result):
-                self._transition_to_vibing(prefer_chat_history=True)
-                return
-            if self._maybe_sync_post_planning_transition():
-                return
-
+            await self._orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
             self._refresh_project_views()
             self.notify("Message sent to Gatekeeper.")
             self._set_status("Gatekeeper updated the plan")
@@ -509,10 +505,6 @@ class VibrantApp(App):
             with suppress(Exception):
                 vibing_screen.agent_output.ingest_canonical_event(event)
 
-        if _event_requests_planning_completion(event):
-            self._transition_to_vibing(prefer_chat_history=True)
-            return
-
         event_type = str(event.get("type") or "")
         if _is_gatekeeper_event(event):
             self._sync_gatekeeper_conversation_binding()
@@ -640,36 +632,6 @@ class VibrantApp(App):
         placeholder = "Tell me what you want to build" if planning_mode else InputBar.DEFAULT_PLACEHOLDER
         self.call_after_refresh(self._apply_workspace_placeholder, placeholder)
         self.refresh_bindings()
-
-    def _transition_to_vibing(self, *, prefer_chat_history: bool) -> bool:
-        orchestrator = self._orchestrator_facade
-        if orchestrator is None:
-            self.notify("Initialize a project before entering the vibing phase.", severity="warning")
-            return False
-
-        try:
-            for _ in range(2):
-                current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
-                if current_status not in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
-                    break
-                next_status = (
-                    OrchestratorStatus.PLANNING
-                    if current_status is OrchestratorStatus.INIT
-                    else OrchestratorStatus.EXECUTING
-                )
-                self._transition_workflow_state(next_status)
-        except Exception as exc:
-            logger.exception("Failed to enter vibing phase")
-            self.notify(f"Failed to enter vibing phase: {exc}", severity="error")
-            self._set_status(f"Failed to enter vibing phase: {exc}")
-            return False
-
-        self._todo_exit_message = None
-        self._sync_workspace_screen(prefer_chat_history=prefer_chat_history)
-        self.call_after_refresh(self._refresh_project_views)
-        self._set_status("Entered vibing phase")
-        self._start_automatic_workflow_if_needed()
-        return True
 
     def _refresh_project_views(self) -> None:
         self._sync_workspace_screen()
@@ -936,18 +898,7 @@ class VibrantApp(App):
         orchestrator = self._orchestrator_facade
         if orchestrator is None:
             return OrchestratorStatus.EXECUTING
-
-        consensus = orchestrator.get_consensus_document()
-        if consensus is not None:
-            mapped = {
-                ConsensusStatus.PLANNING: OrchestratorStatus.PLANNING,
-                ConsensusStatus.EXECUTING: OrchestratorStatus.EXECUTING,
-            }.get(consensus.status)
-            if mapped is not None:
-                return mapped
-
-        roadmap_document = orchestrator.snapshot().roadmap
-        return OrchestratorStatus.EXECUTING if getattr(roadmap_document, "tasks", None) else OrchestratorStatus.PLANNING
+        return orchestrator.infer_resume_status()
 
     def _transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
         orchestrator = self._orchestrator_facade
@@ -956,12 +907,6 @@ class VibrantApp(App):
 
         current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
         if current_status is next_status:
-            return
-        if next_status is OrchestratorStatus.PAUSED:
-            orchestrator.pause_workflow()
-            return
-        if current_status is OrchestratorStatus.PAUSED and next_status is OrchestratorStatus.EXECUTING:
-            orchestrator.resume_workflow()
             return
         orchestrator.transition_workflow_state(next_status)
 
@@ -1013,20 +958,6 @@ class VibrantApp(App):
         status = _normalize_orchestrator_status(self._orchestrator_facade.get_workflow_status())
         return status in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}
 
-    def _maybe_sync_post_planning_transition(self) -> bool:
-        if self._planning_screen() is None or self._orchestrator_facade is None:
-            return False
-
-        status = _normalize_orchestrator_status(self._orchestrator_facade.get_workflow_status())
-        if status in {None, OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
-            return False
-
-        self._todo_exit_message = None
-        return self._transition_to_vibing(prefer_chat_history=True)
-
-    def get_todo_exit_message(self) -> str | None:
-        return self._todo_exit_message
-
 
 def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
     if isinstance(status, OrchestratorStatus):
@@ -1057,27 +988,3 @@ def _error_text_from_event(event: dict[str, Any]) -> str:
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "").strip()
-
-
-def _extract_planning_completion_request(result: object) -> str | None:
-    events = getattr(result, "events", None)
-    if isinstance(events, list):
-        for event in events:
-            if _event_requests_planning_completion(event):
-                return PLANNING_COMPLETE_MCP_TOOL
-
-    return None
-
-
-def _event_requests_planning_completion(event: object) -> bool:
-    if not isinstance(event, dict):
-        return False
-
-    candidates = [
-        event.get("tool_name"),
-        event.get("tool"),
-        event.get("name"),
-        event.get("endpoint"),
-        event.get("method"),
-    ]
-    return any(isinstance(candidate, str) and candidate.strip() == PLANNING_COMPLETE_MCP_TOOL for candidate in candidates)

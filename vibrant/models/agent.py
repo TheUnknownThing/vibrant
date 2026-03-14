@@ -1,4 +1,4 @@
-"""Agent lifecycle models for orchestration state."""
+"""Agent instance and run models for orchestrator state."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import enum
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 
 class AgentType(str, enum.Enum):
@@ -27,10 +27,7 @@ class AgentStatus(str, enum.Enum):
 
 
 class ProviderResumeHandle(BaseModel):
-    """Durable, serializable provider resume metadata.
-
-    This is persisted state, not a live in-memory runtime handle.
-    """
+    """Durable, serializable provider resume metadata."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -48,20 +45,14 @@ class ProviderResumeHandle(BaseModel):
         return self.thread_id is None and self.thread_path is None and self.resume_cursor is None
 
     def serialize(self) -> dict[str, Any]:
-        """Return a persisted representation of this handle."""
-
         return self.model_dump(mode="python")
 
     @classmethod
     def deserialize(cls, value: object) -> "ProviderResumeHandle":
-        """Load a handle from persisted data."""
-
         return cls.model_validate(value)
 
     @classmethod
     def from_provider_metadata(cls, provider: "AgentProviderMetadata") -> "ProviderResumeHandle | None":
-        """Build a handle from provider metadata, if one exists."""
-
         if provider.resume_handle is not None:
             return provider.resume_handle
         if (
@@ -78,12 +69,6 @@ class ProviderResumeHandle(BaseModel):
         )
 
     def apply_to_metadata(self, provider: "AgentProviderMetadata") -> None:
-        """Persist this handle onto provider metadata.
-
-        Legacy mirrored fields are still updated while the refactor is in
-        progress so older callers continue to work.
-        """
-
         provider.kind = self.kind
         provider.resume_handle = self
         provider.provider_thread_id = self.thread_id
@@ -92,7 +77,7 @@ class ProviderResumeHandle(BaseModel):
 
 
 class AgentProviderMetadata(BaseModel):
-    """Provider-specific runtime metadata persisted with the agent record."""
+    """Provider-specific runtime metadata persisted with the run record."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -170,8 +155,6 @@ class AgentProviderMetadata(BaseModel):
         return data
 
     def set_resume_handle(self, handle: ProviderResumeHandle | None) -> None:
-        """Persist a provider resume handle onto this metadata model."""
-
         if handle is None:
             self.resume_handle = None
             self.provider_thread_id = None
@@ -181,14 +164,70 @@ class AgentProviderMetadata(BaseModel):
         handle.apply_to_metadata(self)
 
 
-class AgentIdentity(BaseModel):
-    """Stable identifiers for one agent run."""
+class AgentInstanceProviderConfig(BaseModel):
+    """Durable provider defaults owned by a stable agent instance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = "codex"
+    transport: str = "app-server-json-rpc"
+    runtime_mode: str = "workspace-write"
+
+    @field_validator("runtime_mode", mode="before")
+    @classmethod
+    def normalize_runtime_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _normalize_runtime_mode(value)
+        return value
+
+
+class AgentInstanceIdentity(BaseModel):
+    """Stable identifiers for one logical actor instance."""
 
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str
-    task_id: str
-    type: AgentType
+    role: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_identity(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        if "role" not in data:
+            legacy_type = data.get("type")
+            if isinstance(legacy_type, AgentType):
+                data["role"] = legacy_type.value
+            elif isinstance(legacy_type, str) and legacy_type.strip():
+                data["role"] = legacy_type
+        return data
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def normalize_role(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _normalize_role(value)
+        return value
+
+
+class AgentInstanceScope(BaseModel):
+    """Scope that determines the lifetime of a stable agent instance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope_type: str
+    scope_id: str | None = None
+
+    @field_validator("scope_type", mode="before")
+    @classmethod
+    def normalize_scope_type(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if not normalized:
+                raise ValueError("scope_type must not be empty")
+            return normalized
+        return value
 
 
 class AgentLifecycle(BaseModel):
@@ -232,8 +271,68 @@ class AgentRetryState(BaseModel):
     max_retries: int = 3
 
 
-class AgentRecord(BaseModel):
-    """Durable record describing one agent process and its provider state."""
+class AgentInstanceRecord(BaseModel):
+    """Durable record for one stable agent instance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identity: AgentInstanceIdentity
+    scope: AgentInstanceScope
+    provider: AgentInstanceProviderConfig = Field(default_factory=AgentInstanceProviderConfig)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    latest_run_id: str | None = None
+    active_run_id: str | None = None
+
+    def mark_run_updated(self, run: "AgentRunRecord") -> None:
+        if run.identity.agent_id != self.identity.agent_id:
+            raise ValueError("run does not belong to this agent instance")
+        self.latest_run_id = run.identity.run_id
+        self.active_run_id = (
+            run.identity.run_id if run.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES else None
+        )
+        self.updated_at = datetime.now(timezone.utc)
+
+
+class AgentRunIdentity(BaseModel):
+    """Stable identifiers for one execution run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    agent_id: str
+    task_id: str
+    role: str
+    type: AgentType | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_identity(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        run_id = data.get("run_id")
+        legacy_agent_id = data.get("agent_id")
+        if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(legacy_agent_id, str) and legacy_agent_id:
+            data["run_id"] = legacy_agent_id
+        if "role" not in data:
+            legacy_type = data.get("type")
+            if isinstance(legacy_type, AgentType):
+                data["role"] = legacy_type.value
+            elif isinstance(legacy_type, str) and legacy_type.strip():
+                data["role"] = legacy_type
+        return data
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def normalize_role(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _normalize_role(value)
+        return value
+
+
+class AgentRunRecord(BaseModel):
+    """Durable record describing one run and its provider state."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -257,7 +356,7 @@ class AgentRecord(BaseModel):
         AgentStatus.KILLED: set(),
     }
 
-    identity: AgentIdentity
+    identity: AgentRunIdentity
     lifecycle: AgentLifecycle = Field(default_factory=AgentLifecycle)
     context: AgentExecutionContext = Field(default_factory=AgentExecutionContext)
     outcome: AgentOutcome = Field(default_factory=AgentOutcome)
@@ -265,7 +364,7 @@ class AgentRecord(BaseModel):
     provider: AgentProviderMetadata = Field(default_factory=AgentProviderMetadata)
 
     @model_validator(mode="after")
-    def validate_record(self) -> AgentRecord:
+    def validate_record(self) -> "AgentRunRecord":
         if self.retry.retry_count < 0:
             raise ValueError("retry_count must be >= 0")
         if self.retry.max_retries < 0:
@@ -281,8 +380,6 @@ class AgentRecord(BaseModel):
         return self
 
     def can_transition_to(self, next_status: AgentStatus) -> bool:
-        """Return whether the current agent status may transition to ``next_status``."""
-
         return next_status in self.ALLOWED_TRANSITIONS[self.lifecycle.status]
 
     def transition_to(
@@ -293,8 +390,6 @@ class AgentRecord(BaseModel):
         exit_code: int | None = None,
         error: str | None = None,
     ) -> None:
-        """Transition the agent to a new status, enforcing the lifecycle graph."""
-
         if not self.can_transition_to(next_status):
             raise ValueError(
                 f"Invalid agent status transition: {self.lifecycle.status.value} -> {next_status.value}"
@@ -310,16 +405,15 @@ class AgentRecord(BaseModel):
             self.lifecycle.finished_at = finished_at or self.lifecycle.finished_at or datetime.now(timezone.utc)
 
 
+# Temporary alias while the run/instance split propagates through lower layers.
+AgentRecord = AgentRunRecord
+
+
 def _move_if_missing(data: dict[str, Any], old_key: str, new_key: str) -> None:
     if new_key not in data and old_key in data:
         data[new_key] = data.pop(old_key)
     else:
         data.pop(old_key, None)
-
-
-def _move_if_present(source: dict[str, Any], destination: dict[str, Any], key: str) -> None:
-    if key in source and key not in destination:
-        destination[key] = source.pop(key)
 
 
 def _resume_cursor_thread_id(value: object) -> str | None:
@@ -330,6 +424,13 @@ def _resume_cursor_thread_id(value: object) -> str | None:
         if isinstance(thread_id, str) and thread_id:
             return thread_id
     return None
+
+
+def _normalize_role(value: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized:
+        raise ValueError("role must not be empty")
+    return normalized
 
 
 def _normalize_runtime_mode(value: str) -> str:

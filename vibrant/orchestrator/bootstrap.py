@@ -9,7 +9,7 @@ from typing import Any
 from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 from vibrant.project_init import ensure_project_files
@@ -23,18 +23,12 @@ from .basic import (
     EventLogCapability,
     WorkspaceCapability,
 )
-from .binding import AgentSessionBindingService
-from .conversation import ConversationStore, ConversationStreamService
-from .execution.coordinator import ExecutionCoordinator
-from .gatekeeper import GatekeeperLifecycleService
-from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBackend, PolicyCommandAdapter
-from .mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
-from .policy import GatekeeperLoopState
-from .policy.gatekeeper_loop import GatekeeperUserLoop
-from .policy.task_loop import TaskLoop
-from .runtime.service import AgentRuntimeService
-from .stores import (
-    AgentRecordStore,
+from .basic.binding import AgentSessionBindingService
+from .basic.conversation import ConversationStore, ConversationStreamService
+from .basic.runtime import AgentRuntimeService
+from .basic.stores import (
+    AgentInstanceStore,
+    AgentRunStore,
     AttemptStore,
     ConsensusStore,
     QuestionStore,
@@ -42,8 +36,13 @@ from .stores import (
     RoadmapStore,
     WorkflowStateStore,
 )
+from .basic.workspace import WorkspaceService
+from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBackend, PolicyCommandAdapter
+from .interface.mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
+from .policy import GatekeeperLoopState
+from .policy.gatekeeper_loop import GatekeeperLifecycleService, GatekeeperUserLoop
+from .policy.task_loop import ExecutionCoordinator, TaskLoop
 from .types import TaskResult, WorkflowSnapshot, WorkflowStatus
-from .workspace import WorkspaceService
 
 
 @dataclass(slots=True)
@@ -93,7 +92,8 @@ class Orchestrator:
         consensus_store = ConsensusStore(vibrant_dir / "consensus.md", project_name=root.name)
         roadmap_store = RoadmapStore(vibrant_dir / "roadmap.md", project_name=root.name)
         review_ticket_store = ReviewTicketStore(vibrant_dir / "reviews.json")
-        agent_record_store = AgentRecordStore(vibrant_dir / "agents")
+        agent_instance_store = AgentInstanceStore(vibrant_dir / "agent-instances")
+        agent_run_store = AgentRunStore(vibrant_dir / "agent-runs")
         conversation_store = ConversationStore(vibrant_dir)
         conversation_stream = ConversationStreamService(conversation_store)
         runtime_service = AgentRuntimeService()
@@ -106,7 +106,8 @@ class Orchestrator:
             consensus_store=consensus_store,
             roadmap_store=roadmap_store,
             review_ticket_store=review_ticket_store,
-            agent_record_store=agent_record_store,
+            agent_instance_store=agent_instance_store,
+            agent_run_store=agent_run_store,
         )
         conversations = ConversationCapability(store=conversation_store, stream=conversation_stream)
         runtime = AgentRuntimeCapability(service=runtime_service)
@@ -121,23 +122,24 @@ class Orchestrator:
             gatekeeper=resolved_gatekeeper,
             binding_service=None,
             mcp_host=None,
+            instance_store=agent_instance_store,
+            run_store=agent_run_store,
             session_loader=lambda: workflow_state_store.load().gatekeeper_session,
             session_saver=workflow_state_store.update_gatekeeper_session,
-            on_record_updated=agent_record_store.upsert,
         )
         execution_coordinator = ExecutionCoordinator(
             project_root=root,
             config=config,
-            consensus_store=consensus_store,
-            roadmap_store=roadmap_store,
             attempt_store=attempt_store,
-            agent_store=agent_record_store,
+            agent_instance_store=agent_instance_store,
+            agent_run_store=agent_run_store,
             workspace_service=workspace_service,
             runtime_service=runtime_service,
             conversation_stream=conversation_stream,
             adapter_factory=resolved_adapter_factory,
         )
         gatekeeper_loop = GatekeeperUserLoop(
+            project_name=root.name,
             artifacts=artifacts,
             conversations=conversations,
             runtime=runtime,
@@ -150,8 +152,6 @@ class Orchestrator:
         )
 
         commands = PolicyCommandAdapter(
-            project_name=root.name,
-            artifacts=artifacts,
             gatekeeper_loop=gatekeeper_loop,
             task_loop=task_loop,
         )
@@ -167,7 +167,10 @@ class Orchestrator:
         control_plane = InterfaceControlPlane(backend=backend)
         mcp_server = OrchestratorMCPServer(backend)
         mcp_host = OrchestratorFastMCPHost(mcp_server)
-        session_binding = AgentSessionBindingService(mcp_server=mcp_server, mcp_host=mcp_host)
+        session_binding = AgentSessionBindingService(
+            mcp_server=mcp_server,
+            mcp_host=mcp_host,
+        )
         gatekeeper_lifecycle.binding_service = session_binding
         gatekeeper_lifecycle.mcp_host = mcp_host
         bindings = BindingCapability(service=session_binding)
@@ -224,8 +227,16 @@ class Orchestrator:
         return self.artifacts.review_ticket_store
 
     @property
-    def agent_record_store(self) -> AgentRecordStore:
-        return self.artifacts.agent_record_store
+    def agent_instance_store(self) -> AgentInstanceStore:
+        return self.artifacts.agent_instance_store
+
+    @property
+    def agent_run_store(self) -> AgentRunStore:
+        return self.artifacts.agent_run_store
+
+    @property
+    def agent_record_store(self) -> AgentRunStore:
+        return self.artifacts.agent_run_store
 
     @property
     def conversation_store(self) -> ConversationStore:
@@ -246,14 +257,6 @@ class Orchestrator:
     @property
     def binding_service(self) -> AgentSessionBindingService:
         return self.session_binding
-
-    @property
-    def workflow_policy(self) -> TaskLoop:
-        return self.task_loop
-
-    @property
-    def review_control(self) -> TaskLoop:
-        return self.task_loop
 
     @property
     def roadmap_path(self) -> Path:
@@ -323,10 +326,10 @@ class Orchestrator:
     def get_workflow_status(self):
         return self.control_plane.get_workflow_status()
 
-    def list_agent_records(self) -> list[AgentRecord]:
+    def list_agent_records(self) -> list[AgentRunRecord]:
         return self.control_plane.list_agent_records()
 
-    def list_active_agents(self) -> list[AgentRecord]:
+    def list_active_agents(self) -> list[AgentRunRecord]:
         return self.control_plane.list_active_agents()
 
     def list_active_attempts(self):
@@ -363,7 +366,7 @@ class Orchestrator:
         return self.control_plane.replace_roadmap(tasks=tasks, project=project)
 
     def end_planning_phase(self):
-        return self.control_plane.set_workflow_status(WorkflowStatus.EXECUTING)
+        return self.control_plane.end_planning_phase()
 
     def accept_review_ticket(self, ticket_id: str):
         return self.control_plane.accept_review_ticket(ticket_id)

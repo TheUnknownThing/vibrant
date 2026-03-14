@@ -22,6 +22,9 @@ class InterfaceControlPlane:
     def start_execution(self):
         return self.backend.commands.start_execution()
 
+    def end_planning_phase(self):
+        return self.backend.commands.end_planning_phase()
+
     def pause_workflow(self):
         return self.backend.commands.pause_workflow()
 
@@ -61,10 +64,19 @@ class InterfaceControlPlane:
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
         return self.backend.queries.subscribe_conversation(conversation_id, callback, replay=replay)
 
-    def subscribe_runtime_events(self, callback, *, agent_id: str | None = None, task_id: str | None = None, event_types=None):
+    def subscribe_runtime_events(
+        self,
+        callback,
+        *,
+        agent_id: str | None = None,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        event_types=None,
+    ):
         return self.backend.queries.subscribe_runtime_events(
             callback,
             agent_id=agent_id,
+            run_id=run_id,
             task_id=task_id,
             event_types=event_types,
         )
@@ -84,14 +96,29 @@ class InterfaceControlPlane:
     def get_task(self, task_id: str):
         return self.backend.queries.get_task(task_id)
 
+    def list_agent_instances(self):
+        return self.backend.queries.list_agent_instances()
+
+    def list_agent_runs(self):
+        return self.backend.queries.list_agent_runs()
+
+    def list_active_agent_runs(self):
+        return self.backend.queries.list_active_agent_runs()
+
+    def get_agent_instance(self, agent_id: str):
+        return self.backend.queries.get_agent_instance(agent_id)
+
+    def get_agent_run(self, run_id: str):
+        return self.backend.queries.get_agent_run(run_id)
+
     def list_agent_records(self):
-        return self.backend.queries.list_agent_records()
+        return self.list_agent_runs()
 
     def list_active_agents(self):
-        return self.backend.queries.list_active_agents()
+        return self.list_active_agent_runs()
 
-    def get_agent_record(self, agent_id: str):
-        return self.backend.queries.get_agent_record(agent_id)
+    def get_agent_record(self, run_id: str):
+        return self.get_agent_run(run_id)
 
     def list_question_records(self):
         return self.backend.queries.list_question_records()

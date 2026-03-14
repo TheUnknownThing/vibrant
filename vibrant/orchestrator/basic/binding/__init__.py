@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ...binding import AgentSessionBindingService
+from .service import AgentSessionBindingService
 from ...types import BoundAgentCapabilities
 
 
@@ -37,3 +37,6 @@ class BindingCapability:
             task_id=task_id,
             agent_type=agent_type,
         )
+
+
+__all__ = ["AgentSessionBindingService", "BindingCapability"]

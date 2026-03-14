@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
-from vibrant.models.agent import AgentRecord
-from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.models.agent import AgentRunRecord
+from vibrant.models.task import TaskStatus
 from vibrant.providers.base import CanonicalEvent
 
 if TYPE_CHECKING:
     from vibrant.providers.invocation import MCPAccessDescriptor
 
-    from .mcp.common import MCPPrincipal
+    from .interface.mcp.common import MCPPrincipal
 
 
 def utc_now() -> str:
@@ -34,13 +34,6 @@ class WorkflowStatus(str, Enum):
     FAILED = "failed"
 
 
-class GatekeeperMessageKind(str, Enum):
-    USER_MESSAGE = "user_message"
-    USER_ANSWER = "user_answer"
-    REVIEW = "review"
-    SYSTEM = "system"
-
-
 class GatekeeperLifecycleStatus(str, Enum):
     NOT_STARTED = "not_started"
     STARTING = "starting"
@@ -49,16 +42,6 @@ class GatekeeperLifecycleStatus(str, Enum):
     IDLE = "idle"
     FAILED = "failed"
     STOPPED = "stopped"
-
-
-class TaskState(str, Enum):
-    PENDING = "pending"
-    READY = "ready"
-    ACTIVE = "active"
-    REVIEW_PENDING = "review_pending"
-    BLOCKED = "blocked"
-    ACCEPTED = "accepted"
-    ESCALATED = "escalated"
 
 
 class AttemptStatus(str, Enum):
@@ -80,6 +63,9 @@ class QuestionPriority(str, Enum):
     NORMAL = "normal"
 
 
+QuestionScope = str
+
+
 class QuestionStatus(str, Enum):
     PENDING = "pending"
     WITHDRAWN = "withdrawn"
@@ -96,6 +82,7 @@ class ReviewTicketStatus(str, Enum):
 @dataclass(slots=True)
 class GatekeeperSessionSnapshot:
     agent_id: str | None = None
+    run_id: str | None = None
     conversation_id: str | None = None
     lifecycle_state: GatekeeperLifecycleStatus = GatekeeperLifecycleStatus.NOT_STARTED
     provider_thread_id: str | None = None
@@ -106,17 +93,6 @@ class GatekeeperSessionSnapshot:
 
 
 @dataclass(slots=True)
-class GatekeeperSubmission:
-    submission_id: str
-    session: GatekeeperSessionSnapshot
-    conversation_id: str
-    agent_id: str | None
-    accepted: bool
-    active_turn_id: str | None
-    error: str | None = None
-
-
-@dataclass(slots=True)
 class BoundAgentCapabilities:
     principal: MCPPrincipal
     tool_names: list[str]
@@ -124,14 +100,6 @@ class BoundAgentCapabilities:
     provider_binding: Mapping[str, Any]
     access: MCPAccessDescriptor | None = None
     mcp_server: Any | None = None
-
-
-@dataclass(slots=True)
-class DispatchLease:
-    task_id: str
-    lease_id: str
-    task_definition_version: int
-    branch_hint: str | None = None
 
 
 @dataclass(slots=True)
@@ -212,14 +180,6 @@ class ReviewTicket:
 
 
 @dataclass(slots=True)
-class ReviewResolutionCommand:
-    decision: Literal["accept", "retry", "escalate"]
-    failure_reason: str | None = None
-    prompt_patch: str | None = None
-    acceptance_patch: Sequence[str] | None = None
-
-
-@dataclass(slots=True)
 class ReviewResolutionRecord:
     ticket_id: str
     task_id: str
@@ -239,7 +199,7 @@ class QuestionRecord:
     source_agent_id: str | None
     source_conversation_id: str | None
     source_turn_id: str | None
-    blocking_scope: Literal["planning", "workflow", "task", "review"]
+    blocking_scope: str
     task_id: str | None = None
     status: QuestionStatus = QuestionStatus.PENDING
     answer: str | None = None
@@ -255,6 +215,7 @@ class AgentStreamEvent:
     source_event_id: str | None
     sequence: int
     agent_id: str | None
+    run_id: str | None
     task_id: str | None
     turn_id: str | None
     item_id: str | None
@@ -330,6 +291,7 @@ class WorkflowSnapshot:
 @dataclass(slots=True)
 class RuntimeHandleSnapshot:
     agent_id: str
+    run_id: str
     state: str
     provider_thread_id: str | None
     awaiting_input: bool
@@ -338,7 +300,7 @@ class RuntimeHandleSnapshot:
 
 @dataclass(slots=True)
 class RuntimeExecutionResult:
-    agent_record: AgentRecord
+    agent_record: AgentRunRecord
     events: list[CanonicalEvent] = field(default_factory=list)
     summary: str | None = None
     error: str | None = None
@@ -401,8 +363,10 @@ class AgentOutput:
 @dataclass(slots=True)
 class AgentSnapshotIdentity:
     agent_id: str
+    run_id: str
     task_id: str
-    agent_type: str
+    role: str
+    agent_type: str | None = None
 
 
 @dataclass(slots=True)
@@ -455,7 +419,7 @@ class TaskResult:
     task_id: str | None
     outcome: str
     task_status: TaskStatus | None = None
-    agent_record: AgentRecord | None = None
+    agent_record: AgentRunRecord | None = None
     gatekeeper_result: NormalizedRunResult | None = None
     merge_result: MergeOutcome | None = None
     events: list[CanonicalEvent] = field(default_factory=list)
@@ -470,18 +434,3 @@ def dataclass_dict(value: Any) -> Any:
     if hasattr(value, "__dataclass_fields__"):
         return asdict(value)
     return value
-
-
-def task_state_from_task(task: TaskInfo) -> TaskState:
-    """Map the current roadmap task model into the new workflow state model."""
-
-    mapping = {
-        TaskStatus.PENDING: TaskState.PENDING,
-        TaskStatus.QUEUED: TaskState.READY,
-        TaskStatus.IN_PROGRESS: TaskState.ACTIVE,
-        TaskStatus.COMPLETED: TaskState.REVIEW_PENDING,
-        TaskStatus.ACCEPTED: TaskState.ACCEPTED,
-        TaskStatus.FAILED: TaskState.BLOCKED,
-        TaskStatus.ESCALATED: TaskState.ESCALATED,
-    }
-    return mapping[task.status]

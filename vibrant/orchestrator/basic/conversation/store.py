@@ -1,0 +1,130 @@
+"""Durable storage for processed conversation frames."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from ..json_store import read_json, write_json
+from ...types import AgentStreamEvent, utc_now
+
+
+@dataclass(slots=True)
+class ConversationManifest:
+    conversation_id: str
+    agent_ids: list[str] = field(default_factory=list)
+    task_ids: list[str] = field(default_factory=list)
+    provider_thread_id: str | None = None
+    active_turn_id: str | None = None
+    updated_at: str = field(default_factory=utc_now)
+    next_sequence: int = 1
+
+
+class ConversationStore:
+    """Persist conversation manifests and stream frames under `.vibrant/conversations/`."""
+
+    def __init__(self, vibrant_dir: str | Path) -> None:
+        self.vibrant_dir = Path(vibrant_dir)
+        self.base_dir = self.vibrant_dir / "conversations"
+        self.frames_dir = self.base_dir / "frames"
+        self.index_path = self.base_dir / "index.json"
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.frames_dir.mkdir(parents=True, exist_ok=True)
+
+    def bind_agent(
+        self,
+        *,
+        conversation_id: str,
+        agent_id: str,
+        task_id: str | None,
+        provider_thread_id: str | None = None,
+    ) -> ConversationManifest:
+        manifest = self._ensure_manifest(conversation_id)
+        if agent_id not in manifest.agent_ids:
+            manifest.agent_ids.append(agent_id)
+        if task_id and task_id not in manifest.task_ids:
+            manifest.task_ids.append(task_id)
+        if provider_thread_id:
+            manifest.provider_thread_id = provider_thread_id
+        manifest.updated_at = utc_now()
+        self._save_manifest(manifest)
+        return manifest
+
+    def allocate_sequence(self, conversation_id: str) -> int:
+        manifest = self._ensure_manifest(conversation_id)
+        sequence = manifest.next_sequence
+        manifest.next_sequence += 1
+        manifest.updated_at = utc_now()
+        self._save_manifest(manifest)
+        return sequence
+
+    def append_frame(self, event: AgentStreamEvent) -> AgentStreamEvent:
+        manifest = self._ensure_manifest(event.conversation_id)
+        manifest.updated_at = event.created_at
+        if event.agent_id and event.agent_id not in manifest.agent_ids:
+            manifest.agent_ids.append(event.agent_id)
+        if event.task_id and event.task_id not in manifest.task_ids:
+            manifest.task_ids.append(event.task_id)
+        if event.turn_id is not None:
+            manifest.active_turn_id = event.turn_id
+        self._save_manifest(manifest)
+
+        payload = asdict(event)
+        with self._frames_path(event.conversation_id).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True))
+            handle.write("\n")
+        return event
+
+    def load_frames(self, conversation_id: str) -> list[AgentStreamEvent]:
+        path = self._frames_path(conversation_id)
+        if not path.exists():
+            return []
+        frames: list[AgentStreamEvent] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if not raw:
+                continue
+            payload = json.loads(raw)
+            payload.setdefault("run_id", None)
+            frames.append(AgentStreamEvent(**payload))
+        return frames
+
+    def manifest(self, conversation_id: str) -> ConversationManifest | None:
+        raw = self._index().get(conversation_id)
+        if raw is None:
+            return None
+        return ConversationManifest(**raw)
+
+    def list_manifests(self) -> list[ConversationManifest]:
+        return [ConversationManifest(**payload) for payload in self._index().values()]
+
+    def update_active_turn(self, conversation_id: str, turn_id: str | None) -> ConversationManifest:
+        manifest = self._ensure_manifest(conversation_id)
+        manifest.active_turn_id = turn_id
+        manifest.updated_at = utc_now()
+        self._save_manifest(manifest)
+        return manifest
+
+    def _ensure_manifest(self, conversation_id: str) -> ConversationManifest:
+        manifest = self.manifest(conversation_id)
+        if manifest is not None:
+            return manifest
+        manifest = ConversationManifest(conversation_id=conversation_id)
+        self._save_manifest(manifest)
+        return manifest
+
+    def _save_manifest(self, manifest: ConversationManifest) -> None:
+        index = self._index()
+        index[manifest.conversation_id] = asdict(manifest)
+        write_json(self.index_path, index)
+
+    def _index(self) -> dict[str, dict[str, Any]]:
+        payload = read_json(self.index_path, default={})
+        if isinstance(payload, dict):
+            return payload
+        return {}
+
+    def _frames_path(self, conversation_id: str) -> Path:
+        return self.frames_dir / f"{conversation_id}.jsonl"

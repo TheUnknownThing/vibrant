@@ -4,6 +4,7 @@ from pathlib import Path
 
 from vibrant.models.task import TaskInfo
 from vibrant.orchestrator import OrchestratorFacade, create_orchestrator
+from vibrant.orchestrator.types import WorkflowStatus
 from vibrant.project_init import initialize_project
 
 
@@ -44,6 +45,8 @@ def test_ui_surface_excludes_mcp_only_compatibility_aliases(tmp_path: Path) -> N
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
+    assert not hasattr(orchestrator, "workflow_policy")
+    assert not hasattr(orchestrator, "review_control")
     assert not hasattr(orchestrator, "set_pending_questions")
     assert not hasattr(orchestrator, "review_task_outcome")
     assert not hasattr(orchestrator, "mark_task_for_retry")
@@ -67,3 +70,12 @@ def test_workflow_state_commands_are_sync(tmp_path: Path) -> None:
     assert started.status.value == "executing"
     assert paused.status.value == "paused"
     assert resumed.status.value == "executing"
+
+
+def test_facade_surfaces_failed_workflow_without_paused_fallback(tmp_path: Path) -> None:
+    orchestrator = _prepare_project(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+
+    orchestrator.control_plane.set_workflow_status(WorkflowStatus.FAILED)
+
+    assert facade.get_workflow_status().value == "failed"

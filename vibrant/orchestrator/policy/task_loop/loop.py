@@ -3,26 +3,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from uuid import uuid4
 
-from vibrant.models.task import TaskStatus
+from vibrant.models.task import TaskInfo, TaskStatus
 
 from ...basic import ArtifactsCapability, WorkspaceCapability
-from ...execution.coordinator import ExecutionCoordinator
 from ...types import (
     AttemptStatus,
-    DispatchLease,
     MergeOutcome,
-    ReviewResolutionCommand,
     ReviewResolutionRecord,
     ReviewTicket,
     TaskResult,
-    TaskState,
     ValidationOutcome,
     WorkflowStatus,
-    task_state_from_task,
 )
-from ..models import TaskLoopSnapshot, TaskLoopStage
+from ..shared.workflow import apply_workflow_status
+from .execution import ExecutionCoordinator
+from .models import DispatchLease, ReviewResolutionCommand, TaskLoopSnapshot, TaskLoopStage, TaskState
+from .prompting import prepare_task_execution, retry_definition_patch
+from .projections import project_task_state, workflow_is_complete
+from .reviews import review_ticket_status_for_resolution
+from .selection import (
+    accepted_task_ids,
+    build_dispatch_lease,
+    can_dispatch_task,
+    execution_slots_available,
+    task_execution_block_reason,
+    task_needs_ready_projection,
+)
 
 
 @dataclass(slots=True)
@@ -53,46 +60,37 @@ class TaskLoop:
 
     def select_next(self, *, limit: int) -> list[DispatchLease]:
         workflow = self.artifacts.workflow_snapshot()
+        reason = task_execution_block_reason(workflow)
+        if reason is not None:
+            self._set_blocked_if_needed(reason)
+            return []
         if workflow.status is not WorkflowStatus.EXECUTING:
             self._set_blocked_if_needed(None)
             return []
-        if workflow.pending_question_ids:
-            self._set_blocked_if_needed("Pending user input blocks task execution.")
-            return []
-        if workflow.gatekeeper.lifecycle_state.value in {"failed", "awaiting_user"}:
-            reason = "Gatekeeper is awaiting input." if workflow.gatekeeper.lifecycle_state.value == "awaiting_user" else (
-                workflow.gatekeeper.last_error or "Gatekeeper is in a failed state."
-            )
-            self._set_blocked_if_needed(reason)
-            return []
 
-        available = workflow.concurrency_limit - len(workflow.active_attempt_ids)
+        available = execution_slots_available(workflow)
         if available <= 0:
             self._set_blocked_if_needed("No execution slots available.")
             return []
 
         selected: list[DispatchLease] = []
         document = self.artifacts.roadmap_store.load()
-        accepted = {task.id for task in document.tasks if task.status is TaskStatus.ACCEPTED}
+        accepted = accepted_task_ids(document.tasks)
         for task in document.tasks:
             if len(selected) >= min(limit, available):
                 break
-            if task.id in self._leased_task_ids:
+            if not can_dispatch_task(
+                task,
+                leased_task_ids=self._leased_task_ids,
+                has_active_attempt=self.artifacts.attempt_store.get_active_by_task(task.id) is not None,
+                accepted_task_ids=accepted,
+            ):
                 continue
-            if self.artifacts.attempt_store.get_active_by_task(task.id) is not None:
-                continue
-            task_state = task_state_from_task(task)
-            if task_state not in {TaskState.PENDING, TaskState.READY}:
-                continue
-            if any(dependency not in accepted for dependency in task.dependencies):
-                continue
-            if task_state is TaskState.PENDING:
-                self.artifacts.roadmap_store.record_task_state(task.id, TaskState.READY)
-            lease = DispatchLease(
-                task_id=task.id,
-                lease_id=f"lease-{uuid4()}",
-                task_definition_version=self.artifacts.roadmap_store.definition_version(task.id),
-                branch_hint=task.branch,
+            if task_needs_ready_projection(task):
+                self._record_task_state(task.id, TaskState.READY)
+            lease = build_dispatch_lease(
+                task,
+                definition_version=self.artifacts.roadmap_store.definition_version(task.id),
             )
             self._leased_task_ids.add(task.id)
             selected.append(lease)
@@ -116,9 +114,16 @@ class TaskLoop:
             blocking_reason=None,
         )
 
-        attempt = await self.execution.start_attempt(lease)
+        attempt = await self.execution.start_attempt(
+            prepare_task_execution(
+                lease=lease,
+                roadmap_store=self.artifacts.roadmap_store,
+                consensus_store=self.artifacts.consensus_store,
+                project_name=self.artifacts.consensus_store.project_name,
+            )
+        )
         self._leased_task_ids.discard(attempt.task_id)
-        self.artifacts.roadmap_store.record_task_state(
+        self._record_task_state(
             attempt.task_id,
             TaskState.ACTIVE,
             active_attempt_id=attempt.attempt_id,
@@ -134,7 +139,7 @@ class TaskLoop:
         completion = await self.execution.await_attempt_completion(attempt.attempt_id)
         if completion.status == "awaiting_input":
             reason = completion.error or "Agent is awaiting input"
-            self.artifacts.roadmap_store.record_task_state(
+            self._record_task_state(
                 completion.task_id,
                 TaskState.BLOCKED,
                 active_attempt_id=completion.attempt_id,
@@ -156,7 +161,7 @@ class TaskLoop:
 
         if completion.status in {"failed", "cancelled"}:
             reason = completion.error or "Attempt cancelled"
-            self.artifacts.roadmap_store.record_task_state(
+            self._record_task_state(
                 completion.task_id,
                 TaskState.BLOCKED,
                 active_attempt_id=completion.attempt_id,
@@ -190,7 +195,7 @@ class TaskLoop:
             summary="Validation not configured yet.",
         )
         self.artifacts.attempt_store.update(completion.attempt_id, status=AttemptStatus.REVIEW_PENDING)
-        self.artifacts.roadmap_store.record_task_state(
+        self._record_task_state(
             completion.task_id,
             TaskState.REVIEW_PENDING,
             active_attempt_id=completion.attempt_id,
@@ -242,13 +247,10 @@ class TaskLoop:
         prompt_patch: str | None = None,
         acceptance_patch: list[str] | None = None,
     ) -> ReviewResolutionRecord:
-        if prompt_patch is not None or acceptance_patch is not None:
+        patch = retry_definition_patch(prompt_patch=prompt_patch, acceptance_patch=acceptance_patch)
+        if patch:
             ticket = self._require_ticket(ticket_id)
-            self.artifacts.roadmap_store.update_task_definition(
-                ticket.task_id,
-                prompt=prompt_patch,
-                acceptance_criteria=acceptance_patch,
-            )
+            self.artifacts.roadmap_store.update_task_definition(ticket.task_id, patch)
         return self._resolve_review_ticket(
             ticket_id,
             ReviewResolutionCommand(
@@ -264,62 +266,6 @@ class TaskLoop:
             ticket_id,
             ReviewResolutionCommand(decision="escalate", failure_reason=reason),
         )
-
-    def review_task_outcome(
-        self,
-        task_id: str,
-        *,
-        decision: str,
-        failure_reason: str | None = None,
-    ):
-        ticket = next((item for item in self.artifacts.review_ticket_store.list_pending() if item.task_id == task_id), None)
-        if ticket is None:
-            raise KeyError(f"No pending review ticket for task {task_id}")
-        normalized = decision.strip().lower()
-        if normalized in {"accept", "accepted", "approve", "approved"}:
-            self.accept_review_ticket(ticket.ticket_id)
-        elif normalized in {"retry", "reject", "needs_changes", "rejected"}:
-            self.retry_review_ticket(ticket.ticket_id, failure_reason=failure_reason or "Retry requested")
-        else:
-            self.escalate_review_ticket(ticket.ticket_id, reason=failure_reason or "Task escalated")
-        task = self.artifacts.roadmap_store.get_task(task_id)
-        if task is None:
-            raise KeyError(f"Task not found after review: {task_id}")
-        return task
-
-    def mark_task_for_retry(
-        self,
-        task_id: str,
-        *,
-        failure_reason: str,
-        prompt: str | None = None,
-        acceptance_criteria: list[str] | None = None,
-    ):
-        ticket = next((item for item in self.artifacts.review_ticket_store.list_pending() if item.task_id == task_id), None)
-        if ticket is not None:
-            self.retry_review_ticket(
-                ticket.ticket_id,
-                failure_reason=failure_reason,
-                prompt_patch=prompt,
-                acceptance_patch=acceptance_criteria,
-            )
-        else:
-            if prompt is not None or acceptance_criteria is not None:
-                self.artifacts.roadmap_store.update_task_definition(
-                    task_id,
-                    prompt=prompt,
-                    acceptance_criteria=acceptance_criteria,
-                )
-            self.artifacts.roadmap_store.record_task_state(
-                task_id,
-                TaskState.READY,
-                active_attempt_id=None,
-                failure_reason=failure_reason,
-            )
-        task = self.artifacts.roadmap_store.get_task(task_id)
-        if task is None:
-            raise KeyError(f"Task not found after retry mark: {task_id}")
-        return task
 
     def _resolve_review_ticket(
         self,
@@ -350,7 +296,7 @@ class TaskLoop:
             merge_outcome = self.workspace.merge_task_result(workspace)
             if merge_outcome.status == "merged":
                 self.artifacts.attempt_store.update(ticket.attempt_id, status=AttemptStatus.ACCEPTED)
-                self.artifacts.roadmap_store.record_task_state(
+                self._record_task_state(
                     ticket.task_id,
                     TaskState.ACCEPTED,
                     active_attempt_id=None,
@@ -378,7 +324,7 @@ class TaskLoop:
                 next_active_attempt_id = ticket.attempt_id
         elif command.decision == "retry":
             self.artifacts.attempt_store.update(ticket.attempt_id, status=AttemptStatus.RETRY_PENDING)
-            self.artifacts.roadmap_store.record_task_state(
+            self._record_task_state(
                 ticket.task_id,
                 TaskState.READY,
                 active_attempt_id=None,
@@ -386,7 +332,7 @@ class TaskLoop:
             next_active_lease = None
         else:
             self.artifacts.attempt_store.update(ticket.attempt_id, status=AttemptStatus.ESCALATED)
-            self.artifacts.roadmap_store.record_task_state(
+            self._record_task_state(
                 ticket.task_id,
                 TaskState.ESCALATED,
                 active_attempt_id=None,
@@ -404,7 +350,12 @@ class TaskLoop:
             merge_outcome=merge_outcome,
             follow_up_ticket_id=follow_up_ticket_id,
         )
-        self.artifacts.review_ticket_store.resolve(ticket_id, resolution, reason=command.failure_reason)
+        self.artifacts.review_ticket_store.resolve(
+            ticket_id,
+            resolution,
+            status=review_ticket_status_for_resolution(command),
+            reason=command.failure_reason,
+        )
         self._snapshot = TaskLoopSnapshot(
             active_lease=next_active_lease,
             active_attempt_id=next_active_attempt_id,
@@ -433,8 +384,8 @@ class TaskLoop:
 
     def _maybe_complete_workflow(self) -> None:
         document = self.artifacts.roadmap_store.load()
-        if document.tasks and all(task.status is TaskStatus.ACCEPTED for task in document.tasks):
-            self.artifacts.workflow_state_store.update_workflow_status(WorkflowStatus.COMPLETED)
+        if workflow_is_complete(document.tasks):
+            apply_workflow_status(self.artifacts, WorkflowStatus.COMPLETED)
             self._snapshot = TaskLoopSnapshot(
                 active_lease=None,
                 active_attempt_id=None,
@@ -462,3 +413,24 @@ class TaskLoop:
             pending_review_ticket_ids=tuple(item.ticket_id for item in self.artifacts.review_ticket_store.list_pending()),
             blocking_reason=reason,
         )
+
+    def _record_task_state(
+        self,
+        task_id: str,
+        state: TaskState,
+        *,
+        active_attempt_id: str | None = None,
+        failure_reason: str | None = None,
+    ) -> TaskInfo:
+        task = self._require_task(task_id)
+        projected = project_task_state(task, state=state, failure_reason=failure_reason)
+        return self.artifacts.roadmap_store.replace_task(
+            projected,
+            active_attempt_id=active_attempt_id,
+        )
+
+    def _require_task(self, task_id: str) -> TaskInfo:
+        task = self.artifacts.roadmap_store.get_task(task_id)
+        if task is None:
+            raise KeyError(f"Task not found: {task_id}")
+        return task

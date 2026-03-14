@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..basic import ArtifactsCapability, ConversationCapability, EventLogCapability
+from ..basic.runtime import AgentRuntimeService
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop import TaskLoop
-from ..runtime.service import AgentRuntimeService
 
 
 @dataclass(slots=True)
@@ -48,12 +48,14 @@ class BasicQueryAdapter:
         callback,
         *,
         agent_id: str | None = None,
+        run_id: str | None = None,
         task_id: str | None = None,
         event_types: Sequence[str] | None = None,
     ):
         return self.runtime_service.subscribe_canonical_events(
             callback,
             agent_id=agent_id,
+            run_id=run_id,
             task_id=task_id,
             event_types=event_types,
         )
@@ -70,14 +72,29 @@ class BasicQueryAdapter:
     def get_task(self, task_id: str):
         return self.artifacts.roadmap_store.get_task(task_id)
 
+    def list_agent_instances(self):
+        return self.artifacts.agent_instance_store.list()
+
+    def list_agent_runs(self):
+        return self.artifacts.agent_run_store.list()
+
+    def list_active_agent_runs(self):
+        return self.artifacts.agent_run_store.list_active()
+
+    def get_agent_instance(self, agent_id: str):
+        return self.artifacts.agent_instance_store.get(agent_id)
+
+    def get_agent_run(self, run_id: str):
+        return self.artifacts.agent_run_store.get(run_id)
+
     def list_agent_records(self):
-        return self.artifacts.agent_record_store.list()
+        return self.list_agent_runs()
 
     def list_active_agents(self):
-        return self.artifacts.agent_record_store.list_active()
+        return self.list_active_agent_runs()
 
-    def get_agent_record(self, agent_id: str):
-        return self.artifacts.agent_record_store.get(agent_id)
+    def get_agent_record(self, run_id: str):
+        return self.get_agent_run(run_id)
 
     def list_question_records(self):
         return self.artifacts.question_store.list()

@@ -59,6 +59,7 @@ class TaskInfo(BaseModel):
     acceptance_criteria: list[str] = Field(default_factory=list)
     status: TaskStatus = TaskStatus.PENDING
     branch: str | None = None
+    agent_role: str | None = None
     retry_count: int = 0
     max_retries: int = 3
     prompt: str | None = None
@@ -81,6 +82,9 @@ class TaskInfo(BaseModel):
             raise ValueError("retry_count cannot exceed max_retries")
         if self.status == TaskStatus.ESCALATED and self.retry_count < self.max_retries:
             raise ValueError("escalated tasks must have exhausted retries")
+        if self.agent_role is not None:
+            normalized_role = self.agent_role.strip().lower()
+            self.agent_role = normalized_role or None
         return self
 
     def can_transition_to(self, next_status: TaskStatus) -> bool:

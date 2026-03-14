@@ -1,4 +1,4 @@
-"""Command adapter over policy loops and artifact mutations."""
+"""Command adapter over policy loops and basic stores."""
 
 from __future__ import annotations
 
@@ -9,28 +9,15 @@ from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.task import TaskInfo
 
-from ..basic import ArtifactsCapability
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop import TaskLoop
 from ..types import QuestionPriority, ReviewResolutionRecord, WorkflowSnapshot, WorkflowStatus
-
-
-_WORKFLOW_TO_CONSENSUS = {
-    WorkflowStatus.INIT: ConsensusStatus.INIT,
-    WorkflowStatus.PLANNING: ConsensusStatus.PLANNING,
-    WorkflowStatus.EXECUTING: ConsensusStatus.EXECUTING,
-    WorkflowStatus.PAUSED: ConsensusStatus.PAUSED,
-    WorkflowStatus.COMPLETED: ConsensusStatus.COMPLETED,
-    WorkflowStatus.FAILED: ConsensusStatus.FAILED,
-}
 
 
 @dataclass(slots=True)
 class PolicyCommandAdapter:
     """Expose explicit command operations for first-party interfaces."""
 
-    project_name: str
-    artifacts: ArtifactsCapability
     gatekeeper_loop: GatekeeperUserLoop
     task_loop: TaskLoop
 
@@ -47,18 +34,19 @@ class PolicyCommandAdapter:
         return await self.gatekeeper_loop.stop()
 
     def set_workflow_status(self, status: WorkflowStatus) -> WorkflowSnapshot:
-        self.artifacts.workflow_state_store.update_workflow_status(status)
-        self.artifacts.consensus_store.set_status_projection(_WORKFLOW_TO_CONSENSUS[status])
-        return self.artifacts.workflow_snapshot()
+        return self.gatekeeper_loop.transition_workflow(status)
 
     def start_execution(self) -> WorkflowSnapshot:
-        return self.set_workflow_status(WorkflowStatus.EXECUTING)
+        return self.gatekeeper_loop.end_planning()
+
+    def end_planning_phase(self) -> WorkflowSnapshot:
+        return self.gatekeeper_loop.end_planning()
 
     def pause_workflow(self) -> WorkflowSnapshot:
-        return self.set_workflow_status(WorkflowStatus.PAUSED)
+        return self.gatekeeper_loop.transition_workflow(WorkflowStatus.PAUSED)
 
     def resume_workflow(self) -> WorkflowSnapshot:
-        return self.set_workflow_status(WorkflowStatus.EXECUTING)
+        return self.gatekeeper_loop.resume_workflow()
 
     async def run_next_task(self):
         return await self.task_loop.run_next_task()
@@ -67,20 +55,16 @@ class PolicyCommandAdapter:
         return await self.task_loop.run_until_blocked()
 
     def add_task(self, task: TaskInfo, *, index: int | None = None) -> TaskInfo:
-        self.artifacts.roadmap_store.add_task(task, index=index)
-        created = self.artifacts.roadmap_store.get_task(task.id)
-        if created is None:
-            raise KeyError(task.id)
-        return created
+        return self.gatekeeper_loop.add_task(task, index=index)
 
     def update_task_definition(self, task_id: str, **patch: Any) -> TaskInfo:
-        return self.artifacts.roadmap_store.update_task_definition(task_id, patch)
+        return self.gatekeeper_loop.update_task_definition(task_id, **patch)
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
-        return self.artifacts.roadmap_store.reorder_tasks(ordered_task_ids)
+        return self.gatekeeper_loop.reorder_tasks(ordered_task_ids)
 
     def replace_roadmap(self, *, tasks: list[TaskInfo], project: str | None = None) -> RoadmapDocument:
-        return self.artifacts.roadmap_store.replace(tasks=tasks, project=project or self.project_name)
+        return self.gatekeeper_loop.replace_roadmap(tasks=tasks, project=project)
 
     def update_consensus(
         self,
@@ -88,18 +72,13 @@ class PolicyCommandAdapter:
         status: ConsensusStatus | str | None = None,
         context: str | None = None,
     ) -> ConsensusDocument:
-        document = self.artifacts.consensus_store.load() or ConsensusDocument(project=self.project_name)
-        if context is not None:
-            document.context = context
-        if status is not None:
-            document.status = status if isinstance(status, ConsensusStatus) else ConsensusStatus(str(status).upper())
-        return self.artifacts.consensus_store.write(document)
+        return self.gatekeeper_loop.update_consensus(status=status, context=context)
 
     def append_decision(self, **kwargs: Any) -> ConsensusDocument:
-        return self.artifacts.consensus_store.append_decision(**kwargs)
+        return self.gatekeeper_loop.append_decision(**kwargs)
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
-        return self.artifacts.consensus_store.write(document)
+        return self.gatekeeper_loop.write_consensus_document(document)
 
     def request_user_decision(
         self,
@@ -113,7 +92,7 @@ class PolicyCommandAdapter:
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
     ):
-        return self.artifacts.question_store.create(
+        return self.gatekeeper_loop.request_user_decision(
             text=text,
             priority=priority,
             source_role=source_role,
@@ -125,36 +104,7 @@ class PolicyCommandAdapter:
         )
 
     def withdraw_question(self, question_id: str, *, reason: str | None = None):
-        return self.artifacts.question_store.withdraw(question_id, reason=reason)
-
-    def set_pending_questions(
-        self,
-        questions: list[str],
-        *,
-        source_agent_id: str | None = None,
-        source_role: str = "gatekeeper",
-    ):
-        pending = {record.text: record for record in self.artifacts.question_store.list_pending()}
-        desired = {question.strip() for question in questions if question.strip()}
-
-        records = []
-        for text in desired:
-            existing = pending.get(text)
-            if existing is not None:
-                records.append(existing)
-                continue
-            records.append(
-                self.request_user_decision(
-                    text,
-                    source_agent_id=source_agent_id,
-                    source_role=source_role,
-                )
-            )
-
-        for text, record in pending.items():
-            if text not in desired:
-                self.artifacts.question_store.withdraw(record.question_id, reason="Superseded by compatibility sync")
-        return records
+        return self.gatekeeper_loop.withdraw_question(question_id, reason=reason)
 
     def accept_review_ticket(self, ticket_id: str) -> ReviewResolutionRecord:
         return self.task_loop.accept_review_ticket(ticket_id)
@@ -176,21 +126,3 @@ class PolicyCommandAdapter:
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> ReviewResolutionRecord:
         return self.task_loop.escalate_review_ticket(ticket_id, reason=reason)
-
-    def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None):
-        return self.task_loop.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
-
-    def mark_task_for_retry(
-        self,
-        task_id: str,
-        *,
-        failure_reason: str,
-        prompt: str | None = None,
-        acceptance_criteria: list[str] | None = None,
-    ):
-        return self.task_loop.mark_task_for_retry(
-            task_id,
-            failure_reason=failure_reason,
-            prompt=prompt,
-            acceptance_criteria=acceptance_criteria,
-        )

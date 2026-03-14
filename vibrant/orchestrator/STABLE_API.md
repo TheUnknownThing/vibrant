@@ -241,8 +241,8 @@ The stable conversation contract requires:
 The redesign requires an explicit migration path. The following constraints are
 stable requirements during that migration:
 
-1. First-party consumers must have a migration path before compatibility names are removed.
-2. Compatibility aliases must forward into the new semantic handlers.
+1. First-party consumers must have a migration path before stable consumer APIs change.
+2. Legacy semantic aliases are not part of the stable contract and should be removed as consumers migrate.
 3. Legacy authority paths are deprecated and must not define the durable model.
 4. Provider logs may remain exposed for debugging, but they cannot be treated as the primary UI history.
 5. Workflow status and consensus metadata must not form a two-way synchronization loop.

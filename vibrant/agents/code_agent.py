@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.registry import provider_transport
 
 from .base import AgentBase
@@ -26,33 +26,37 @@ class CodeAgent(AgentBase):
     def get_agent_type(self) -> AgentType:
         return AgentType.CODE
 
-    def build_agent_record(
+    def build_run_record(
         self,
         *,
         task: TaskInfo,
         worktree: GitWorktreeInfo,
         prompt: str,
+        agent_id: str | None = None,
+        role: str | None = None,
+        run_id: str | None = None,
         vibrant_dir: str | Path | None = None,
-    ) -> AgentRecord:
-        """Create an AgentRecord for a code agent run.
+    ) -> AgentRunRecord:
+        """Create an AgentRunRecord for one code-agent execution."""
 
-        This is the canonical factory for code agent records, extracted from
-        the legacy ``AgentRegistry.create_code_agent_record``.
-        """
-        agent_id = f"agent-{task.id}-{uuid4().hex[:8]}"
+        resolved_agent_id = agent_id or f"agent-{task.id}-{uuid4().hex[:8]}"
+        resolved_run_id = run_id or f"run-{task.id}-{uuid4().hex[:8]}"
+        resolved_role = role or task.agent_role or self.get_agent_type().value
 
         provider_kwargs: dict[str, str | None] = {}
         if vibrant_dir is not None:
             vdir = Path(vibrant_dir)
-            native_log = vdir / "logs" / "providers" / "native" / f"{agent_id}.ndjson"
-            canonical_log = vdir / "logs" / "providers" / "canonical" / f"{agent_id}.ndjson"
+            native_log = vdir / "logs" / "providers" / "native" / f"{resolved_run_id}.ndjson"
+            canonical_log = vdir / "logs" / "providers" / "canonical" / f"{resolved_run_id}.ndjson"
             provider_kwargs["native_event_log"] = str(native_log)
             provider_kwargs["canonical_event_log"] = str(canonical_log)
 
-        return AgentRecord(
+        return AgentRunRecord(
             identity={
-                "agent_id": agent_id,
+                "run_id": resolved_run_id,
+                "agent_id": resolved_agent_id,
                 "task_id": task.id,
+                "role": resolved_role,
                 "type": AgentType.CODE,
             },
             lifecycle={"status": AgentStatus.SPAWNING},
@@ -71,4 +75,19 @@ class CodeAgent(AgentBase):
                 transport=provider_transport(self.config.provider_kind),
                 **provider_kwargs,
             ),
+        )
+
+    def build_agent_record(
+        self,
+        *,
+        task: TaskInfo,
+        worktree: GitWorktreeInfo,
+        prompt: str,
+        vibrant_dir: str | Path | None = None,
+    ) -> AgentRunRecord:
+        return self.build_run_record(
+            task=task,
+            worktree=worktree,
+            prompt=prompt,
+            vibrant_dir=vibrant_dir,
         )

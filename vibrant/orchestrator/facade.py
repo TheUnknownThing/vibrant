@@ -8,11 +8,18 @@ from typing import Any
 
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.agent import AgentRecord
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
 from vibrant.models.task import TaskInfo
 
+from .policy.gatekeeper_loop.questions import current_pending_question, select_pending_question_by_text
+from .policy.gatekeeper_loop.transitions import (
+    can_transition_ui_status,
+    infer_resume_status,
+    plan_ui_transition,
+)
+from .policy.shared.workflow import orchestrator_status_from_workflow
 from .types import (
     AgentOutput,
     AgentSnapshotIdentity,
@@ -26,24 +33,6 @@ from .types import (
     WorkflowStatus,
 )
 
-
-_WORKFLOW_TO_UI = {
-    WorkflowStatus.INIT: OrchestratorStatus.INIT,
-    WorkflowStatus.PLANNING: OrchestratorStatus.PLANNING,
-    WorkflowStatus.EXECUTING: OrchestratorStatus.EXECUTING,
-    WorkflowStatus.PAUSED: OrchestratorStatus.PAUSED,
-    WorkflowStatus.COMPLETED: OrchestratorStatus.COMPLETED,
-    WorkflowStatus.FAILED: OrchestratorStatus.PAUSED,
-}
-
-_UI_TO_WORKFLOW = {
-    OrchestratorStatus.INIT: WorkflowStatus.INIT,
-    OrchestratorStatus.PLANNING: WorkflowStatus.PLANNING,
-    OrchestratorStatus.EXECUTING: WorkflowStatus.EXECUTING,
-    OrchestratorStatus.PAUSED: WorkflowStatus.PAUSED,
-    OrchestratorStatus.COMPLETED: WorkflowStatus.COMPLETED,
-}
-
 @dataclass(frozen=True)
 class OrchestratorSnapshot:
     status: OrchestratorStatus
@@ -52,7 +41,7 @@ class OrchestratorSnapshot:
     roadmap: RoadmapDocument | None
     consensus: ConsensusDocument | None
     consensus_path: Path | None
-    agent_records: tuple[AgentRecord, ...]
+    agent_records: tuple[AgentRunRecord, ...]
     execution_mode: RoadmapExecutionMode | None
     user_input_banner: str
     notification_bell_enabled: bool
@@ -81,7 +70,7 @@ class OrchestratorFacade:
         )
 
     def get_workflow_status(self) -> OrchestratorStatus:
-        return _WORKFLOW_TO_UI[self.control_plane.get_workflow_status()]
+        return orchestrator_status_from_workflow(self.control_plane.get_workflow_status())
 
     def get_consensus_document(self) -> ConsensusDocument | None:
         return self.control_plane.get_consensus_document()
@@ -92,7 +81,7 @@ class OrchestratorFacade:
     def get_consensus_source_path(self) -> Path | None:
         return self.orchestrator.consensus_path
 
-    def list_agent_records(self) -> list[AgentRecord]:
+    def list_agent_records(self) -> list[AgentRunRecord]:
         return self.control_plane.list_agent_records()
 
     def get_agent(self, agent_id: str) -> OrchestratorAgentSnapshot | None:
@@ -254,10 +243,10 @@ class OrchestratorFacade:
         return {task_id: summary for task_id, (_, summary) in summaries.items()}
 
     def get_user_input_banner(self) -> str:
-        pending = self.list_pending_question_records()
-        if not pending:
+        question = current_pending_question(self.list_pending_question_records())
+        if question is None:
             return "Gatekeeper is idle."
-        return f"Gatekeeper needs your input: {pending[0].text}"
+        return f"Gatekeeper needs your input: {question.text}"
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
         return self.control_plane.write_consensus_document(document)
@@ -272,22 +261,22 @@ class OrchestratorFacade:
 
     async def answer_pending_question(self, answer: str, *, question: str | None = None):
         pending = self.list_pending_question_records()
-        if not pending:
+        selected = select_pending_question_by_text(pending, question)
+        if selected is None:
             raise ValueError("No pending Gatekeeper question exists")
-        selected = next((record for record in pending if question and record.text == question), pending[0])
         _, result = await self.submit_gatekeeper_input(answer, question_id=selected.question_id)
         return result
 
     def pause_workflow(self):
-        self.transition_workflow_state(OrchestratorStatus.PAUSED)
+        self.control_plane.pause_workflow()
         return self.get_workflow_status()
 
     def resume_workflow(self):
-        self.transition_workflow_state(OrchestratorStatus.EXECUTING)
+        self.control_plane.resume_workflow()
         return self.get_workflow_status()
 
     def end_planning_phase(self) -> OrchestratorStatus:
-        self.transition_workflow_state(OrchestratorStatus.EXECUTING)
+        self.control_plane.end_planning_phase()
         return self.get_workflow_status()
 
     def accept_review_ticket(self, ticket_id: str):
@@ -315,17 +304,34 @@ class OrchestratorFacade:
         return [record.text for record in self.list_pending_question_records()]
 
     def get_current_pending_question(self) -> str | None:
-        pending = self.list_pending_question_records()
-        return pending[0].text if pending else None
+        question = current_pending_question(self.list_pending_question_records())
+        return question.text if question is not None else None
 
     def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
         current = self.get_workflow_status()
-        if current is OrchestratorStatus.COMPLETED:
-            return next_status is OrchestratorStatus.COMPLETED
-        return next_status in _UI_TO_WORKFLOW
+        return can_transition_ui_status(current, next_status)
 
     def transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
-        self.control_plane.set_workflow_status(_UI_TO_WORKFLOW[next_status])
+        current_status = self.get_workflow_status()
+        plan = plan_ui_transition(current_status, next_status)
+        if plan.action == "noop":
+            return
+        if plan.action == "pause":
+            self.control_plane.pause_workflow()
+            return
+        if plan.action == "resume":
+            self.control_plane.resume_workflow()
+            return
+        if plan.action == "end_planning":
+            self.control_plane.end_planning_phase()
+            return
+        self.control_plane.set_workflow_status(plan.workflow_status)
+
+    def infer_resume_status(self) -> OrchestratorStatus:
+        return infer_resume_status(
+            self.get_consensus_document(),
+            self.snapshot().roadmap,
+        )
 
     def list_active_attempts(self):
         return self.control_plane.list_active_attempts()
@@ -339,9 +345,9 @@ class OrchestratorFacade:
     def list_recent_events(self, *, limit: int = 20):
         return self.control_plane.list_recent_events(limit=limit)
 
-    def _snapshot_agent(self, record: AgentRecord) -> OrchestratorAgentSnapshot:
+    def _snapshot_agent(self, record: AgentRunRecord) -> OrchestratorAgentSnapshot:
         try:
-            runtime_snapshot = self.control_plane.runtime_handle(record.identity.agent_id)
+            runtime_snapshot = self.control_plane.runtime_handle(record.identity.run_id)
             state = runtime_snapshot.state
             awaiting_input = runtime_snapshot.awaiting_input
             input_requests = runtime_snapshot.input_requests
@@ -355,8 +361,10 @@ class OrchestratorFacade:
         return OrchestratorAgentSnapshot(
             identity=AgentSnapshotIdentity(
                 agent_id=record.identity.agent_id,
+                run_id=record.identity.run_id,
                 task_id=record.identity.task_id,
-                agent_type=record.identity.type.value,
+                role=record.identity.role,
+                agent_type=record.identity.type.value if record.identity.type is not None else None,
             ),
             runtime=AgentSnapshotRuntime(
                 status=record.lifecycle.status.value,
