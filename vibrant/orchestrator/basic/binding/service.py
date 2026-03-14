@@ -47,12 +47,12 @@ class AgentSessionBindingService:
         *,
         preset: BindingPreset,
         conversation_id: str | None,
-        session_id: str,
+        run_id: str,
     ) -> BoundAgentCapabilities:
         return self._build_bound_capabilities(
             preset,
             conversation_id=conversation_id,
-            session_id=session_id,
+            run_id=run_id,
         )
 
     def _build_bound_capabilities(
@@ -60,19 +60,19 @@ class AgentSessionBindingService:
         preset: BindingPreset,
         *,
         conversation_id: str | None,
-        session_id: str,
+        run_id: str,
     ) -> BoundAgentCapabilities:
         binding_id = f"binding-{preset.role}-{uuid4().hex[:12]}"
         endpoint_url = getattr(self._mcp_host, "endpoint_url", None)
         access = MCPAccessDescriptor(
             binding_id=binding_id,
             role=preset.role,
-            session_id=session_id,
+            run_id=run_id,
             conversation_id=conversation_id,
             visible_tools=list(preset.tools),
             visible_resources=list(preset.resources),
             endpoint_url=endpoint_url,
-            server_id=_build_server_id(preset.role, session_id),
+            server_id=_build_server_id(preset.role, run_id),
             transport_hint="http" if endpoint_url else None,
             required=True,
             static_headers={BINDING_HEADER_NAME: binding_id} if endpoint_url else {},
@@ -92,7 +92,7 @@ class AgentSessionBindingService:
         )
 
 
-def _build_server_id(role: str, session_id: str) -> str:
-    raw = f"vibrant_{role}_{session_id}"
+def _build_server_id(role: str, run_id: str) -> str:
+    raw = f"vibrant_{role}_{run_id}"
     normalized = re.sub(r"[^A-Za-z0-9_]+", "_", raw).strip("_")
     return normalized[:48] or "vibrant"

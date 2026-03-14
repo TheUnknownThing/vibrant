@@ -115,7 +115,8 @@ class GatekeeperLifecycleService:
         self.conversation_service.bind_agent(
             conversation_id=conversation_id,
             agent_id=instance.identity.agent_id,
-            task_id=agent_record.identity.task_id,
+            run_id=agent_record.identity.run_id,
+            task_id=None,
             provider_thread_id=session.provider_thread_id,
         )
 
@@ -140,7 +141,7 @@ class GatekeeperLifecycleService:
         await self.mcp_host.ensure_started()
         bound_capabilities = self.binding_service.bind_preset(
             preset=gatekeeper_binding_preset(self.binding_service.mcp_server, agent_record.identity.run_id),
-            session_id=agent_record.identity.run_id,
+            run_id=agent_record.identity.run_id,
             conversation_id=conversation_id,
         )
         registered_binding = self.mcp_host.register_binding(bound_capabilities)

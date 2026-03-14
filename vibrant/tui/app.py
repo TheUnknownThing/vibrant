@@ -556,6 +556,10 @@ class VibrantApp(App):
         self.call_after_refresh(self._handle_runtime_event, dict(event))
 
     def _handle_runtime_event(self, event: dict[str, Any]) -> None:
+        task_id = self._task_id_for_runtime_event(event)
+        if task_id and not event.get("task_id"):
+            event["task_id"] = task_id
+
         vibing_screen = self._vibing_screen()
         if vibing_screen is not None:
             with suppress(Exception):
@@ -568,9 +572,9 @@ class VibrantApp(App):
                 self._set_status("Gatekeeper is responding…")
 
         if event_type == "turn.started":
-            self._set_status(f"Running {event.get('task_id', 'task')}…")
+            self._set_status(f"Running {_event_subject(event)}…")
         elif event_type == "turn.completed":
-            self._set_status(f"Completed {event.get('task_id', 'task')}")
+            self._set_status(f"Completed {_event_subject(event)}")
         elif event_type == "runtime.error":
             self._set_status(_error_text_from_event(event) or "Task failed")
         elif event_type in {"user-input.requested", "request.opened"}:
@@ -764,11 +768,14 @@ class VibrantApp(App):
 
         snapshot = orchestrator.snapshot()
         if agent_output is not None:
-            agents = getattr(snapshot, "agent_records", None)
-            if agents is None:
-                agents = getattr(snapshot, "instances", ())
-            agent_output.sync_agents(agents)
+            agent_output.sync_agents(
+                getattr(snapshot, "runs", ()),
+                task_ids_by_run=orchestrator.get_run_task_ids(),
+            )
             for event in self._pending_runtime_bootstrap_events:
+                task_id = self._task_id_for_runtime_event(event)
+                if task_id and not event.get("task_id"):
+                    event["task_id"] = task_id
                 agent_output.ingest_canonical_event(event)
             self._pending_runtime_bootstrap_events = []
 
@@ -811,6 +818,20 @@ class VibrantApp(App):
         if self.orchestrator_facade is None:
             return {}
         return self.orchestrator_facade.get_task_summaries()
+
+    def _task_id_for_runtime_event(self, event: dict[str, Any]) -> str | None:
+        task_id = event.get("task_id")
+        if isinstance(task_id, str) and task_id.strip():
+            return task_id.strip()
+
+        run_id = event.get("run_id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            return None
+
+        orchestrator = self.orchestrator_facade
+        if orchestrator is None:
+            return None
+        return orchestrator.task_id_for_run(run_id)
 
     def _update_consensus_view(
         self,
@@ -1218,12 +1239,32 @@ def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
 
 
 def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
-    agent_id = event.get("agent_id")
-    if isinstance(agent_id, str) and (agent_id == "gatekeeper" or agent_id.startswith("gatekeeper-")):
+    role = event.get("role")
+    if isinstance(role, str) and role == "gatekeeper":
         return True
 
+    agent_id = event.get("agent_id")
+    return isinstance(agent_id, str) and agent_id == "gatekeeper"
+
+
+def _event_subject(event: dict[str, Any]) -> str:
     task_id = event.get("task_id")
-    return isinstance(task_id, str) and task_id.startswith("gatekeeper-")
+    if isinstance(task_id, str) and task_id.strip():
+        return task_id.strip()
+
+    role = event.get("role")
+    if isinstance(role, str) and role.strip():
+        return role.strip()
+
+    agent_id = event.get("agent_id")
+    if isinstance(agent_id, str) and agent_id.strip():
+        return agent_id.strip()
+
+    run_id = event.get("run_id")
+    if isinstance(run_id, str) and run_id.strip():
+        return run_id.strip()
+
+    return "run"
 
 
 def _error_text_from_event(event: dict[str, Any]) -> str:

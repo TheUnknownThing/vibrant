@@ -21,7 +21,6 @@ class _RuntimeSubscription:
     callback: CanonicalEventHandler
     agent_id: str | None = None
     run_id: str | None = None
-    task_id: str | None = None
     event_types: frozenset[str] | None = None
 
 
@@ -182,7 +181,6 @@ class AgentRuntimeService:
         *,
         agent_id: str | None = None,
         run_id: str | None = None,
-        task_id: str | None = None,
         event_types: Sequence[str] | None = None,
     ) -> _EventSubscriptionHandle:
         normalized_types = (
@@ -194,7 +192,6 @@ class AgentRuntimeService:
             callback=callback,
             agent_id=agent_id,
             run_id=run_id,
-            task_id=task_id,
             event_types=normalized_types,
         )
         self._subscriptions.append(subscription)
@@ -248,7 +245,8 @@ class AgentRuntimeService:
         normalized: dict[str, Any] = dict(event)
         normalized.setdefault("agent_id", agent_record.identity.agent_id)
         normalized.setdefault("run_id", agent_record.identity.run_id)
-        normalized.setdefault("task_id", agent_record.identity.task_id)
+        normalized.setdefault("role", agent_record.identity.role)
+        normalized.pop("task_id", None)
         normalized.setdefault("provider", agent_record.provider.kind)
         normalized.setdefault("origin", "provider")
         normalized.setdefault("timestamp", normalized.get("timestamp"))
@@ -269,8 +267,6 @@ class AgentRuntimeService:
         if subscription.agent_id is not None and event.get("agent_id") != subscription.agent_id:
             return False
         if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
-            return False
-        if subscription.task_id is not None and event.get("task_id") != subscription.task_id:
             return False
         if subscription.event_types is not None and str(event.get("type") or "") not in subscription.event_types:
             return False

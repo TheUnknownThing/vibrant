@@ -96,29 +96,26 @@ class InterfaceControlPlane:
     def get_task(self, task_id: str):
         return self.backend.queries.get_task(task_id)
 
-    def list_agent_instances(self):
-        return self.backend.queries.list_agent_instances()
+    def list_roles(self):
+        return self.backend.queries.list_roles()
 
-    def list_agent_runs(self):
-        return self.backend.queries.list_agent_runs()
+    def get_role(self, role: str):
+        return self.backend.queries.get_role(role)
 
-    def list_active_agent_runs(self):
-        return self.backend.queries.list_active_agent_runs()
+    def list_instances(self):
+        return self.backend.queries.list_instances()
 
-    def get_agent_instance(self, agent_id: str):
-        return self.backend.queries.get_agent_instance(agent_id)
+    def get_instance(self, agent_id: str):
+        return self.backend.queries.get_instance(agent_id)
 
-    def get_agent_run(self, run_id: str):
-        return self.backend.queries.get_agent_run(run_id)
+    def list_runs(self):
+        return self.backend.queries.list_runs()
 
-    def list_agent_records(self):
-        return self.list_agent_runs()
+    def list_active_runs(self):
+        return self.backend.queries.list_active_runs()
 
-    def list_active_agents(self):
-        return self.list_active_agent_runs()
-
-    def get_agent_record(self, run_id: str):
-        return self.get_agent_run(run_id)
+    def get_run(self, run_id: str):
+        return self.backend.queries.get_run(run_id)
 
     def list_question_records(self):
         return self.backend.queries.list_question_records()

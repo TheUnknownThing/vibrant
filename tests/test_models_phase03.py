@@ -11,7 +11,14 @@ from vibrant.models.task import TaskInfo, TaskStatus
 
 
 def test_agent_record_status_transition_guardrails():
-    record = AgentRecord(identity={"agent_id": "agent-1", "task_id": "task-1", "type": AgentType.CODE})
+    record = AgentRecord(
+        identity={
+            "run_id": "run-1",
+            "agent_id": "agent-1",
+            "role": AgentType.CODE.value,
+            "type": AgentType.CODE,
+        }
+    )
 
     record.transition_to(AgentStatus.CONNECTING)
     record.transition_to(AgentStatus.RUNNING)
@@ -20,6 +27,14 @@ def test_agent_record_status_transition_guardrails():
     assert record.lifecycle.status is AgentStatus.COMPLETED
     with pytest.raises(ValueError, match="Invalid agent status transition"):
         record.transition_to(AgentStatus.RUNNING)
+
+
+def test_agent_record_drops_legacy_task_id_from_run_identity():
+    record = AgentRecord(identity={"agent_id": "agent-legacy", "task_id": "task-legacy", "type": AgentType.CODE})
+
+    assert record.identity.run_id == "agent-legacy"
+    assert record.identity.role == AgentType.CODE.value
+    assert "task_id" not in record.identity.model_dump()
 
 
 def test_provider_runtime_mode_validation_still_rejects_unknown_values():

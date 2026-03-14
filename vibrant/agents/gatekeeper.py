@@ -125,7 +125,6 @@ class GatekeeperAgent(ReadOnlyAgentBase):
     ) -> AgentRunRecord:
         resolved_agent_id = agent_id or AgentType.GATEKEEPER.value
         resolved_run_id = run_id or f"gatekeeper-{request.trigger.value}-{uuid4().hex[:8]}"
-        task_id = f"gatekeeper-{request.trigger.value}"
         native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{resolved_run_id}.ndjson"
         canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{resolved_run_id}.ndjson"
 
@@ -133,7 +132,6 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             identity={
                 "run_id": resolved_run_id,
                 "agent_id": resolved_agent_id,
-                "task_id": task_id,
                 "role": role,
                 "type": AgentType.GATEKEEPER,
             },

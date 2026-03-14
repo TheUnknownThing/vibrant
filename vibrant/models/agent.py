@@ -301,7 +301,6 @@ class AgentRunIdentity(BaseModel):
 
     run_id: str
     agent_id: str
-    task_id: str
     role: str
     type: AgentType | None = None
 
@@ -315,6 +314,7 @@ class AgentRunIdentity(BaseModel):
         legacy_agent_id = data.get("agent_id")
         if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(legacy_agent_id, str) and legacy_agent_id:
             data["run_id"] = legacy_agent_id
+        data.pop("task_id", None)
         if "role" not in data:
             legacy_type = data.get("type")
             if isinstance(legacy_type, AgentType):

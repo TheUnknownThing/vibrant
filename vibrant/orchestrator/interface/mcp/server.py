@@ -121,11 +121,11 @@ class OrchestratorMCPServer:
                 required_scopes=(READ_SCOPE,),
                 handler=self.resources.list_pending_questions,
             ),
-            "vibrant.list_active_agents": MCPResourceDefinition(
-                name="vibrant.list_active_agents",
-                description="List active agent runtimes.",
+            "vibrant.list_active_runs": MCPResourceDefinition(
+                name="vibrant.list_active_runs",
+                description="List active run snapshots.",
                 required_scopes=(READ_SCOPE,),
-                handler=self.resources.list_active_agents,
+                handler=self.resources.list_active_runs,
             ),
             "vibrant.list_active_attempts": MCPResourceDefinition(
                 name="vibrant.list_active_attempts",

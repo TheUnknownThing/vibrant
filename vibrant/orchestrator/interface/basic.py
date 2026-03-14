@@ -1,14 +1,30 @@
-"""Read/query adapter over basic capabilities and policy snapshots."""
+"""Read/query adapter over basic capabilities and public snapshots."""
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..basic import ArtifactsCapability, ConversationCapability, EventLogCapability
 from ..basic.runtime import AgentRuntimeService
+from ..policy.gatekeeper_loop.roles import GATEKEEPER_ROLE
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
+from ..policy.task_loop.roles import DEFAULT_TASK_AGENT_ROLE
 from ..policy.task_loop import TaskLoop
+from ..types import (
+    AgentInstanceIdentitySnapshot,
+    AgentInstanceProviderSnapshot,
+    AgentInstanceScopeSnapshot,
+    AgentInstanceSnapshot,
+    AgentRunIdentitySnapshot,
+    AgentRunOutcomeSnapshot,
+    AgentRunProviderSnapshot,
+    AgentRunRuntimeSnapshot,
+    AgentRunSnapshot,
+    AgentRunWorkspaceSnapshot,
+    RoleSnapshot,
+)
 
 
 @dataclass(slots=True)
@@ -52,11 +68,27 @@ class BasicQueryAdapter:
         task_id: str | None = None,
         event_types: Sequence[str] | None = None,
     ):
+        if task_id is None:
+            return self.runtime_service.subscribe_canonical_events(
+                callback,
+                agent_id=agent_id,
+                run_id=run_id,
+                event_types=event_types,
+            )
+
+        async def _task_filtered(event):
+            event_run_id = event.get("run_id")
+            if not isinstance(event_run_id, str) or self.artifacts.attempt_store.task_id_for_run(event_run_id) != task_id:
+                return None
+            result = callback(event)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
         return self.runtime_service.subscribe_canonical_events(
-            callback,
+            _task_filtered,
             agent_id=agent_id,
             run_id=run_id,
-            task_id=task_id,
             event_types=event_types,
         )
 
@@ -72,29 +104,69 @@ class BasicQueryAdapter:
     def get_task(self, task_id: str):
         return self.artifacts.roadmap_store.get_task(task_id)
 
-    def list_agent_instances(self):
-        return self.artifacts.agent_instance_store.list()
+    def list_roles(self) -> list[RoleSnapshot]:
+        instances = self.artifacts.agent_instance_store.list()
+        runs = self.artifacts.agent_run_store.list()
+        active_runs = self.artifacts.agent_run_store.list_active()
+        roadmap = self.artifacts.roadmap_store.load()
+        task_roles = {
+            task.agent_role or DEFAULT_TASK_AGENT_ROLE
+            for task in getattr(roadmap, "tasks", ())
+        }
 
-    def list_agent_runs(self):
-        return self.artifacts.agent_run_store.list()
+        observed_roles = {GATEKEEPER_ROLE, DEFAULT_TASK_AGENT_ROLE}
+        observed_roles.update(task_roles)
+        observed_roles.update(record.identity.role for record in instances)
+        observed_roles.update(record.identity.role for record in runs)
 
-    def list_active_agent_runs(self):
-        return self.artifacts.agent_run_store.list_active()
+        snapshots: list[RoleSnapshot] = []
+        for role in sorted(observed_roles):
+            scope_types = sorted(
+                {
+                    record.scope.scope_type
+                    for record in instances
+                    if record.identity.role == role
+                }
+            )
+            if not scope_types:
+                if role == GATEKEEPER_ROLE:
+                    scope_types = ["project"]
+                elif role in task_roles or role == DEFAULT_TASK_AGENT_ROLE:
+                    scope_types = ["task"]
+            snapshots.append(
+                RoleSnapshot(
+                    role=role,
+                    scope_types=tuple(scope_types),
+                    instance_count=sum(1 for record in instances if record.identity.role == role),
+                    active_run_count=sum(1 for record in active_runs if record.identity.role == role),
+                )
+            )
+        return snapshots
 
-    def get_agent_instance(self, agent_id: str):
-        return self.artifacts.agent_instance_store.get(agent_id)
+    def get_role(self, role: str) -> RoleSnapshot | None:
+        normalized = role.strip().lower()
+        return next((snapshot for snapshot in self.list_roles() if snapshot.role == normalized), None)
 
-    def get_agent_run(self, run_id: str):
-        return self.artifacts.agent_run_store.get(run_id)
+    def list_instances(self) -> list[AgentInstanceSnapshot]:
+        return [self._project_instance(record) for record in self.artifacts.agent_instance_store.list()]
 
-    def list_agent_records(self):
-        return self.list_agent_runs()
+    def get_instance(self, agent_id: str) -> AgentInstanceSnapshot | None:
+        record = self.artifacts.agent_instance_store.get(agent_id)
+        if record is None:
+            return None
+        return self._project_instance(record)
 
-    def list_active_agents(self):
-        return self.list_active_agent_runs()
+    def list_runs(self) -> list[AgentRunSnapshot]:
+        return [self._project_run(record) for record in self.artifacts.agent_run_store.list()]
 
-    def get_agent_record(self, run_id: str):
-        return self.get_agent_run(run_id)
+    def list_active_runs(self) -> list[AgentRunSnapshot]:
+        return [self._project_run(record) for record in self.artifacts.agent_run_store.list_active()]
+
+    def get_run(self, run_id: str) -> AgentRunSnapshot | None:
+        record = self.artifacts.agent_run_store.get(run_id)
+        if record is None:
+            return None
+        return self._project_run(record)
 
     def list_question_records(self):
         return self.artifacts.question_store.list()
@@ -116,3 +188,73 @@ class BasicQueryAdapter:
 
     def runtime_handle(self, run_id: str):
         return self.runtime_service.snapshot_handle(run_id)
+
+    def _project_instance(self, record) -> AgentInstanceSnapshot:
+        return AgentInstanceSnapshot(
+            identity=AgentInstanceIdentitySnapshot(
+                agent_id=record.identity.agent_id,
+                role=record.identity.role,
+            ),
+            scope=AgentInstanceScopeSnapshot(
+                scope_type=record.scope.scope_type,
+                scope_id=record.scope.scope_id,
+            ),
+            provider=AgentInstanceProviderSnapshot(
+                kind=record.provider.kind,
+                transport=record.provider.transport,
+                runtime_mode=record.provider.runtime_mode,
+            ),
+            latest_run_id=record.latest_run_id,
+            active_run_id=record.active_run_id,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    def _project_run(self, record) -> AgentRunSnapshot:
+        try:
+            runtime_snapshot = self.runtime_service.snapshot_handle(record.identity.run_id)
+            state = runtime_snapshot.state
+            awaiting_input = runtime_snapshot.awaiting_input
+            input_requests = runtime_snapshot.input_requests
+            has_handle = True
+        except Exception:
+            state = record.lifecycle.status.value
+            awaiting_input = False
+            input_requests = []
+            has_handle = False
+
+        return AgentRunSnapshot(
+            identity=AgentRunIdentitySnapshot(
+                agent_id=record.identity.agent_id,
+                run_id=record.identity.run_id,
+                role=record.identity.role,
+            ),
+            runtime=AgentRunRuntimeSnapshot(
+                status=record.lifecycle.status.value,
+                state=state,
+                has_handle=has_handle,
+                active=record.lifecycle.status.value in {"spawning", "connecting", "running", "awaiting_input"},
+                done=record.lifecycle.status.value in {"completed", "failed", "killed"},
+                awaiting_input=awaiting_input,
+                pid=record.lifecycle.pid,
+                started_at=record.lifecycle.started_at,
+                finished_at=record.lifecycle.finished_at,
+                input_requests=input_requests,
+            ),
+            workspace=AgentRunWorkspaceSnapshot(
+                branch=record.context.branch,
+                worktree_path=record.context.worktree_path,
+            ),
+            outcome=AgentRunOutcomeSnapshot(
+                summary=record.outcome.summary,
+                error=record.outcome.error,
+                output=None,
+            ),
+            provider=AgentRunProviderSnapshot(
+                thread_id=record.provider.provider_thread_id,
+                thread_path=record.provider.thread_path,
+                resume_cursor=record.provider.resume_cursor,
+                native_event_log=record.provider.native_event_log,
+                canonical_event_log=record.provider.canonical_event_log,
+            ),
+        )

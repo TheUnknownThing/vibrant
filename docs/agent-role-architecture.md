@@ -30,6 +30,8 @@ What is already true in the codebase:
 - instance state and run history are stored separately
 - task execution resolves a stable task-scoped instance, then creates a fresh
   run under it
+- task ownership of runs is recorded in attempt/task-execution state, not in
+  `AgentRunRecord` identity
 - the managed Gatekeeper path resolves a stable project-scoped instance, then
   creates a fresh run per interaction
 - provider-thread reuse is anchored to the stable agent identity, not to one
@@ -38,7 +40,7 @@ What is already true in the codebase:
 
 What is still transitional:
 
-- some runtime and facade reads still expose run-centric compatibility naming
+- low-level persistence models still carry a legacy `type` field for migration
 - Gatekeeper still has some bespoke lifecycle behavior
 - not every role metadata field is yet a fully generic policy input
 
@@ -113,16 +115,23 @@ Stable actor identity and run identity are intentionally different:
 
 That split is the foundation for retries, resume, and durable history.
 
+Runs intentionally do not answer "which task owns me?". That association lives
+in task-loop state such as attempts. Higher-level projections may derive task
+context from that state when the UI or conversation model needs it.
+
 ## Runtime and Persistence Semantics
 
 Important current rules:
 
 - stable instances are stored in `.vibrant/agent-instances`
 - run records are stored in `.vibrant/agent-runs`
+- attempts own task identity and the associated `run_id` values
 - provider-thread continuity is anchored to the stable `agent_id`
 - a stable actor may accumulate many runs over time
 - the runtime currently allows at most one active live run per stable agent
   instance
+- task-to-run association is reconstructed from attempt records, not from run
+  identity fields
 
 ## Current Workflow Integration
 
@@ -135,8 +144,9 @@ When a task runs through the task loop:
 3. the stable task-scoped worker instance is resolved
 4. a fresh run is created beneath that stable instance
 5. runtime starts the run
-6. the run is projected into orchestrator-owned conversation and runtime state
-7. policy decides review, retry, escalation, or completion
+6. attempt state records which run ids belong to the task
+7. the run is projected into orchestrator-owned conversation and runtime state
+8. policy decides review, retry, escalation, or completion
 
 Important consequence:
 
@@ -298,6 +308,8 @@ into one overloaded "agent snapshot".
   - owns stable instance persistence
 - `basic/stores/agent_runs.py`
   - owns run persistence
+- `basic/stores/attempts.py`
+  - owns task-attempt state, including task-to-run association
 
 ### Runtime and orchestration ownership
 
@@ -309,6 +321,10 @@ into one overloaded "agent snapshot".
   - owns Gatekeeper-specific session lifecycle policy
 - `OrchestratorFacade`
   - exposes the stable read/control surface
+
+Task context shown in conversations, TUI views, or task-scoped run queries is a
+derived orchestrator projection over attempts plus runs. It is not canonical run
+identity.
 
 This is why the model is already structurally correct even though some policy is
 still bespoke: durable identity and execution history are now separate.

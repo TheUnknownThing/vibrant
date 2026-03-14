@@ -1,8 +1,9 @@
 """Redesigned orchestrator package."""
 
-from .types import OrchestratorAgentSnapshot, TaskResult
+from .types import AgentRunSnapshot, OrchestratorAgentSnapshot, TaskResult
 
 __all__ = [
+    "AgentRunSnapshot",
     "Orchestrator",
     "OrchestratorAgentSnapshot",
     "OrchestratorFacade",

@@ -35,16 +35,16 @@ def gatekeeper_principal(principal_id: str = "gatekeeper") -> MCPPrincipal:
     )
 
 
-def worker_principal(*, agent_type: str, principal_id: str) -> MCPPrincipal:
+def worker_principal(*, role: str, principal_id: str) -> MCPPrincipal:
     return MCPPrincipal(
         principal_id=principal_id,
-        role=agent_type,
+        role=role,
         scopes=frozenset({READ_SCOPE}),
     )
 
 
-def gatekeeper_binding_preset(mcp_server, session_id: str) -> BindingPreset:
-    principal = gatekeeper_principal(principal_id=f"gatekeeper:{session_id}")
+def gatekeeper_binding_preset(mcp_server, run_id: str) -> BindingPreset:
+    principal = gatekeeper_principal(principal_id=f"gatekeeper:{run_id}")
     return BindingPreset(
         role="gatekeeper",
         principal=principal,
@@ -53,10 +53,10 @@ def gatekeeper_binding_preset(mcp_server, session_id: str) -> BindingPreset:
     )
 
 
-def worker_binding_preset(mcp_server, agent_id: str, agent_type: str) -> BindingPreset:
-    principal = worker_principal(agent_type=agent_type, principal_id=f"{agent_type}:{agent_id}")
+def worker_binding_preset(mcp_server, agent_id: str, role: str) -> BindingPreset:
+    principal = worker_principal(role=role, principal_id=f"{role}:{agent_id}")
     return BindingPreset(
-        role=agent_type,
+        role=role,
         principal=principal,
         tools=visible_tool_names(mcp_server.tool_definitions, principal=principal),
         resources=visible_resource_names(mcp_server.resource_definitions, principal=principal),

@@ -9,7 +9,6 @@ from typing import Any
 from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.agent import AgentRunRecord
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 from vibrant.project_init import ensure_project_files
@@ -326,11 +325,26 @@ class Orchestrator:
     def get_workflow_status(self):
         return self.control_plane.get_workflow_status()
 
-    def list_agent_records(self) -> list[AgentRunRecord]:
-        return self.control_plane.list_agent_records()
+    def list_roles(self):
+        return self.control_plane.list_roles()
 
-    def list_active_agents(self) -> list[AgentRunRecord]:
-        return self.control_plane.list_active_agents()
+    def get_role(self, role: str):
+        return self.control_plane.get_role(role)
+
+    def list_instances(self):
+        return self.control_plane.list_instances()
+
+    def get_instance(self, agent_id: str):
+        return self.control_plane.get_instance(agent_id)
+
+    def list_runs(self):
+        return self.control_plane.list_runs()
+
+    def list_active_runs(self):
+        return self.control_plane.list_active_runs()
+
+    def get_run(self, run_id: str):
+        return self.control_plane.get_run(run_id)
 
     def list_active_attempts(self):
         return self.control_plane.list_active_attempts()

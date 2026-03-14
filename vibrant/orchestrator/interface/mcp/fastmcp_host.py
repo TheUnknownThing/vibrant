@@ -240,9 +240,9 @@ class _BindingAwareFastMCP(FastMCP):
                 uri="vibrant://pending-questions",
             ),
             _TransportResource(
-                name="vibrant.list_active_agents",
-                description=descriptions["vibrant.list_active_agents"].description,
-                uri="vibrant://active-agents",
+                name="vibrant.list_active_runs",
+                description=descriptions["vibrant.list_active_runs"].description,
+                uri="vibrant://active-runs",
             ),
             _TransportResource(
                 name="vibrant.list_active_attempts",

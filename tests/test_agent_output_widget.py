@@ -19,7 +19,12 @@ class AgentOutputHarness(App[None]):
 @pytest.mark.asyncio
 async def test_agent_output_displays_streaming_reasoning_with_spinner():
     record = AgentRecord(
-        identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE},
+        identity={
+            "run_id": "run-task-001",
+            "agent_id": "agent-task-001",
+            "role": AgentType.CODE.value,
+            "type": AgentType.CODE,
+        },
         lifecycle={"status": AgentStatus.RUNNING, "started_at": datetime.now(timezone.utc)},
     )
 
@@ -27,11 +32,11 @@ async def test_agent_output_displays_streaming_reasoning_with_spinner():
     async with app.run_test() as pilot:
         await pilot.pause()
         widget = app.query_one(AgentOutput)
-        widget.sync_agents([record])
+        widget.sync_agents([record], task_ids_by_run={"run-task-001": "task-001"})
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-001",
-                "task_id": "task-001",
+                "run_id": "run-task-001",
                 "type": "reasoning.summary.delta",
                 "timestamp": "2026-03-11T10:00:01Z",
                 "item_id": "reason-1",
@@ -46,7 +51,7 @@ async def test_agent_output_displays_streaming_reasoning_with_spinner():
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-001",
-                "task_id": "task-001",
+                "run_id": "run-task-001",
                 "timestamp": "2026-03-11T10:00:02Z",
                 "type": "task.progress",
                 "item": {
@@ -72,7 +77,7 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-002",
-                "task_id": "task-002",
+                "run_id": "run-task-002",
                 "type": "session.started",
                 "timestamp": "2026-03-11T11:00:00Z",
                 "cwd": str(tmp_path),
@@ -81,7 +86,7 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-002",
-                "task_id": "task-002",
+                "run_id": "run-task-002",
                 "type": "content.delta",
                 "timestamp": "2026-03-11T11:00:01Z",
                 "delta": "Here is the full assistant reply",
@@ -90,7 +95,7 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-002",
-                "task_id": "task-002",
+                "run_id": "run-task-002",
                 "type": "task.progress",
                 "timestamp": "2026-03-11T11:00:02Z",
                 "item": {"type": "agentMessage", "text": "Narrating implementation details"},
@@ -99,7 +104,7 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-002",
-                "task_id": "task-002",
+                "run_id": "run-task-002",
                 "type": "task.progress",
                 "timestamp": "2026-03-11T11:00:03Z",
                 "item": {"type": "commandExecution", "command": "pytest", "durationMs": 321},
@@ -108,7 +113,7 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-002",
-                "task_id": "task-002",
+                "run_id": "run-task-002",
                 "type": "task.progress",
                 "timestamp": "2026-03-11T11:00:04Z",
                 "item": {"type": "fileChange", "path": "src/app.py"},
@@ -117,7 +122,7 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-002",
-                "task_id": "task-002",
+                "run_id": "run-task-002",
                 "type": "runtime.error",
                 "timestamp": "2026-03-11T11:00:05Z",
                 "error": {"message": "boom"},
@@ -126,7 +131,7 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-002",
-                "task_id": "task-002",
+                "run_id": "run-task-002",
                 "type": "task.completed",
                 "timestamp": "2026-03-11T11:00:06Z",
             }
@@ -147,7 +152,12 @@ async def test_agent_output_keeps_canonical_log_view_operational(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_agent_output_debug_view_renders_canonical_payloads():
     record = AgentRecord(
-        identity={"agent_id": "agent-task-003", "task_id": "task-003", "type": AgentType.CODE},
+        identity={
+            "run_id": "run-task-003",
+            "agent_id": "agent-task-003",
+            "role": AgentType.CODE.value,
+            "type": AgentType.CODE,
+        },
         lifecycle={"status": AgentStatus.RUNNING, "started_at": datetime.now(timezone.utc)},
     )
 
@@ -155,11 +165,11 @@ async def test_agent_output_debug_view_renders_canonical_payloads():
     async with app.run_test() as pilot:
         await pilot.pause()
         widget = app.query_one(AgentOutput)
-        widget.sync_agents([record])
+        widget.sync_agents([record], task_ids_by_run={"run-task-003": "task-003"})
         widget.ingest_canonical_event(
             {
                 "agent_id": "agent-task-003",
-                "task_id": "task-003",
+                "run_id": "run-task-003",
                 "type": "tool.call.started",
                 "timestamp": "2026-03-11T12:00:00Z",
                 "tool_name": "vibrant.ask_question",
@@ -179,12 +189,12 @@ async def test_agent_output_syncs_runtime_snapshot_like_agents():
     older_start = datetime(2026, 3, 11, 9, 0, tzinfo=timezone.utc)
     newer_start = datetime(2026, 3, 11, 9, 5, tzinfo=timezone.utc)
     completed = SimpleNamespace(
-        identity=SimpleNamespace(agent_id="agent-task-010", task_id="task-010"),
+        identity=SimpleNamespace(agent_id="agent-task-010", run_id="run-task-010"),
         runtime=SimpleNamespace(status=AgentStatus.COMPLETED.value, started_at=older_start),
         provider=SimpleNamespace(thread_id="thread-010"),
     )
     running = SimpleNamespace(
-        identity=SimpleNamespace(agent_id="agent-task-011", task_id="task-011"),
+        identity=SimpleNamespace(agent_id="agent-task-011", run_id="run-task-011"),
         runtime=SimpleNamespace(status=AgentStatus.RUNNING.value, started_at=newer_start),
         provider=SimpleNamespace(thread_id="thread-011"),
     )
@@ -193,7 +203,13 @@ async def test_agent_output_syncs_runtime_snapshot_like_agents():
     async with app.run_test() as pilot:
         await pilot.pause()
         widget = app.query_one(AgentOutput)
-        widget.sync_agents([completed, running])
+        widget.sync_agents(
+            [completed, running],
+            task_ids_by_run={
+                "run-task-010": "task-010",
+                "run-task-011": "task-011",
+            },
+        )
         await pilot.pause()
 
         assert widget.active_agent_id == "agent-task-011"

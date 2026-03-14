@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from collections import deque
 from dataclasses import dataclass, field
 import json
@@ -176,7 +177,12 @@ class AgentOutput(Static):
 
         return self._debug_view_enabled
 
-    def sync_agents(self, agents: Iterable[object]) -> None:
+    def sync_agents(
+        self,
+        agents: Iterable[object],
+        *,
+        task_ids_by_run: Mapping[str, str] | None = None,
+    ) -> None:
         """Refresh known agents from orchestrator-owned runtime records."""
 
         ordered_agents = sorted(
@@ -189,7 +195,8 @@ class AgentOutput(Static):
             if agent_id is None:
                 continue
             stream = self._ensure_stream(agent_id)
-            stream.task_id = self._task_id(agent)
+            if task_ids_by_run is not None:
+                stream.task_id = self._task_id_for_agent(agent, task_ids_by_run)
             stream.status = self._status(agent)
             stream.provider_thread_id = self._provider_thread_id(agent)
 
@@ -332,9 +339,16 @@ class AgentOutput(Static):
         agent_id = getattr(identity, "agent_id", None)
         return agent_id if isinstance(agent_id, str) and agent_id else None
 
-    def _task_id(self, agent: object) -> str | None:
+    def _run_id(self, agent: object) -> str | None:
         identity = getattr(agent, "identity", None)
-        task_id = getattr(identity, "task_id", None)
+        run_id = getattr(identity, "run_id", None)
+        return run_id if isinstance(run_id, str) and run_id else None
+
+    def _task_id_for_agent(self, agent: object, task_ids_by_run: Mapping[str, str]) -> str | None:
+        run_id = self._run_id(agent)
+        if run_id is None:
+            return None
+        task_id = task_ids_by_run.get(run_id)
         return task_id if isinstance(task_id, str) and task_id else None
 
     def _status(self, agent: object) -> str | None:

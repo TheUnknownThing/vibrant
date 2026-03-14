@@ -61,7 +61,6 @@ class MergeAgent(AgentBase):
         return AgentRecord(
             identity={
                 "agent_id": agent_id,
-                "task_id": task_id,
                 "type": AgentType.MERGE,
             },
             lifecycle={"status": AgentStatus.SPAWNING},

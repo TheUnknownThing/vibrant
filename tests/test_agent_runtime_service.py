@@ -16,7 +16,7 @@ def test_snapshot_handle_reports_completed_run_state_and_thread() -> None:
         identity={
             "run_id": "run-task-001",
             "agent_id": "agent-task-001",
-            "task_id": "task-001",
+            "role": AgentType.GATEKEEPER.value,
             "type": AgentType.GATEKEEPER,
         },
         lifecycle={
@@ -69,7 +69,7 @@ def test_snapshot_handle_rejects_agent_id_aliases() -> None:
         identity={
             "run_id": "run-task-002",
             "agent_id": "agent-task-002",
-            "task_id": "task-002",
+            "role": AgentType.CODE.value,
             "type": AgentType.CODE,
         },
         lifecycle={"status": AgentStatus.RUNNING},

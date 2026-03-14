@@ -45,6 +45,7 @@ class GatekeeperUserLoop:
             self.conversations.bind_agent(
                 conversation_id=conversation_id,
                 agent_id=session.agent_id,
+                run_id=session.run_id,
                 task_id=None,
                 provider_thread_id=session.provider_thread_id,
             )

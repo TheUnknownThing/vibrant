@@ -10,12 +10,18 @@ def test_conversation_stream_rebuilds_processed_history(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     stream = ConversationStreamService(store)
 
-    stream.bind_agent(conversation_id="gatekeeper-1", agent_id="gatekeeper-a", task_id=None)
+    stream.bind_agent(
+        conversation_id="gatekeeper-1",
+        agent_id="gatekeeper-a",
+        run_id="gatekeeper-run-1",
+        task_id=None,
+    )
     stream.record_host_message(conversation_id="gatekeeper-1", role="user", text="Plan the refactor")
     stream.ingest_canonical(
         {
             "type": "assistant.message.delta",
             "agent_id": "gatekeeper-a",
+            "run_id": "gatekeeper-run-1",
             "delta": "Working through the redesign.",
             "turn_id": "turn-1",
             "timestamp": "2026-03-13T00:00:00Z",
@@ -26,6 +32,7 @@ def test_conversation_stream_rebuilds_processed_history(tmp_path: Path) -> None:
         {
             "type": "assistant.message.completed",
             "agent_id": "gatekeeper-a",
+            "run_id": "gatekeeper-run-1",
             "text": "Working through the redesign.",
             "turn_id": "turn-1",
             "timestamp": "2026-03-13T00:00:01Z",
@@ -37,13 +44,19 @@ def test_conversation_stream_rebuilds_processed_history(tmp_path: Path) -> None:
 
     assert view is not None
     assert [entry.role for entry in view.entries] == ["user", "assistant"]
+    assert view.run_ids == ["gatekeeper-run-1"]
     assert view.entries[1].text == "Working through the redesign."
 
 
 def test_conversation_stream_subscriptions_receive_replay(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     stream = ConversationStreamService(store)
-    stream.bind_agent(conversation_id="conv-1", agent_id="agent-1", task_id="task-1")
+    stream.bind_agent(
+        conversation_id="conv-1",
+        agent_id="agent-1",
+        run_id="run-1",
+        task_id="task-1",
+    )
     stream.record_host_message(conversation_id="conv-1", role="user", text="hello")
 
     seen: list[str] = []
@@ -53,6 +66,7 @@ def test_conversation_stream_subscriptions_receive_replay(tmp_path: Path) -> Non
             {
                 "type": "runtime.error",
                 "agent_id": "agent-1",
+                "run_id": "run-1",
                 "error_message": "boom",
                 "timestamp": "2026-03-13T00:00:00Z",
                 "event_id": "evt-err",

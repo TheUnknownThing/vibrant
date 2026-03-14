@@ -174,8 +174,9 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
 
     prior_record = AgentRecord(
         identity={
+            "run_id": "gatekeeper-project_start-old",
             "agent_id": "gatekeeper-project_start-old",
-            "task_id": "gatekeeper-project_start",
+            "role": AgentType.GATEKEEPER.value,
             "type": AgentType.GATEKEEPER,
         },
         lifecycle={"status": AgentStatus.COMPLETED},
@@ -278,7 +279,8 @@ async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_pat
 
     assert forwarded
     assert forwarded[0]["agent_id"] == "gatekeeper"
-    assert forwarded[0]["task_id"] == "gatekeeper-project_start"
+    assert forwarded[0]["role"] == "gatekeeper"
+    assert forwarded[0].get("task_id") is None
     assert any(event["type"] == "content.delta" for event in forwarded)
     assert result.agent_record is not None
     assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED

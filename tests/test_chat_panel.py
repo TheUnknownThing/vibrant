@@ -220,6 +220,7 @@ async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
     conversation = AgentConversationView(
         conversation_id="gatekeeper-1",
         agent_ids=["gatekeeper-agent"],
+        run_ids=["gatekeeper-run-1"],
         task_ids=[],
         active_turn_id="turn-1",
         entries=[

@@ -48,21 +48,8 @@ class AgentRunStore:
     def list_for_agent(self, agent_id: str) -> list[AgentRunRecord]:
         return [record for record in self.list() if record.identity.agent_id == agent_id]
 
-    def list_for_task(self, task_id: str, *, role: str | None = None) -> list[AgentRunRecord]:
-        normalized_role = role.strip().lower() if isinstance(role, str) and role.strip() else None
-        return [
-            record
-            for record in self.list()
-            if record.identity.task_id == task_id
-            and (normalized_role is None or record.identity.role == normalized_role)
-        ]
-
     def latest_for_agent(self, agent_id: str) -> AgentRunRecord | None:
         records = self.list_for_agent(agent_id)
-        return records[-1] if records else None
-
-    def latest_for_task(self, task_id: str, *, role: str | None = None) -> AgentRunRecord | None:
-        records = self.list_for_task(task_id, role=role)
         return records[-1] if records else None
 
     def provider_thread_handle(self, agent_id: str) -> ProviderResumeHandle | None:

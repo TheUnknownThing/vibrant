@@ -22,12 +22,14 @@ class ConversationCapability:
         *,
         conversation_id: str,
         agent_id: str,
+        run_id: str | None,
         task_id: str | None,
         provider_thread_id: str | None = None,
     ) -> None:
         self.stream.bind_agent(
             conversation_id=conversation_id,
             agent_id=agent_id,
+            run_id=run_id,
             task_id=task_id,
             provider_thread_id=provider_thread_id,
         )

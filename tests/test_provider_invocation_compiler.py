@@ -9,7 +9,7 @@ def test_codex_compiler_renders_loopback_mcp_overrides() -> None:
     descriptor = MCPAccessDescriptor(
         binding_id="binding-gatekeeper-123",
         role="gatekeeper",
-        session_id="gatekeeper-123",
+        run_id="gatekeeper-123",
         conversation_id="conv-123",
         visible_tools=["vibrant.add_task", "vibrant.update_task_definition"],
         visible_resources=["vibrant.get_consensus"],
@@ -42,7 +42,7 @@ def test_codex_compiler_skips_transport_args_without_endpoint() -> None:
     descriptor = MCPAccessDescriptor(
         binding_id="binding-gatekeeper-123",
         role="gatekeeper",
-        session_id="gatekeeper-123",
+        run_id="gatekeeper-123",
         visible_tools=["vibrant.add_task"],
         visible_resources=["vibrant.get_consensus"],
         server_id="vibrant_gatekeeper_123",

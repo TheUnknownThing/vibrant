@@ -16,8 +16,9 @@ from vibrant.providers.invocation import ProviderInvocationPlan
 def _make_agent_record() -> AgentRecord:
     return AgentRecord(
         identity={
+            "run_id": "run-task-001",
             "agent_id": "agent-task-001",
-            "task_id": "task-001",
+            "role": AgentType.CODE.value,
             "type": AgentType.CODE,
         }
     )

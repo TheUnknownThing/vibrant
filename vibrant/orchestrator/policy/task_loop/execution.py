@@ -70,6 +70,7 @@ class ExecutionCoordinator:
         self.conversation_stream.bind_agent(
             conversation_id=conversation_id,
             agent_id=instance.identity.agent_id,
+            run_id=agent_record.identity.run_id,
             task_id=lease.task_id,
         )
         self.conversation_stream.record_host_message(

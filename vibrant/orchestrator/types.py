@@ -255,6 +255,7 @@ class AgentConversationEntry:
 class AgentConversationView:
     conversation_id: str
     agent_ids: list[str]
+    run_ids: list[str]
     task_ids: list[str]
     active_turn_id: str | None
     entries: list[AgentConversationEntry]
@@ -363,16 +364,52 @@ class AgentOutput:
 
 
 @dataclass(slots=True)
-class AgentSnapshotIdentity:
-    agent_id: str
-    run_id: str
-    task_id: str
+class RoleSnapshot:
     role: str
-    agent_type: str | None = None
+    scope_types: tuple[str, ...] = ()
+    instance_count: int = 0
+    active_run_count: int = 0
 
 
 @dataclass(slots=True)
-class AgentSnapshotRuntime:
+class AgentInstanceIdentitySnapshot:
+    agent_id: str
+    role: str
+
+
+@dataclass(slots=True)
+class AgentInstanceScopeSnapshot:
+    scope_type: str
+    scope_id: str | None = None
+
+
+@dataclass(slots=True)
+class AgentInstanceProviderSnapshot:
+    kind: str
+    transport: str
+    runtime_mode: str
+
+
+@dataclass(slots=True)
+class AgentInstanceSnapshot:
+    identity: AgentInstanceIdentitySnapshot
+    scope: AgentInstanceScopeSnapshot
+    provider: AgentInstanceProviderSnapshot
+    latest_run_id: str | None = None
+    active_run_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class AgentRunIdentitySnapshot:
+    agent_id: str
+    run_id: str
+    role: str
+
+
+@dataclass(slots=True)
+class AgentRunRuntimeSnapshot:
     status: str
     state: str
     has_handle: bool
@@ -386,20 +423,20 @@ class AgentSnapshotRuntime:
 
 
 @dataclass(slots=True)
-class AgentSnapshotWorkspace:
+class AgentRunWorkspaceSnapshot:
     branch: str | None = None
     worktree_path: str | None = None
 
 
 @dataclass(slots=True)
-class AgentSnapshotOutcome:
+class AgentRunOutcomeSnapshot:
     summary: str | None = None
     error: str | None = None
     output: AgentOutput | None = None
 
 
 @dataclass(slots=True)
-class AgentSnapshotProvider:
+class AgentRunProviderSnapshot:
     thread_id: str | None = None
     thread_path: str | None = None
     resume_cursor: dict[str, Any] | None = None
@@ -408,12 +445,22 @@ class AgentSnapshotProvider:
 
 
 @dataclass(slots=True)
-class OrchestratorAgentSnapshot:
-    identity: AgentSnapshotIdentity
-    runtime: AgentSnapshotRuntime
-    workspace: AgentSnapshotWorkspace = field(default_factory=AgentSnapshotWorkspace)
-    outcome: AgentSnapshotOutcome = field(default_factory=AgentSnapshotOutcome)
-    provider: AgentSnapshotProvider = field(default_factory=AgentSnapshotProvider)
+class AgentRunSnapshot:
+    identity: AgentRunIdentitySnapshot
+    runtime: AgentRunRuntimeSnapshot
+    workspace: AgentRunWorkspaceSnapshot = field(default_factory=AgentRunWorkspaceSnapshot)
+    outcome: AgentRunOutcomeSnapshot = field(default_factory=AgentRunOutcomeSnapshot)
+    provider: AgentRunProviderSnapshot = field(default_factory=AgentRunProviderSnapshot)
+
+
+# Compatibility aliases while first-party consumers finish moving to
+# explicit role/instance/run names.
+AgentSnapshotIdentity = AgentRunIdentitySnapshot
+AgentSnapshotRuntime = AgentRunRuntimeSnapshot
+AgentSnapshotWorkspace = AgentRunWorkspaceSnapshot
+AgentSnapshotOutcome = AgentRunOutcomeSnapshot
+AgentSnapshotProvider = AgentRunProviderSnapshot
+OrchestratorAgentSnapshot = AgentRunSnapshot
 
 
 @dataclass(slots=True)

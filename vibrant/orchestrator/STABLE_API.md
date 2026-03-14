@@ -63,25 +63,44 @@ Required semantic contents:
 - consensus view
 - pending question views
 - active review tickets or review summaries
-- active agent/runtime summaries
+- role summaries
+- instance summaries
+- run/runtime summaries
 - active attempt summaries
 - user-input banner or blocking-state projection when applicable
 
 The exact implementation may evolve, but the snapshot must remain a coherent,
 consumer-ready projection of orchestrator state.
 
-### `OrchestratorAgentSnapshot`
+### `AgentRunSnapshot`
 
 This read model represents the orchestrator’s combined durable and live view of
-one agent.
+one run.
 
 It must preserve the meaning of:
 
-- stable agent identity
+- stable instance identity
+- concrete run identity
 - runtime/lifecycle state
 - provider resume metadata
 - workspace context
 - best-known summary/error/output projection
+
+### `AgentInstanceSnapshot`
+
+This read model represents one stable logical actor instance.
+
+It must preserve the meaning of:
+
+- stable `agent_id`
+- role identity
+- scope and provider defaults
+- latest-run and active-run linkage
+
+### `RoleSnapshot`
+
+This read model represents one policy role and its currently observed
+instance/run footprint.
 
 ### Conversation Views
 
@@ -107,6 +126,7 @@ class GatekeeperSubmission:
     session: GatekeeperSessionSnapshot
     conversation_id: str
     agent_id: str | None
+    run_id: str | None
     accepted: bool
     active_turn_id: str | None
     error: str | None = None
@@ -126,6 +146,13 @@ class InterfaceControlPlane:
     def workflow_snapshot(self) -> WorkflowSnapshot: ...
     def gatekeeper_state(self) -> GatekeeperLoopState: ...
     def task_loop_state(self) -> TaskLoopSnapshot: ...
+    def list_roles(self) -> list[RoleSnapshot]: ...
+    def get_role(self, role: str) -> RoleSnapshot | None: ...
+    def list_instances(self) -> list[AgentInstanceSnapshot]: ...
+    def get_instance(self, agent_id: str) -> AgentInstanceSnapshot | None: ...
+    def list_runs(self) -> list[AgentRunSnapshot]: ...
+    def list_active_runs(self) -> list[AgentRunSnapshot]: ...
+    def get_run(self, run_id: str) -> AgentRunSnapshot | None: ...
 ```
 
 The stable behavioral rule is that public consumers receive a **submission
@@ -148,7 +175,7 @@ Allowed temporary compatibility examples:
 
 - convenience reads such as roadmap or consensus accessors
 - async user-message helpers that internally translate into control-plane submissions
-- stable task/agent projection helpers used by the current TUI
+- stable task/run projection helpers used by the current TUI
 
 Not allowed as compatibility behavior:
 
@@ -171,7 +198,7 @@ The Gatekeeper-facing stable resource set is:
 - `get_task(task_id)`
 - `get_workflow_status()`
 - `list_pending_questions()`
-- `list_active_agents()`
+- `list_active_runs()`
 - `list_active_attempts()`
 - `get_review_ticket(ticket_id)`
 - `list_pending_review_tickets()`
@@ -208,7 +235,8 @@ orchestrator-owned:
 - question store
 - attempt store
 - review ticket store
-- agent record store
+- agent instance store
+- agent run store
 - conversation store
 
 Store file layouts may evolve, but the authority boundaries must not.

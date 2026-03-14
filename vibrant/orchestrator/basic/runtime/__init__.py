@@ -39,14 +39,12 @@ class AgentRuntimeCapability:
         *,
         agent_id: str | None = None,
         run_id: str | None = None,
-        task_id: str | None = None,
         event_types: Sequence[str] | None = None,
     ) -> Any:
         return self.service.subscribe_canonical_events(
             callback,
             agent_id=agent_id,
             run_id=run_id,
-            task_id=task_id,
             event_types=event_types,
         )
 

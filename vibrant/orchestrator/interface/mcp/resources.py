@@ -26,8 +26,8 @@ class OrchestratorMCPResources:
     def list_pending_questions(self) -> Any:
         return self.queries.list_pending_question_records()
 
-    def list_active_agents(self) -> Any:
-        return self.queries.list_active_agents()
+    def list_active_runs(self) -> Any:
+        return self.queries.list_active_runs()
 
     def list_active_attempts(self) -> Any:
         return self.queries.list_active_attempts()

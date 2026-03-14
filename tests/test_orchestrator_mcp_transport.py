@@ -30,7 +30,7 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
         app = orchestrator.mcp_host.fastmcp.streamable_http_app()
         bound = orchestrator.binding_service.bind_preset(
             preset=gatekeeper_binding_preset(orchestrator.mcp_server, "gatekeeper-test"),
-            session_id="gatekeeper-test",
+            run_id="gatekeeper-test",
             conversation_id="gatekeeper-test",
         )
         orchestrator.mcp_host.register_binding(bound)
@@ -84,7 +84,7 @@ async def test_fastmcp_host_filters_worker_bindings_server_side(tmp_path: Path) 
         app = orchestrator.mcp_host.fastmcp.streamable_http_app()
         bound = orchestrator.binding_service.bind_preset(
             preset=worker_binding_preset(orchestrator.mcp_server, "worker-1", "code"),
-            session_id="task-1",
+            run_id="task-1",
             conversation_id=None,
         )
         orchestrator.mcp_host.register_binding(bound)

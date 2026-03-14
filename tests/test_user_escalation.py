@@ -78,7 +78,12 @@ class FollowUpAdapter:
 
 def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: str) -> None:
     record = AgentRecord(
-        identity={"agent_id": agent_id, "task_id": "gatekeeper-user_conversation", "type": AgentType.GATEKEEPER},
+        identity={
+            "run_id": agent_id,
+            "agent_id": agent_id,
+            "role": AgentType.GATEKEEPER.value,
+            "type": AgentType.GATEKEEPER,
+        },
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
             provider_thread_id=thread_id,

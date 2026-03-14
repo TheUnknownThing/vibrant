@@ -15,7 +15,9 @@ from ...types import AgentStreamEvent, utc_now
 class ConversationManifest:
     conversation_id: str
     agent_ids: list[str] = field(default_factory=list)
+    run_ids: list[str] = field(default_factory=list)
     task_ids: list[str] = field(default_factory=list)
+    run_task_ids: dict[str, str] = field(default_factory=dict)
     provider_thread_id: str | None = None
     active_turn_id: str | None = None
     updated_at: str = field(default_factory=utc_now)
@@ -38,14 +40,19 @@ class ConversationStore:
         *,
         conversation_id: str,
         agent_id: str,
+        run_id: str | None,
         task_id: str | None,
         provider_thread_id: str | None = None,
     ) -> ConversationManifest:
         manifest = self._ensure_manifest(conversation_id)
         if agent_id not in manifest.agent_ids:
             manifest.agent_ids.append(agent_id)
+        if run_id and run_id not in manifest.run_ids:
+            manifest.run_ids.append(run_id)
         if task_id and task_id not in manifest.task_ids:
             manifest.task_ids.append(task_id)
+        if run_id and task_id:
+            manifest.run_task_ids[run_id] = task_id
         if provider_thread_id:
             manifest.provider_thread_id = provider_thread_id
         manifest.updated_at = utc_now()
@@ -65,8 +72,12 @@ class ConversationStore:
         manifest.updated_at = event.created_at
         if event.agent_id and event.agent_id not in manifest.agent_ids:
             manifest.agent_ids.append(event.agent_id)
+        if event.run_id and event.run_id not in manifest.run_ids:
+            manifest.run_ids.append(event.run_id)
         if event.task_id and event.task_id not in manifest.task_ids:
             manifest.task_ids.append(event.task_id)
+        if event.run_id and event.task_id:
+            manifest.run_task_ids[event.run_id] = event.task_id
         if event.turn_id is not None:
             manifest.active_turn_id = event.turn_id
         self._save_manifest(manifest)

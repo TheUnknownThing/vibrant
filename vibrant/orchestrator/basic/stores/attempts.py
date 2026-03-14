@@ -68,6 +68,28 @@ class AttemptStore:
                 return record
         return None
 
+    def list_by_task(self, task_id: str) -> list[AttemptRecord]:
+        return [record for record in self._load_records().values() if record.task_id == task_id]
+
+    def task_id_for_run(self, run_id: str) -> str | None:
+        for record in self._load_records().values():
+            if run_id in _attempt_run_ids(record):
+                return record.task_id
+        return None
+
+    def run_ids_for_task(self, task_id: str) -> set[str]:
+        run_ids: set[str] = set()
+        for record in self.list_by_task(task_id):
+            run_ids.update(_attempt_run_ids(record))
+        return run_ids
+
+    def run_task_ids(self) -> dict[str, str]:
+        mappings: dict[str, str] = {}
+        for record in self._load_records().values():
+            for run_id in _attempt_run_ids(record):
+                mappings[run_id] = record.task_id
+        return mappings
+
     def list_active(self) -> list[AttemptRecord]:
         return [record for record in self._load_records().values() if record.status in ACTIVE_ATTEMPT_STATUSES]
 
@@ -154,3 +176,13 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _attempt_run_ids(record: AttemptRecord) -> set[str]:
+    run_ids: set[str] = set()
+    if record.code_run_id:
+        run_ids.add(record.code_run_id)
+    if record.merge_run_id:
+        run_ids.add(record.merge_run_id)
+    run_ids.update(run_id for run_id in record.validation_run_ids if run_id)
+    return run_ids
