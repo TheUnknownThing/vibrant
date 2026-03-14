@@ -147,12 +147,6 @@ class ConsensusView(Static):
                 yield Button("Cancel", id="consensus-cancel", compact=True)
                 yield Button("Save", id="consensus-save", variant="primary", compact=True)
 
-    def on_mount(self) -> None:
-        self._document = self._get_consensus()
-        self._source_path = self._orchestrator_facade.get_consensus_source_path() if self._orchestrator_facade else None
-        self._reload_preview_from_disk()
-        self._refresh_view()
-
     @property
     def is_editing(self) -> bool:
         """Return whether edit mode is active."""
@@ -356,6 +350,8 @@ class ConsensusView(Static):
         self._set_editor_text(self._load_markdown_from_disk())
 
     def _reload_preview_from_disk(self, *, fallback: str | None = None) -> None:
+        # TODO: shouldn't load from disk.
+
         self._document = self._get_consensus() or self._document
         if not self.is_mounted:
             return
@@ -400,13 +396,12 @@ class ConsensusView(Static):
     def _orchestrator_facade(self) -> OrchestratorFacade | None:
         """Access the app's orchestrator facade."""
 
-        app = getattr(self, "app", None)
+        app = self.app
         if app is None:
             return None
         facade = getattr(app, "orchestrator_facade", None)
-        if facade is not None:
-            return facade
-        return getattr(app, "_orchestrator_facade", None)
+        assert facade is not None
+        return facade
 
     def _get_consensus(self) -> ConsensusDocument | None:
         """Get the current consensus from the orchestrator."""

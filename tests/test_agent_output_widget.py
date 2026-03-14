@@ -242,13 +242,13 @@ async def test_agent_output_syncs_runtime_snapshot_like_agents():
     newer_start = datetime(2026, 3, 11, 9, 5, tzinfo=timezone.utc)
     completed = SimpleNamespace(
         identity=SimpleNamespace(agent_id="agent-task-010", task_id="task-010"),
-        runtime=SimpleNamespace(status=AgentStatus.COMPLETED.value, started_at=older_start),
-        provider=SimpleNamespace(thread_id="thread-010"),
+        lifecycle=SimpleNamespace(status=AgentStatus.COMPLETED, started_at=older_start),
+        provider=SimpleNamespace(provider_thread_id="thread-010"),
     )
     running = SimpleNamespace(
         identity=SimpleNamespace(agent_id="agent-task-011", task_id="task-011"),
-        runtime=SimpleNamespace(status=AgentStatus.RUNNING.value, started_at=newer_start),
-        provider=SimpleNamespace(thread_id="thread-011"),
+        lifecycle=SimpleNamespace(status=AgentStatus.RUNNING, started_at=newer_start),
+        provider=SimpleNamespace(provider_thread_id="thread-011"),
     )
 
     app = AgentOutputHarness()

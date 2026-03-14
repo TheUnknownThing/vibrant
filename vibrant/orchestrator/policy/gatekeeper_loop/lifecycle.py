@@ -14,6 +14,7 @@ from vibrant.agents.gatekeeper import (
     GatekeeperRequest,
 )
 from vibrant.models.agent import AgentInstanceProviderConfig
+from vibrant.agents.runtime import NormalizedRunResult
 from vibrant.models.agent import ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.invocation_compiler import compile_provider_invocation
@@ -233,7 +234,7 @@ class GatekeeperLifecycleService:
 
     async def _monitor_handle(self, run_id: str, handle) -> None:
         try:
-            result = await handle.wait()
+            result: NormalizedRunResult = await handle.wait()
         except Exception as exc:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.FAILED
             self._session.last_error = str(exc)
@@ -242,8 +243,8 @@ class GatekeeperLifecycleService:
             self._persist()
             return
 
-        self._session.provider_thread_id = result.provider_thread_id
-        self._session.resumable = bool(result.provider_thread_id)
+        self._session.provider_thread_id = result.provider_thread.thread_id
+        self._session.resumable = result.provider_thread.resumable
         self._session.run_id = result.agent_record.identity.run_id
         self._session.updated_at = utc_now()
         if result.awaiting_input:
