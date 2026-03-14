@@ -1,18 +1,229 @@
-"""Conversation view widget backed by orchestrator conversation streams."""
+"""Conversation view and rendering helpers for Gatekeeper transcript widgets."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from typing import Literal
+
 from textual.app import ComposeResult
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Static
 
 from ...orchestrator.types import AgentConversationEntry, AgentConversationView, AgentStreamEvent
-from .conversation_renderer import (
-    ConversationRegion,
-    MessageBlock,
-    ReasoningPart,
-    TextPart,
-    ToolCallPart,
-)
+
+MessageRole = Literal["user", "assistant", "system"]
+ReasoningStatus = Literal["in_progress", "completed"]
+ToolCallStatus = Literal["executing", "success", "failed"]
+
+EMPTY_CONVERSATION_MESSAGE = "No Gatekeeper messages yet. Start planning below."
+OMITTED_STATUS_TEXTS = frozenset({"Turn started", "Turn completed"})
+TOOL_STATUS_LABELS: dict[ToolCallStatus, str] = {
+    "executing": "executing",
+    "success": "done",
+    "failed": "failed",
+}
+
+
+class TextPart(Static):
+    """Plain text message part widget."""
+
+    def __init__(self, text: str, **kwargs: object) -> None:
+        super().__init__("", markup=False, classes="conversation-part text-part msg-content", **kwargs)
+        self.styles.height = "auto"
+        self.text = text
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.update(self.text)
+
+    def plain_text(self) -> str:
+        return self.text
+
+    def clone(self) -> TextPart:
+        return TextPart(self.text)
+
+    def sync_from(self, other: TextPart) -> None:
+        if self.text == other.text:
+            return
+        self.text = other.text
+        self._refresh()
+
+
+class ReasoningPart(Vertical):
+    """Reasoning summary part widget."""
+
+    def __init__(self, status: ReasoningStatus, content: TextPart, **kwargs: object) -> None:
+        super().__init__(classes="conversation-part reasoning-part", **kwargs)
+        self.styles.height = "auto"
+        self.status: ReasoningStatus = status
+        self.content = content
+        self.content.add_class("reasoning-content")
+        self._label = Static("", markup=False, classes="reasoning-label")
+        self._refresh()
+
+    def compose(self) -> ComposeResult:
+        yield self._label
+        yield self.content
+
+    def _refresh(self) -> None:
+        self._label.update(_reasoning_label(self.status))
+
+    def plain_text(self) -> str:
+        content = self.content.plain_text().strip()
+        label = _reasoning_label(self.status)
+        return f"{label}\n{indent(content)}" if content else label
+
+    def clone(self) -> ReasoningPart:
+        return ReasoningPart(self.status, self.content.clone())
+
+    def sync_from(self, other: ReasoningPart) -> None:
+        if self.status != other.status:
+            self.status = other.status
+            self._refresh()
+        self.content.sync_from(other.content)
+
+
+class ToolCallPart(Static):
+    """Tool-call status part widget."""
+
+    def __init__(self, tool_name: str, status: ToolCallStatus, **kwargs: object) -> None:
+        super().__init__("", markup=False, classes="conversation-part tool-call-part msg-tool", **kwargs)
+        self.styles.height = "auto"
+        self.tool_name = tool_name
+        self.status = status
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.update(_tool_status_text(self.tool_name, self.status))
+
+    def plain_text(self) -> str:
+        return _tool_status_text(self.tool_name, self.status)
+
+    def clone(self) -> ToolCallPart:
+        return ToolCallPart(self.tool_name, self.status)
+
+    def sync_from(self, other: ToolCallPart) -> None:
+        changed = False
+        if self.tool_name != other.tool_name:
+            self.tool_name = other.tool_name
+            changed = True
+        if self.status != other.status:
+            self.status = other.status
+            changed = True
+        if changed:
+            self._refresh()
+
+
+@dataclass(slots=True)
+class MessageBlock:
+    """One conversation block in the chat panel."""
+
+    message_id: str
+    role: MessageRole
+    turn_id: str | None = None
+    parts: list[TextPart | ReasoningPart | ToolCallPart] = field(default_factory=list)
+
+    def plain_text(self) -> str:
+        body = self.body_text()
+        role_text = role_label(self.role)
+        return f"{role_text}\n{body}" if body else role_text
+
+    def body_text(self) -> str:
+        rendered_parts = [part.plain_text() for part in self.parts]
+        return "\n\n".join(part for part in rendered_parts if part)
+
+
+class MessageBlockWidget(Vertical):
+    """Widget wrapper for one conversation message block."""
+
+    def __init__(self, block: MessageBlock, **kwargs: object) -> None:
+        super().__init__(classes="conversation-block", **kwargs)
+        self.styles.height = "auto"
+        self.message_id = block.message_id
+        self._role: MessageRole = block.role
+        self._parts: list[TextPart | ReasoningPart | ToolCallPart] = [part.clone() for part in block.parts]
+        self._role_header = Static("", markup=False, classes="conversation-role msg-role")
+        self._parts_region = Vertical(classes="conversation-parts")
+        self._parts_region.styles.height = "auto"
+
+    def compose(self) -> ComposeResult:
+        yield self._role_header
+        yield self._parts_region
+
+    def on_mount(self) -> None:
+        self._sync_role_classes()
+        self._role_header.update(role_label(self._role))
+        self._rebuild_parts()
+
+    def set_block(self, block: MessageBlock) -> None:
+        if self._role != block.role:
+            self._role = block.role
+            self._sync_role_classes()
+            self._role_header.update(role_label(self._role))
+        self._sync_parts(block.parts)
+
+    def _sync_role_classes(self) -> None:
+        for role_class in ("user-msg", "assistant-msg", "system-msg"):
+            self.remove_class(role_class)
+        self.add_class(f"{self._role}-msg")
+
+    def _sync_parts(self, updated_parts: list[TextPart | ReasoningPart | ToolCallPart]) -> None:
+        if len(self._parts) != len(updated_parts):
+            self._parts = [part.clone() for part in updated_parts]
+            self._rebuild_parts()
+            return
+
+        for current, updated in zip(self._parts, updated_parts):
+            if type(current) is not type(updated):
+                self._parts = [part.clone() for part in updated_parts]
+                self._rebuild_parts()
+                return
+
+        for current, updated in zip(self._parts, updated_parts):
+            current.sync_from(updated)
+
+    def _rebuild_parts(self) -> None:
+        self._parts_region.remove_children()
+        for part in self._parts:
+            self._parts_region.mount(part)
+
+
+class ConversationRegion(VerticalScroll):
+    """Conversation widget that incrementally updates chat blocks by message id."""
+
+    def __init__(self, *, empty_message: str = EMPTY_CONVERSATION_MESSAGE, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.styles.height = "1fr"
+        self._empty_message = empty_message
+        self._message_order: list[str] = []
+        self._message_widgets: dict[str, MessageBlockWidget] = {}
+
+    def set_messages(self, messages: list[MessageBlock]) -> None:
+        if not messages:
+            self.remove_children()
+            self._message_order = []
+            self._message_widgets.clear()
+            self.mount(Static(self._empty_message, markup=False, classes="conversation-empty"))
+            return
+
+        order = [block.message_id for block in messages]
+        if order != self._message_order:
+            self.remove_children()
+            self._message_order = order
+            self._message_widgets.clear()
+            for block in messages:
+                widget = MessageBlockWidget(block)
+                self._message_widgets[block.message_id] = widget
+                self.mount(widget)
+            return
+
+        for block in messages:
+            widget = self._message_widgets.get(block.message_id)
+            if widget is None:
+                self._message_order = []
+                self.set_messages(messages)
+                return
+            widget.set_block(block)
 
 
 class ConversationView(Static):
@@ -39,13 +250,11 @@ class ConversationView(Static):
         border-left: tall $secondary;
     }
 
-    ConversationView .tool-msg,
     ConversationView .system-msg {
         background: $surface-lighten-1;
         border-left: tall $panel;
     }
 
-    ConversationView .msg-role,
     ConversationView .conversation-role {
         margin-bottom: 0;
     }
@@ -54,35 +263,19 @@ class ConversationView(Static):
         margin-top: 0;
     }
 
-    ConversationView .msg-status,
-    ConversationView .msg-error,
     ConversationView .msg-tool {
         padding: 0 1;
         margin: 0;
     }
-
-    ConversationView .msg-error {
-        color: $error;
-    }
-
-    ConversationView .command-collapsible,
-    ConversationView .reasoning-collapsible {
-        margin: 0;
-        padding: 0;
-    }
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self._scroll: ConversationRegion | None = None
         self._conversation: AgentConversationView | None = None
-        self._empty_text = "[dim]No Gatekeeper messages yet. Start planning below.[/dim]"
 
     def compose(self) -> ComposeResult:
-        self._scroll = ConversationRegion(
-            id="conversation-scroll",
-            empty_message="No Gatekeeper messages yet. Start planning below.",
-        )
+        self._scroll = ConversationRegion(id="conversation-scroll", empty_message=EMPTY_CONVERSATION_MESSAGE)
         yield self._scroll
 
     @property
@@ -129,14 +322,18 @@ class ConversationView(Static):
         self._render_once()
 
     def _render_once(self) -> None:
-        if not self.is_mounted:
+        if not self.is_mounted or self._scroll is None:
             return
-
-        if self._scroll is None:
-            return
-
         self._scroll.set_messages(_render_blocks(self._conversation))
         self._scroll.scroll_end(animate=False)
+
+
+def _reasoning_label(status: ReasoningStatus) -> str:
+    return "Reasoning..." if status == "in_progress" else "Reasoning"
+
+
+def _tool_status_text(tool_name: str, status: ToolCallStatus) -> str:
+    return f"Tool · {tool_name} · {TOOL_STATUS_LABELS[status]}"
 
 
 def _tool_body(entry: AgentConversationEntry) -> str:
@@ -144,6 +341,7 @@ def _tool_body(entry: AgentConversationEntry) -> str:
     result = payload.get("result")
     if isinstance(result, str) and result.strip():
         return result.strip()
+
     text = entry.text.strip()
     title = _tool_name(entry)
     if text and text != title:
@@ -159,13 +357,16 @@ def _render_blocks(conversation: AgentConversationView | None) -> list[MessageBl
     for index, entry in enumerate(conversation.entries):
         if _omit_entry_from_blocks(entry):
             continue
+
         parts = _message_parts(entry)
         if not parts:
             continue
+
         role = _block_role(entry)
         if _should_append_to_previous(rendered, entry, role):
             rendered[-1].parts.extend(parts)
             continue
+
         rendered.append(
             MessageBlock(
                 message_id=_message_id(entry, index),
@@ -181,13 +382,13 @@ def _message_id(entry: AgentConversationEntry, index: int) -> str:
     return f"{index}:{entry.turn_id or '-'}:{entry.role}:{entry.kind}"
 
 
-def _block_role(entry: AgentConversationEntry) -> str:
+def _block_role(entry: AgentConversationEntry) -> MessageRole:
     if entry.role == "tool":
         return "assistant"
     return _message_role(entry.role)
 
 
-def _message_role(role: str) -> str:
+def _message_role(role: str) -> MessageRole:
     if role in {"user", "assistant", "system"}:
         return role
     return "system"
@@ -196,16 +397,17 @@ def _message_role(role: str) -> str:
 def _omit_entry_from_blocks(entry: AgentConversationEntry) -> bool:
     if entry.role != "system" or entry.kind != "status":
         return False
-    return (entry.text or "").strip() in {"Turn started", "Turn completed"}
+    return (entry.text or "").strip() in OMITTED_STATUS_TEXTS
 
 
 def _should_append_to_previous(
     rendered: list[MessageBlock],
     entry: AgentConversationEntry,
-    role: str,
+    role: MessageRole,
 ) -> bool:
     if not rendered:
         return False
+
     previous = rendered[-1]
     if previous.role != role:
         return False
@@ -219,8 +421,7 @@ def _should_append_to_previous(
 
 
 def _message_parts(entry: AgentConversationEntry) -> list[TextPart | ReasoningPart | ToolCallPart]:
-    text = entry.text or ""
-    stripped_text = text.strip()
+    stripped_text = entry.text.strip()
 
     if entry.kind == "thinking":
         return [
@@ -260,7 +461,7 @@ def _tool_name(entry: AgentConversationEntry) -> str:
     return name_text or "tool"
 
 
-def _tool_status(entry: AgentConversationEntry) -> str:
+def _tool_status(entry: AgentConversationEntry) -> ToolCallStatus:
     payload = entry.payload or {}
     error = payload.get("error")
     if error not in (None, "", {}):
@@ -424,14 +625,46 @@ def _find_open_entry(
     kind: str,
     turn_id: str | None,
 ) -> AgentConversationEntry | None:
-    # Only the trailing open widget can keep streaming content. If a later
-    # message/tool widget has already been appended, preserve transcript order
-    # by starting a fresh widget for subsequent deltas.
     if not entries:
         return None
+
     entry = entries[-1]
     if entry.role != role or entry.kind != kind:
         return None
     if entry.turn_id != turn_id or entry.finished_at is not None:
         return None
     return entry
+
+
+def indent(text: str) -> str:
+    """Indent multi-line sub-content for readability."""
+
+    return "\n".join(f"  {line}" if line else "" for line in text.splitlines())
+
+
+def role_label(role: MessageRole) -> str:
+    """Return the display label for a message role."""
+
+    if role == "user":
+        return "You"
+    if role == "assistant":
+        return "Gatekeeper"
+    return "System"
+
+
+__all__ = [
+    "ConversationRegion",
+    "ConversationView",
+    "EMPTY_CONVERSATION_MESSAGE",
+    "MessageBlock",
+    "MessageRole",
+    "MessageBlockWidget",
+    "ReasoningPart",
+    "ReasoningStatus",
+    "TextPart",
+    "ToolCallPart",
+    "ToolCallStatus",
+    "indent",
+    "role_label",
+    "_render_blocks",
+]

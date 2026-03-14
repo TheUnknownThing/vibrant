@@ -12,8 +12,14 @@ from vibrant.orchestrator.types import (
     QuestionStatus,
 )
 from vibrant.tui.widgets.chat_panel import ChatPanel
-from vibrant.tui.widgets.conversation_renderer import ConversationRegion, MessageBlockWidget, ReasoningPart, ToolCallPart
-from vibrant.tui.widgets.conversation_view import ConversationView, _render_blocks
+from vibrant.tui.widgets.conversation_view import (
+    ConversationRegion,
+    ConversationView,
+    MessageBlockWidget,
+    ReasoningPart,
+    ToolCallPart,
+    _render_blocks,
+)
 
 
 class ChatPanelHarness(App[None]):
