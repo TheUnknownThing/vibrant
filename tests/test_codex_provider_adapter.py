@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from vibrant.models.agent import AgentRecord, AgentType
+from vibrant.models.agent import AgentRunRecord
 from vibrant.models.wire import JsonRpcNotification
 from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
 from vibrant.providers.codex.adapter import CodexProviderAdapter
@@ -106,7 +106,7 @@ class TestCodexProviderAdapter:
                 "rolloutPath": ".codex/threads/thread_abc123/rollout.jsonl",
             }
         }
-        agent = AgentRecord(identity={"agent_id": "agent-task-001", "task_id": "task-001", "type": AgentType.CODE})
+        agent = AgentRunRecord(identity={"agent_id": "agent-task-001", "task_id": "task-001", "role": "code"})
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=client, agent_record=agent, on_canonical_event=events.append)
 
@@ -441,7 +441,7 @@ async def test_codex_app_server_handshake_integration(tmp_path: Path):
     if not codex_binary:
         pytest.skip("codex CLI is not available")
 
-    agent = AgentRecord(identity={"agent_id": "agent-task-real", "task_id": "task-real", "type": AgentType.CODE})
+    agent = AgentRunRecord(identity={"agent_id": "agent-task-real", "task_id": "task-real", "role": "code"})
     events: list[dict[str, Any]] = []
     adapter = CodexProviderAdapter(
         cwd=str(tmp_path),

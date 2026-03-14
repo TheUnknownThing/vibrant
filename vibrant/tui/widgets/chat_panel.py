@@ -217,4 +217,3 @@ def _render_gatekeeper_summary(question_records: Sequence[QuestionRecord]) -> st
         rendered_blocks.append("\n".join(lines))
 
     return "\n\n".join(rendered_blocks)
-

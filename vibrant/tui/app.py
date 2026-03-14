@@ -72,6 +72,7 @@ class VibrantApp(App):
         Binding("f6", "show_chat_history", "Chat", show=True),
         Binding("f7", "toggle_consensus", "Consensus", show=True),
         Binding("f8", "show_agent_logs", "Logs", show=True),
+        Binding("escape", "interrupt_gatekeeper", show=False),
         Binding("f10", "quit_app", "Quit", show=True),
         Binding("ctrl+s", "open_settings", "Settings", show=False),
         Binding("ctrl+c", "quit_app", "Quit", show=True),
@@ -89,6 +90,12 @@ class VibrantApp(App):
             return planning_screen is not None or vibing_screen is not None
         if action == "toggle_pause":
             return vibing_screen is not None
+        if action == "interrupt_gatekeeper":
+            return (
+                (planning_screen is not None or vibing_screen is not None)
+                and self._gatekeeper_is_busy()
+                and self._gatekeeper_interrupt_supported()
+            )
         if action in {"show_task_status", "show_chat_history", "show_agent_logs"}:
             return vibing_screen is not None
         if action == "toggle_consensus":
@@ -109,6 +116,8 @@ class VibrantApp(App):
         if cwd:
             self._settings.default_cwd = cwd
 
+        self.orchestrator: Orchestrator | None = None
+        self.orchestrator_facade: OrchestratorFacade | None = None
         self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
         self._orchestrator: Orchestrator | None = None
@@ -203,7 +212,7 @@ class VibrantApp(App):
         self.push_screen(HelpScreen())
 
     def action_toggle_pause(self) -> None:
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         if orchestrator is None:
             self.notify(
                 f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
@@ -289,7 +298,7 @@ class VibrantApp(App):
         self._set_status("Opened Agent Logs tab")
 
     async def action_run_next_task(self) -> None:
-        if self._orchestrator is None:
+        if self.orchestrator is None:
             self.notify(
                 f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
                 severity="warning",
@@ -301,8 +310,35 @@ class VibrantApp(App):
 
         self._launch_roadmap_runner(notify_when_idle=True)
 
+    async def action_interrupt_gatekeeper(self) -> None:
+        orchestrator = self.orchestrator_facade
+        interrupt_gatekeeper = getattr(orchestrator, "interrupt_gatekeeper", None)
+        if (
+            orchestrator is None
+            or not self._gatekeeper_is_busy()
+            or not callable(interrupt_gatekeeper)
+        ):
+            return
+
+        try:
+            interrupted = await interrupt_gatekeeper()
+        except Exception as exc:
+            logger.exception("Failed to interrupt Gatekeeper")
+            self.notify(f"Failed to interrupt Gatekeeper: {exc}", severity="error")
+            self._set_status(f"Gatekeeper interrupt failed: {exc}")
+            return
+
+        if not interrupted:
+            self.notify("Gatekeeper interrupt is not available for the current run.", severity="warning")
+            self._set_status("Gatekeeper interrupt unavailable")
+            return
+
+        self.notify("Interrupt requested for Gatekeeper.")
+        self._set_status("Interrupting Gatekeeper…")
+        self._refresh_gatekeeper_state()
+
     async def _run_roadmap_tasks(self, *, notify_when_idle: bool) -> None:
-        assert self._orchestrator is not None
+        assert self.orchestrator is not None
 
         automatic = self._roadmap_execution_mode() is RoadmapExecutionMode.AUTOMATIC
 
@@ -313,13 +349,13 @@ class VibrantApp(App):
 
         try:
             if automatic:
-                results = await self._orchestrator.run_until_blocked()
+                results = await self.orchestrator.run_until_blocked()
                 if results:
                     self._handle_task_results(results)
                 elif notify_when_idle:
                     self._handle_task_result(None)
             else:
-                result = await self._orchestrator.run_next_task()
+                result = await self.orchestrator.run_next_task()
                 if result is not None:
                     self._handle_task_result(result)
                 elif notify_when_idle:
@@ -335,7 +371,7 @@ class VibrantApp(App):
             self._refresh_project_views()
 
     def _start_automatic_workflow_if_needed(self) -> None:
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         if orchestrator is None or self._task_execution_in_progress or self._is_planning_mode():
             return
         if self._roadmap_execution_mode() is not RoadmapExecutionMode.AUTOMATIC:
@@ -365,16 +401,16 @@ class VibrantApp(App):
         )
 
     async def _start_gatekeeper_message(self, text: str) -> None:
-        assert self._orchestrator is not None
+        assert self.orchestrator is not None
         pending_question = self._current_pending_gatekeeper_question_record()
         try:
             if pending_question is not None:
-                submission = await self._orchestrator.control_plane.answer_user_decision(
+                submission = await self.orchestrator.control_plane.answer_user_decision(
                     pending_question.question_id,
                     text,
                 )
             else:
-                submission = await self._orchestrator.control_plane.submit_user_message(text)
+                submission = await self.orchestrator.control_plane.submit_user_message(text)
             self._sync_gatekeeper_conversation_binding(
                 conversation_id=submission.conversation_id,
                 force=True,
@@ -384,14 +420,13 @@ class VibrantApp(App):
             if not submission.agent_id:
                 raise RuntimeError("Gatekeeper submission did not produce an agent id")
 
-            result = await self._orchestrator.runtime_service.wait_for_run(submission.agent_id)
+            result = await self.orchestrator.runtime_service.wait_for_run(submission.agent_id)
             if _extract_planning_completion_request(result):
                 self._transition_to_vibing(prefer_chat_history=True)
                 return
             if self._maybe_sync_post_planning_transition():
                 return
 
-            self._refresh_project_views()
             self.notify("Message sent to Gatekeeper.")
             self._set_status("Gatekeeper updated the plan")
             self._start_automatic_workflow_if_needed()
@@ -403,9 +438,9 @@ class VibrantApp(App):
             self._refresh_gatekeeper_state()
 
     def _roadmap_execution_mode(self) -> RoadmapExecutionMode:
-        if self._orchestrator is None:
+        if self.orchestrator is None:
             return RoadmapExecutionMode.AUTOMATIC
-        mode = getattr(self._orchestrator, "execution_mode", RoadmapExecutionMode.AUTOMATIC)
+        mode = getattr(self.orchestrator, "execution_mode", RoadmapExecutionMode.AUTOMATIC)
         if isinstance(mode, RoadmapExecutionMode):
             return mode
         return RoadmapExecutionMode(str(mode).strip().lower())
@@ -418,7 +453,7 @@ class VibrantApp(App):
         self.exit()
 
     async def on_input_bar_message_submitted(self, event: InputBar.MessageSubmitted) -> None:
-        if self._orchestrator is None:
+        if self.orchestrator is None:
             self.notify(
                 f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
                 severity="warning",
@@ -434,6 +469,7 @@ class VibrantApp(App):
             self.notify("Gatekeeper is already running.", severity="warning")
             return
 
+        self._record_command_history_entry(event.text)
         input_bar.set_enabled(False)
         input_bar.set_context("gatekeeper", "sending…")
         self._set_status("Sending message to Gatekeeper…")
@@ -441,6 +477,7 @@ class VibrantApp(App):
         self._refresh_gatekeeper_state()
 
     async def on_input_bar_slash_command(self, event: InputBar.SlashCommand) -> None:
+        self._record_command_history_entry(event.text)
         cmd = event.command.lower()
         if cmd == "model":
             if event.args:
@@ -450,6 +487,8 @@ class VibrantApp(App):
                 self.notify(f"Current model: {self._settings.default_model}")
         elif cmd == "settings":
             await self.action_open_settings()
+        elif cmd == "vibe":
+            self._transition_to_vibing(prefer_chat_history=True)
         elif cmd in {"run", "next", "task"}:
             await self.action_run_next_task()
         elif cmd == "refresh":
@@ -472,6 +511,7 @@ class VibrantApp(App):
         elif cmd == "help":
             self.notify(
                 "/model <name> - Set model\n"
+                "/vibe - Enter vibing phase\n"
                 "/run - Execute the next roadmap task\n"
                 "/refresh - Reload project state\n"
                 "/settings - Open settings\n"
@@ -483,18 +523,19 @@ class VibrantApp(App):
             self.notify(f"Unknown command: /{cmd}", severity="warning")
 
     async def on_consensus_view_save_requested(self, event: ConsensusView.SaveRequested) -> None:
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         if orchestrator is None:
             self.notify("Consensus edits require an initialized project.", severity="warning")
             return
 
-        try:
-            orchestrator.write_consensus_document(event.document)
-        except Exception as exc:
-            logger.exception("Failed to save consensus edits")
-            self.notify(f"Failed to save consensus edits: {exc}", severity="error")
-            self._set_status(f"Consensus save failed: {exc}")
-            return
+        if not getattr(event, "already_saved", False):
+            try:
+                orchestrator.write_consensus_document(event.document)
+            except Exception as exc:
+                logger.exception("Failed to save consensus edits")
+                self.notify(f"Failed to save consensus edits: {exc}", severity="error")
+                self._set_status(f"Consensus save failed: {exc}")
+                return
 
         self._refresh_project_views()
         self.notify("Consensus updated.")
@@ -592,6 +633,8 @@ class VibrantApp(App):
         self._project_root = project_root
         vibrant_dir = project_root / DEFAULT_CONFIG_DIR
         if not vibrant_dir.exists():
+            self.orchestrator = None
+            self.orchestrator_facade = None
             self._orchestrator = None
             self._orchestrator_facade = None
             return
@@ -600,13 +643,16 @@ class VibrantApp(App):
             ensure_project_files(project_root)
             self._orchestrator = self._orchestrator_factory(project_root)
             self._orchestrator_facade = OrchestratorFacade(self._orchestrator)
+            self.orchestrator = self._orchestrator
+            self.orchestrator_facade = self._orchestrator_facade
             self._attach_orchestrator_subscriptions()
         except Exception as exc:
             logger.exception("Failed to initialize project lifecycle")
+            self.orchestrator = None
+            self.orchestrator_facade = None
             self._orchestrator = None
             self._orchestrator_facade = None
             self.notify(f"Failed to load project state: {exc}", severity="error")
-
     def _project_has_vibrant_state(self) -> bool:
         return (self._project_root / DEFAULT_CONFIG_DIR).exists()
 
@@ -623,15 +669,19 @@ class VibrantApp(App):
         host.remove_children()
         host.mount(workspace)
         self._workspace_screen = workspace
-
     def _apply_workspace_placeholder(self, placeholder: str) -> None:
-        if self._workspace_screen is None:
+        input_bar = self._input_bar()
+        if input_bar is None:
             return
         with suppress(Exception):
-            self._workspace_screen.set_input_placeholder(placeholder)
+            input_bar.set_placeholder(placeholder)
+        with suppress(Exception):
+            input_bar.set_completion_base_path(self._project_root)
+        with suppress(Exception):
+            input_bar.set_history_provider(self._command_history_entries)
 
     def _sync_workspace_screen(self, *, prefer_chat_history: bool = False) -> None:
-        planning_mode = self._orchestrator is None or self._is_planning_mode()
+        planning_mode = self.orchestrator is None or self._is_planning_mode()
         self.set_class(planning_mode, "planning-mode")
         self.set_class(not planning_mode, "vibing-mode")
 
@@ -649,12 +699,12 @@ class VibrantApp(App):
         if self._workspace_screen is None:
             return
 
-        placeholder = "Tell me what you want to build" if planning_mode else InputBar.DEFAULT_PLACEHOLDER
+        placeholder = self._default_input_placeholder()
         self.call_after_refresh(self._apply_workspace_placeholder, placeholder)
         self.refresh_bindings()
 
     def _transition_to_vibing(self, *, prefer_chat_history: bool) -> bool:
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         if orchestrator is None:
             self.notify("Initialize a project before entering the vibing phase.", severity="warning")
             return False
@@ -687,7 +737,7 @@ class VibrantApp(App):
         self._sync_workspace_screen()
         vibing_screen = self._vibing_screen()
         self._sync_gatekeeper_conversation_binding()
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         agent_output = None
         plan_tree = None
         consensus_view = None
@@ -708,7 +758,10 @@ class VibrantApp(App):
                 if agent_output is not None:
                     agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
                 if consensus_view is not None:
-                    consensus_view.clear_summary("No `.vibrant/consensus.md` found for this workspace.")
+                    self._clear_consensus_view(
+                        consensus_view,
+                        "No `.vibrant/consensus.md` found for this workspace.",
+                    )
                 with suppress(Exception):
                     vibing_screen.set_roadmap_loading(True)
             self._refresh_gatekeeper_state()
@@ -716,7 +769,10 @@ class VibrantApp(App):
 
         snapshot = orchestrator.snapshot()
         if agent_output is not None:
-            agent_output.sync_agents(snapshot.agent_records)
+            agents = getattr(snapshot, "agent_records", None)
+            if agents is None:
+                agents = getattr(snapshot, "instances", ())
+            agent_output.sync_agents(agents)
             for event in self._pending_runtime_bootstrap_events:
                 agent_output.ingest_canonical_event(event)
             self._pending_runtime_bootstrap_events = []
@@ -724,9 +780,17 @@ class VibrantApp(App):
         roadmap = snapshot.roadmap
         roadmap_tasks = tuple(getattr(roadmap, "tasks", ()) or ())
         consensus_document = snapshot.consensus
+        consensus_path = getattr(snapshot, "consensus_path", None)
 
         if vibing_screen is not None:
-            if plan_tree is not None:
+            sync_task_views = getattr(vibing_screen, "sync_task_views", None)
+            if callable(sync_task_views):
+                sync_task_views(
+                    roadmap_tasks,
+                    facade=orchestrator,
+                    agent_summaries=self._collect_task_summaries(),
+                )
+            elif plan_tree is not None:
                 plan_tree.update_tasks(
                     roadmap_tasks,
                     agent_summaries=self._collect_task_summaries(),
@@ -735,9 +799,11 @@ class VibrantApp(App):
                 vibing_screen.set_roadmap_loading(not bool(roadmap_tasks))
 
         if consensus_view is not None:
-            consensus_view.update_consensus(
+            self._update_consensus_view(
+                consensus_view,
                 consensus_document,
                 tasks=roadmap_tasks,
+                source_path=consensus_path,
             )
 
         planning_screen = self._planning_screen()
@@ -747,17 +813,67 @@ class VibrantApp(App):
         self._refresh_gatekeeper_state()
 
     def _collect_task_summaries(self) -> dict[str, str]:
-        if self._orchestrator_facade is None:
+        if self.orchestrator_facade is None:
             return {}
-        return self._orchestrator_facade.get_task_summaries()
+        return self.orchestrator_facade.get_task_summaries()
+
+    def _update_consensus_view(
+        self,
+        consensus_view: ConsensusView,
+        document,
+        *,
+        tasks: tuple[object, ...],
+        source_path,
+    ) -> None:
+        try:
+            consensus_view.update_consensus(
+                document,
+                tasks=tasks,
+                source_path=source_path,
+            )
+        except TypeError:
+            consensus_view.update_consensus(
+                document,
+                tasks=tasks,
+            )
+
+    def _clear_consensus_view(self, consensus_view: ConsensusView, message: str) -> None:
+        try:
+            consensus_view.clear_summary(message)
+        except TypeError:
+            consensus_view.clear_summary()
+
+    def _command_history_entries(self) -> list[str]:
+        orchestrator = self.orchestrator_facade
+        if orchestrator is None:
+            return []
+
+        list_history = getattr(orchestrator, "list_command_history", None)
+        if not callable(list_history):
+            return []
+
+        with suppress(Exception):
+            return list(list_history())
+        return []
+
+    def _record_command_history_entry(self, text: str) -> None:
+        normalized = text.strip()
+        orchestrator = self.orchestrator_facade
+        if not normalized or orchestrator is None:
+            return
+
+        record_entry = getattr(orchestrator, "record_command_history_entry", None)
+        if callable(record_entry):
+            with suppress(Exception):
+                record_entry(normalized)
 
     def _handle_task_result(self, result: TaskResult | None) -> None:
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         if result is None:
             if orchestrator and orchestrator.get_workflow_status() is OrchestratorStatus.COMPLETED:
                 self.notify("Workflow completed.")
                 self._set_status("Workflow completed")
-            elif orchestrator and orchestrator.list_pending_questions():
+            elif self._pending_question_records():
                 banner = orchestrator.get_user_input_banner()
                 self.notify(banner, severity="warning")
                 self._set_status(banner)
@@ -765,25 +881,37 @@ class VibrantApp(App):
                 self._notify_no_ready_task()
             return
 
+        task_label = result.task_id or "task"
         if result.outcome == "accepted":
             completed = bool(orchestrator and orchestrator.get_workflow_status() is OrchestratorStatus.COMPLETED)
             if completed:
-                self.notify(f"Task {result.task_id} accepted and merged. Workflow completed.")
-                self._set_status(f"Task {result.task_id} accepted · workflow completed")
+                self.notify(f"Task {task_label} accepted and merged. Workflow completed.")
+                self._set_status(f"Task {task_label} accepted · workflow completed")
             else:
-                self.notify(f"Task {result.task_id} accepted and merged.")
-                self._set_status(f"Task {result.task_id} accepted and merged")
+                self.notify(f"Task {task_label} accepted and merged.")
+                self._set_status(f"Task {task_label} accepted and merged")
         elif result.outcome == "retried":
-            self.notify(f"Task {result.task_id} queued for retry.", severity="warning")
-            self._set_status(f"Task {result.task_id} queued for retry")
+            self.notify(f"Task {task_label} queued for retry.", severity="warning")
+            self._set_status(f"Task {task_label} queued for retry")
         elif result.outcome == "escalated":
-            self.notify(f"Task {result.task_id} escalated to the user.", severity="warning")
-            self._set_status(f"Task {result.task_id} escalated to the user")
+            self.notify(f"Task {task_label} escalated to the user.", severity="warning")
+            self._set_status(f"Task {task_label} escalated to the user")
+        elif result.outcome == "review_pending":
+            worktree_path = getattr(result, "worktree_path", None)
+            if isinstance(worktree_path, str) and worktree_path.strip():
+                self.notify(f"Task {task_label} is awaiting review in {worktree_path}.")
+            else:
+                self.notify(f"Task {task_label} is awaiting review.")
+            self._set_status(f"Task {task_label} awaiting review")
         elif result.outcome == "awaiting_user":
             self.notify(
                 orchestrator.get_user_input_banner() if orchestrator else "User input required.",
                 severity="warning",
             )
+        elif result.outcome == "failed":
+            error = getattr(result, "error", None) or "Task failed."
+            self.notify(str(error), severity="error")
+            self._set_status(f"Task {task_label} failed")
         else:
             self._set_status(f"Task result: {result.outcome}")
 
@@ -838,15 +966,65 @@ class VibrantApp(App):
         )
 
     def _current_pending_gatekeeper_question_record(self):
-        if self._orchestrator_facade is None:
-            return None
-        pending = self._orchestrator_facade.list_pending_question_records()
+        pending = self._pending_question_records()
         return pending[0] if pending else None
+
+    def _list_question_records(self) -> list[object]:
+        facade = self.orchestrator_facade or self._orchestrator_facade
+        if facade is None:
+            return []
+
+        list_records = getattr(facade, "list_question_records", None)
+        if callable(list_records):
+            return list(list_records())
+
+        questions = getattr(facade, "questions", None)
+        list_method = getattr(questions, "list", None)
+        if callable(list_method):
+            return list(list_method())
+        return []
+
+    def _pending_question_records(self) -> list[object]:
+        facade = self.orchestrator_facade or self._orchestrator_facade
+        if facade is None:
+            return []
+
+        list_pending = getattr(facade, "list_pending_question_records", None)
+        if callable(list_pending):
+            return list(list_pending())
+
+        questions = getattr(facade, "questions", None)
+        pending_method = getattr(questions, "pending", None)
+        if callable(pending_method):
+            return list(pending_method())
+        return []
+
+    def _notification_bell_enabled(self) -> bool:
+        facade = self.orchestrator_facade or self._orchestrator_facade
+        if facade is None:
+            return False
+
+        bell_method = getattr(facade, "is_notification_bell_enabled", None)
+        if callable(bell_method):
+            try:
+                return bool(bell_method())
+            except Exception:
+                return False
+
+        try:
+            snapshot = facade.snapshot()
+        except Exception:
+            return False
+        return bool(getattr(snapshot, "notification_bell_enabled", False))
 
     def _gatekeeper_is_busy(self) -> bool:
         return bool(
             self._gatekeeper_request_task is not None and not self._gatekeeper_request_task.done()
-        ) or bool(getattr(self._orchestrator, "gatekeeper_busy", False))
+        ) or bool(getattr(self.orchestrator, "gatekeeper_busy", False))
+
+    def _gatekeeper_interrupt_supported(self) -> bool:
+        orchestrator = self.orchestrator_facade
+        return callable(getattr(orchestrator, "interrupt_gatekeeper", None))
 
     def _refresh_gatekeeper_state(self, *, force_flash: bool = False) -> None:
         chat_panel = self._chat_panel()
@@ -854,13 +1032,9 @@ class VibrantApp(App):
         if chat_panel is None or input_bar is None:
             return
 
-        question_records = (
-            self._orchestrator_facade.list_question_records()
-            if self._orchestrator_facade is not None
-            else []
-        )
+        question_records = self._list_question_records()
         questions = [record.text for record in question_records if getattr(record.status, "value", record.status) == "pending"]
-        status = self._orchestrator_facade.get_workflow_status() if self._orchestrator_facade is not None else None
+        status = self.orchestrator_facade.get_workflow_status() if self.orchestrator_facade is not None else None
 
         normalized_status = _normalize_orchestrator_status(status)
         if normalized_status in {OrchestratorStatus.PLANNING, OrchestratorStatus.EXECUTING}:
@@ -877,23 +1051,29 @@ class VibrantApp(App):
 
         if questions and not self._gatekeeper_is_busy():
             banner = (
-                self._orchestrator_facade.get_user_input_banner()
-                if self._orchestrator_facade is not None
+                self.orchestrator_facade.get_user_input_banner()
+                if self.orchestrator_facade is not None
                 else "⚠ Gatekeeper needs your input — see Chat panel"
             )
             self._set_banner(banner)
             input_bar.set_enabled(True)
             input_bar.set_context("gatekeeper", "awaiting answer")
+            input_bar.set_placeholder(self._default_input_placeholder())
             if flash:
                 self.notify(banner, severity="warning")
                 self._set_status(banner)
-                if self._orchestrator_facade is not None and self._orchestrator_facade.snapshot().notification_bell_enabled:
+                if self._notification_bell_enabled():
                     with suppress(Exception):
                         self.bell()
         elif self._gatekeeper_is_busy():
             self._set_banner("Gatekeeper is responding…")
             input_bar.set_enabled(False)
-            input_bar.set_context("gatekeeper", "running…")
+            if self._gatekeeper_interrupt_supported():
+                input_bar.set_context("gatekeeper", "running… · Esc to interrupt")
+                input_bar.set_placeholder("Gatekeeper is responding… Press Esc to interrupt.")
+            else:
+                input_bar.set_context("gatekeeper", "running…")
+                input_bar.set_placeholder("Gatekeeper is responding…")
         else:
             self._set_banner(None)
             if normalized_status is OrchestratorStatus.INIT:
@@ -908,8 +1088,16 @@ class VibrantApp(App):
             else:
                 input_bar.set_enabled(True)
                 input_bar.set_context("gatekeeper", "feedback")
+            input_bar.set_placeholder(self._default_input_placeholder())
 
         self._known_pending_questions = tuple(questions)
+
+    def _default_input_placeholder(self) -> str:
+        return (
+            "Tell me what you want to build"
+            if self.orchestrator is None or self._is_planning_mode()
+            else InputBar.DEFAULT_PLACEHOLDER
+        )
 
     def _chat_panel(self) -> ChatPanel | None:
         if self._workspace_screen is not None:
@@ -945,7 +1133,7 @@ class VibrantApp(App):
         return None
 
     def _infer_resume_status(self) -> OrchestratorStatus:
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         if orchestrator is None:
             return OrchestratorStatus.EXECUTING
 
@@ -958,11 +1146,13 @@ class VibrantApp(App):
             if mapped is not None:
                 return mapped
 
-        roadmap_document = orchestrator.snapshot().roadmap
+        roadmap_document = getattr(orchestrator, "roadmap_document", None)
+        if roadmap_document is None:
+            roadmap_document = orchestrator.snapshot().roadmap
         return OrchestratorStatus.EXECUTING if getattr(roadmap_document, "tasks", None) else OrchestratorStatus.PLANNING
 
     def _transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
-        orchestrator = self._orchestrator_facade
+        orchestrator = self.orchestrator_facade
         if orchestrator is None:
             raise RuntimeError("Project lifecycle is not initialized")
 
@@ -1020,16 +1210,16 @@ class VibrantApp(App):
             raise
 
     def _is_planning_mode(self) -> bool:
-        if self._orchestrator_facade is None:
+        if self.orchestrator_facade is None:
             return False
-        status = _normalize_orchestrator_status(self._orchestrator_facade.get_workflow_status())
+        status = _normalize_orchestrator_status(self.orchestrator_facade.get_workflow_status())
         return status in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}
 
     def _maybe_sync_post_planning_transition(self) -> bool:
-        if self._planning_screen() is None or self._orchestrator_facade is None:
+        if self._planning_screen() is None or self.orchestrator_facade is None:
             return False
 
-        status = _normalize_orchestrator_status(self._orchestrator_facade.get_workflow_status())
+        status = _normalize_orchestrator_status(self.orchestrator_facade.get_workflow_status())
         if status in {None, OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
             return False
 

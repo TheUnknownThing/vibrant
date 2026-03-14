@@ -3,42 +3,28 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.widgets import Collapsible, Markdown, Static
+from textual.widgets import Static
 
 from ...orchestrator.types import AgentConversationEntry, AgentConversationView, AgentStreamEvent
-
-
-class EntryBubble(Static):
-    """A single conversation entry."""
-
-    def __init__(self, entry: AgentConversationEntry, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.entry = entry
-
-    def compose(self) -> ComposeResult:
-        self.add_class(f"{self.entry.role}-msg")
-        yield Static(f"[b]{_role_label(self.entry.role)}[/b]", classes="msg-role", markup=True)
-        yield from _render_entry(self.entry)
+from .conversation_renderer import (
+    ConversationRegion,
+    MessageBlock,
+    ReasoningPart,
+    TextPart,
+    ToolCallPart,
+)
 
 
 class ConversationView(Static):
     """Scrollable view of one orchestrator-managed conversation."""
 
     DEFAULT_CSS = """
-    ConversationView #empty-state {
-        height: 100%;
-        content-align: center middle;
-        text-align: center;
-        padding: 4;
-    }
-
     ConversationView #conversation-scroll {
         height: 1fr;
         padding: 0 1;
     }
 
-    ConversationView EntryBubble {
+    ConversationView .conversation-block {
         margin: 1 0;
         padding: 0 1;
     }
@@ -59,7 +45,8 @@ class ConversationView(Static):
         border-left: tall $panel;
     }
 
-    ConversationView .msg-role {
+    ConversationView .msg-role,
+    ConversationView .conversation-role {
         margin-bottom: 0;
     }
 
@@ -87,14 +74,15 @@ class ConversationView(Static):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._scroll: VerticalScroll | None = None
+        self._scroll: ConversationRegion | None = None
         self._conversation: AgentConversationView | None = None
         self._empty_text = "[dim]No Gatekeeper messages yet. Start planning below.[/dim]"
 
     def compose(self) -> ComposeResult:
-        yield Static(self._empty_text, id="empty-state", markup=True)
-        self._scroll = VerticalScroll(id="conversation-scroll")
-        self._scroll.display = False
+        self._scroll = ConversationRegion(
+            id="conversation-scroll",
+            empty_message="No Gatekeeper messages yet. Start planning below.",
+        )
         yield self._scroll
 
     @property
@@ -144,86 +132,11 @@ class ConversationView(Static):
         if not self.is_mounted:
             return
 
-        empty_state = self.query_one("#empty-state", Static)
         if self._scroll is None:
             return
 
-        if self._conversation is None or not self._conversation.entries:
-            empty_state.update(self._empty_text)
-            empty_state.display = True
-            self._scroll.display = False
-            self._scroll.remove_children()
-            return
-
-        empty_state.display = False
-        self._scroll.display = True
-        self._scroll.remove_children()
-        for entry in self._conversation.entries:
-            if entry.text or entry.kind in {"status", "error", "tool_call"}:
-                self._scroll.mount(EntryBubble(entry))
+        self._scroll.set_messages(_render_blocks(self._conversation))
         self._scroll.scroll_end(animate=False)
-
-
-def _render_entry(entry: AgentConversationEntry) -> list[Static | Markdown | Collapsible]:
-    widgets: list[Static | Markdown | Collapsible] = []
-
-    if entry.kind == "thinking":
-        body = entry.text.strip() or "Thinking..."
-        widgets.append(
-            Collapsible(
-                Static(body, markup=False),
-                title="Thinking",
-                collapsed=True,
-                classes="reasoning-collapsible",
-            )
-        )
-        return widgets
-
-    if entry.kind == "tool_call":
-        title = _tool_title(entry)
-        body = _tool_body(entry)
-        if body:
-            widgets.append(
-                Collapsible(
-                    Static(body, markup=False, classes="msg-tool"),
-                    title=title,
-                    collapsed=True,
-                    classes="command-collapsible",
-                )
-            )
-        else:
-            widgets.append(Static(title, classes="msg-tool", markup=False))
-        return widgets
-
-    if entry.kind == "status":
-        widgets.append(Static(entry.text or "Status updated", classes="msg-status", markup=False))
-        return widgets
-
-    if entry.kind == "error":
-        widgets.append(Static(entry.text or "Runtime error", classes="msg-error", markup=False))
-        return widgets
-
-    if entry.role == "assistant":
-        widgets.append(Markdown(entry.text, classes="msg-content"))
-    else:
-        widgets.append(Static(entry.text, classes="msg-content", markup=False))
-    return widgets
-
-
-def _role_label(role: str) -> str:
-    return {
-        "user": "You",
-        "assistant": "Gatekeeper",
-        "tool": "Tool",
-        "system": "System",
-    }.get(role, "Message")
-
-
-def _tool_title(entry: AgentConversationEntry) -> str:
-    payload = entry.payload or {}
-    name = payload.get("tool_name") or payload.get("name") or entry.text or "tool"
-    name_text = str(name).strip() or "tool"
-    return f"$ {name_text}"
 
 
 def _tool_body(entry: AgentConversationEntry) -> str:
@@ -232,10 +145,91 @@ def _tool_body(entry: AgentConversationEntry) -> str:
     if isinstance(result, str) and result.strip():
         return result.strip()
     text = entry.text.strip()
-    title = _tool_title(entry).removeprefix("$ ").strip()
+    title = _tool_name(entry)
     if text and text != title:
         return text
     return ""
+
+
+def _render_blocks(conversation: AgentConversationView | None) -> list[MessageBlock]:
+    if conversation is None:
+        return []
+
+    rendered: list[MessageBlock] = []
+    for index, entry in enumerate(conversation.entries):
+        parts = _message_parts(entry)
+        if not parts:
+            continue
+        rendered.append(
+            MessageBlock(
+                message_id=_message_id(entry, index),
+                role=_message_role(entry.role),
+                parts=parts,
+            )
+        )
+    return rendered
+
+
+def _message_id(entry: AgentConversationEntry, index: int) -> str:
+    return f"{index}:{entry.turn_id or '-'}:{entry.role}:{entry.kind}"
+
+
+def _message_role(role: str) -> str:
+    if role in {"user", "assistant", "system"}:
+        return role
+    return "system"
+
+
+def _message_parts(entry: AgentConversationEntry) -> list[TextPart | ReasoningPart | ToolCallPart]:
+    text = entry.text or ""
+    stripped_text = text.strip()
+
+    if entry.kind == "thinking":
+        return [
+            ReasoningPart(
+                "in_progress" if entry.finished_at is None else "completed",
+                TextPart(stripped_text or "Thinking..."),
+            )
+        ]
+
+    if entry.kind == "tool_call":
+        parts: list[TextPart | ReasoningPart | ToolCallPart] = [
+            ToolCallPart(_tool_name(entry), _tool_status(entry))
+        ]
+        body = _tool_body(entry)
+        if body:
+            parts.append(TextPart(body))
+        return parts
+
+    if entry.kind == "status":
+        return [TextPart(stripped_text or "Status updated")]
+
+    if entry.kind == "error":
+        error_text = stripped_text or "Runtime error"
+        if not error_text.lower().startswith("error"):
+            error_text = f"Error: {error_text}"
+        return [TextPart(error_text)]
+
+    if stripped_text:
+        return [TextPart(stripped_text)]
+    return []
+
+
+def _tool_name(entry: AgentConversationEntry) -> str:
+    payload = entry.payload or {}
+    name = payload.get("tool_name") or payload.get("name") or entry.text or "tool"
+    name_text = str(name).strip()
+    return name_text or "tool"
+
+
+def _tool_status(entry: AgentConversationEntry) -> str:
+    payload = entry.payload or {}
+    error = payload.get("error")
+    if error not in (None, "", {}):
+        return "failed"
+    if entry.finished_at is None:
+        return "executing"
+    return "success"
 
 
 def _clone_conversation(conversation: AgentConversationView | None) -> AgentConversationView | None:
@@ -400,4 +394,3 @@ def _find_open_entry(
         if entry.finished_at is None:
             return entry
     return None
-

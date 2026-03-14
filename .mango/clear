@@ -1,0 +1,4 @@
+#!/bin/bash
+
+cd $MANGO_REPO_PATH
+rm -rf ./.vibrant
