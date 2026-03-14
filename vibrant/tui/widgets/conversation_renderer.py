@@ -125,6 +125,7 @@ class MessageBlock:
 
     message_id: str
     role: MessageRole
+    turn_id: str | None = None
     parts: list[MessagePart] = field(default_factory=list)
     timestamp: datetime | None = None
 

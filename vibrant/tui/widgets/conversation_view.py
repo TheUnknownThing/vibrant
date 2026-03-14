@@ -157,13 +157,20 @@ def _render_blocks(conversation: AgentConversationView | None) -> list[MessageBl
 
     rendered: list[MessageBlock] = []
     for index, entry in enumerate(conversation.entries):
+        if _omit_entry_from_blocks(entry):
+            continue
         parts = _message_parts(entry)
         if not parts:
+            continue
+        role = _block_role(entry)
+        if _should_append_to_previous(rendered, entry, role):
+            rendered[-1].parts.extend(parts)
             continue
         rendered.append(
             MessageBlock(
                 message_id=_message_id(entry, index),
-                role=_message_role(entry.role),
+                role=role,
+                turn_id=entry.turn_id,
                 parts=parts,
             )
         )
@@ -174,10 +181,41 @@ def _message_id(entry: AgentConversationEntry, index: int) -> str:
     return f"{index}:{entry.turn_id or '-'}:{entry.role}:{entry.kind}"
 
 
+def _block_role(entry: AgentConversationEntry) -> str:
+    if entry.role == "tool":
+        return "assistant"
+    return _message_role(entry.role)
+
+
 def _message_role(role: str) -> str:
     if role in {"user", "assistant", "system"}:
         return role
     return "system"
+
+
+def _omit_entry_from_blocks(entry: AgentConversationEntry) -> bool:
+    if entry.role != "system" or entry.kind != "status":
+        return False
+    return (entry.text or "").strip() in {"Turn started", "Turn completed"}
+
+
+def _should_append_to_previous(
+    rendered: list[MessageBlock],
+    entry: AgentConversationEntry,
+    role: str,
+) -> bool:
+    if not rendered:
+        return False
+    previous = rendered[-1]
+    if previous.role != role:
+        return False
+
+    previous_turn_id = previous.turn_id
+    if entry.turn_id and previous_turn_id and entry.turn_id != previous_turn_id:
+        return False
+    if role == "system":
+        return entry.turn_id == previous_turn_id
+    return True
 
 
 def _message_parts(entry: AgentConversationEntry) -> list[TextPart | ReasoningPart | ToolCallPart]:
