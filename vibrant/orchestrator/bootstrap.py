@@ -15,7 +15,7 @@ from vibrant.models.task import TaskInfo
 from vibrant.orchestrator.interface.mcp.fastmcp_host import OrchestratorFastMCPHost
 from vibrant.orchestrator.interface.mcp.server import OrchestratorMCPServer
 from vibrant.project_init import ensure_project_files
-from vibrant.providers.registry import resolve_provider_adapter
+from vibrant.providers.registry import resolve_configured_adapter_factory
 
 from .basic import (
     AgentRuntimeCapability,
@@ -86,7 +86,7 @@ class Orchestrator:
         ensure_project_files(root)
         vibrant_dir = root / DEFAULT_CONFIG_DIR
         config = load_config(start_path=root)
-        resolved_adapter_factory = adapter_factory or resolve_provider_adapter(config.provider_kind)
+        resolved_adapter_factory = resolve_configured_adapter_factory(config, adapter_factory=adapter_factory)
 
         workflow_state_store = WorkflowStateStore(vibrant_dir / "state.json")
         attempt_store = AttemptStore(vibrant_dir / "attempts.json")
