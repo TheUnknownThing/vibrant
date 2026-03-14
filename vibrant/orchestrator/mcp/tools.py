@@ -10,10 +10,10 @@ from vibrant.orchestrator.types import QuestionPriority, WorkflowStatus
 
 
 class OrchestratorMCPTools:
-    """Semantic command handlers over the interface control plane."""
+    """Semantic command handlers over the internal MCP command surface."""
 
-    def __init__(self, backend: Any) -> None:
-        self.backend = backend
+    def __init__(self, commands: Any) -> None:
+        self.commands = commands
 
     def update_consensus(
         self,
@@ -26,13 +26,13 @@ class OrchestratorMCPTools:
         impact: str | None = None,
     ) -> Any:
         if decision_title:
-            return self.backend.append_decision(
+            return self.commands.append_decision(
                 title=decision_title,
                 context=decision_context or "",
                 resolution=resolution or "",
                 impact=impact or "",
             )
-        return self.backend.update_consensus(context=context, status=status)
+        return self.commands.update_consensus(context=context, status=status)
 
     def add_task(
         self,
@@ -60,7 +60,7 @@ class OrchestratorMCPTools:
             dependencies=list(dependencies or ()),
             priority=priority,
         )
-        return self.backend.add_task(task, index=index)
+        return self.commands.add_task(task, index=index)
 
     def update_task_definition(
         self,
@@ -75,7 +75,7 @@ class OrchestratorMCPTools:
         priority: int | None = None,
         max_retries: int | None = None,
     ) -> Any:
-        return self.backend.update_task_definition(
+        return self.commands.update_task_definition(
             task_id,
             title=title,
             acceptance_criteria=list(acceptance_criteria) if acceptance_criteria is not None else None,
@@ -88,7 +88,7 @@ class OrchestratorMCPTools:
         )
 
     def reorder_tasks(self, task_ids: Sequence[str]) -> Any:
-        return self.backend.reorder_tasks(list(task_ids))
+        return self.commands.reorder_tasks(list(task_ids))
 
     def request_user_decision(
         self,
@@ -102,7 +102,7 @@ class OrchestratorMCPTools:
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
     ) -> Any:
-        return self.backend.request_user_decision(
+        return self.commands.request_user_decision(
             text,
             priority=QuestionPriority(priority),
             blocking_scope=blocking_scope,
@@ -114,19 +114,19 @@ class OrchestratorMCPTools:
         )
 
     def withdraw_question(self, question_id: str, *, reason: str | None = None) -> Any:
-        return self.backend.withdraw_question(question_id, reason=reason)
+        return self.commands.withdraw_question(question_id, reason=reason)
 
     def end_planning_phase(self) -> Any:
-        return self.backend.set_workflow_status(WorkflowStatus.EXECUTING)
+        return self.commands.set_workflow_status(WorkflowStatus.EXECUTING)
 
     def pause_workflow(self) -> Any:
-        return self.backend.pause_workflow()
+        return self.commands.pause_workflow()
 
     def resume_workflow(self) -> Any:
-        return self.backend.resume_workflow()
+        return self.commands.resume_workflow()
 
     def accept_review_ticket(self, ticket_id: str) -> Any:
-        return self.backend.accept_review_ticket(ticket_id)
+        return self.commands.accept_review_ticket(ticket_id)
 
     def retry_review_ticket(
         self,
@@ -136,7 +136,7 @@ class OrchestratorMCPTools:
         prompt_patch: str | None = None,
         acceptance_patch: Sequence[str] | None = None,
     ) -> Any:
-        return self.backend.retry_review_ticket(
+        return self.commands.retry_review_ticket(
             ticket_id,
             failure_reason=failure_reason,
             prompt_patch=prompt_patch,
@@ -144,11 +144,11 @@ class OrchestratorMCPTools:
         )
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> Any:
-        return self.backend.escalate_review_ticket(ticket_id, reason=reason)
+        return self.commands.escalate_review_ticket(ticket_id, reason=reason)
 
     def update_roadmap(self, *, tasks: Sequence[dict[str, Any]], project: str | None = None) -> Any:
         normalized_tasks = [TaskInfo.model_validate(task) for task in tasks]
-        return self.backend.replace_roadmap(tasks=normalized_tasks, project=project)
+        return self.commands.replace_roadmap(tasks=normalized_tasks, project=project)
 
     def set_pending_questions(
         self,
@@ -157,7 +157,7 @@ class OrchestratorMCPTools:
         source_agent_id: str | None = None,
         source_role: str = "gatekeeper",
     ) -> Any:
-        return self.backend.set_pending_questions(
+        return self.commands.set_pending_questions(
             list(questions),
             source_agent_id=source_agent_id,
             source_role=source_role,
@@ -170,7 +170,7 @@ class OrchestratorMCPTools:
         decision: str,
         failure_reason: str | None = None,
     ) -> Any:
-        return self.backend.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
+        return self.commands.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
 
     def mark_task_for_retry(
         self,
@@ -180,7 +180,7 @@ class OrchestratorMCPTools:
         prompt: str | None = None,
         acceptance_criteria: Sequence[str] | None = None,
     ) -> Any:
-        return self.backend.mark_task_for_retry(
+        return self.commands.mark_task_for_retry(
             task_id,
             failure_reason=failure_reason,
             prompt=prompt,

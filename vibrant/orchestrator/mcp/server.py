@@ -28,8 +28,8 @@ class OrchestratorMCPServer:
 
     def __init__(self, backend: Any) -> None:
         self.backend = backend
-        self.resources = OrchestratorMCPResources(backend)
-        self.tools = OrchestratorMCPTools(backend)
+        self.resources = OrchestratorMCPResources(backend.queries)
+        self.tools = OrchestratorMCPTools(backend.commands)
         self._resource_defs = self._build_resources()
         self._tool_defs = self._build_tools()
 

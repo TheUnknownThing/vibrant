@@ -111,3 +111,24 @@ async def test_accept_review_ticket_enters_merge_stage_and_completes_task(tmp_pa
     assert task is not None and task.status is TaskStatus.ACCEPTED
     assert attempt is not None and attempt.status is AttemptStatus.ACCEPTED
     assert orchestrator.task_loop.snapshot().stage is TaskLoopStage.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_merge_failure_snapshot_only_lists_follow_up_review_ticket(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    await _queue_review_pending_attempt(orchestrator, monkeypatch)
+    ticket = orchestrator.list_pending_review_tickets()[0]
+
+    def fake_merge(workspace):
+        return MergeOutcome(status="failed", message=f"Merge failed for {workspace.workspace_id}", follow_up_required=True)
+
+    monkeypatch.setattr(orchestrator.workspace_service, "merge_task_result", fake_merge)
+
+    resolution = orchestrator.accept_review_ticket(ticket.ticket_id)
+    pending_ids = [item.ticket_id for item in orchestrator.list_pending_review_tickets()]
+    snapshot = orchestrator.task_loop.snapshot()
+
+    assert resolution.follow_up_ticket_id is not None
+    assert pending_ids == [resolution.follow_up_ticket_id]
+    assert snapshot.pending_review_ticket_ids == (resolution.follow_up_ticket_id,)
+    assert snapshot.stage is TaskLoopStage.REVIEW_PENDING

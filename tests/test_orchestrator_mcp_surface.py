@@ -48,7 +48,7 @@ async def test_mcp_server_supports_semantic_tools_and_resources(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_mcp_compatibility_aliases_delegate_to_new_backend(tmp_path: Path) -> None:
-    _, server, principal = _build_server(tmp_path)
+    facade, server, principal = _build_server(tmp_path)
 
     roadmap = await server.call_tool(
         "vibrant.update_roadmap",
@@ -69,3 +69,4 @@ async def test_mcp_compatibility_aliases_delegate_to_new_backend(tmp_path: Path)
 
     assert roadmap["tasks"][0]["id"] == "task-1"
     assert questions[0]["text"] == "Need approval for runtime API"
+    assert not hasattr(facade, "set_pending_questions")

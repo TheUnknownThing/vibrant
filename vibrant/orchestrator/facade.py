@@ -11,7 +11,7 @@ from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 from vibrant.models.state import OrchestratorStatus
-from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.models.task import TaskInfo
 
 from .types import (
     AgentOutput,
@@ -23,7 +23,6 @@ from .types import (
     OrchestratorAgentSnapshot,
     QuestionPriority,
     QuestionRecord,
-    TaskState,
     WorkflowStatus,
 )
 
@@ -45,17 +44,6 @@ _UI_TO_WORKFLOW = {
     OrchestratorStatus.COMPLETED: WorkflowStatus.COMPLETED,
 }
 
-_TASK_STATUS_TO_STATE = {
-    TaskStatus.PENDING: TaskState.PENDING,
-    TaskStatus.QUEUED: TaskState.READY,
-    TaskStatus.IN_PROGRESS: TaskState.ACTIVE,
-    TaskStatus.COMPLETED: TaskState.REVIEW_PENDING,
-    TaskStatus.ACCEPTED: TaskState.ACCEPTED,
-    TaskStatus.FAILED: TaskState.BLOCKED,
-    TaskStatus.ESCALATED: TaskState.ESCALATED,
-}
-
-
 @dataclass(frozen=True)
 class OrchestratorSnapshot:
     status: OrchestratorStatus
@@ -71,7 +59,7 @@ class OrchestratorSnapshot:
 
 
 class OrchestratorFacade:
-    """Compatibility-safe facade backed by the layered interface adapter."""
+    """UI-facing facade backed by the layered interface adapter."""
 
     def __init__(self, orchestrator) -> None:
         self.orchestrator = orchestrator
@@ -186,46 +174,6 @@ class OrchestratorFacade:
             return task
         return self.control_plane.update_task_definition(task_id, **patch)
 
-    def update_task(
-        self,
-        task_id: str,
-        *,
-        title: str | None = None,
-        acceptance_criteria: list[str] | None = None,
-        status: TaskStatus | str | None = None,
-        branch: str | None = None,
-        retry_count: int | None = None,
-        max_retries: int | None = None,
-        prompt: str | None = None,
-        skills: list[str] | None = None,
-        dependencies: list[str] | None = None,
-        priority: int | None = None,
-        failure_reason: str | None = None,
-    ) -> TaskInfo:
-        task = self.update_task_definition(
-            task_id,
-            title=title,
-            acceptance_criteria=acceptance_criteria,
-            branch=branch,
-            prompt=prompt,
-            skills=skills,
-            dependencies=dependencies,
-            priority=priority,
-            max_retries=max_retries,
-        )
-        if status is not None:
-            parsed = status if isinstance(status, TaskStatus) else TaskStatus(str(status))
-            task = self.orchestrator.roadmap_store.record_task_state(
-                task_id,
-                _TASK_STATUS_TO_STATE[parsed],
-                failure_reason=failure_reason,
-            )
-        if retry_count is not None and task.retry_count != retry_count:
-            task.retry_count = retry_count
-            document = self.control_plane.get_roadmap()
-            self.orchestrator.roadmap_store.write(document)
-        return self.control_plane.get_task(task_id)
-
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
         return self.control_plane.reorder_tasks(ordered_task_ids)
 
@@ -286,25 +234,6 @@ class OrchestratorFacade:
 
     def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionRecord:
         return self.control_plane.withdraw_question(question_id, reason=reason)
-
-    def set_pending_questions(
-        self,
-        questions: list[str],
-        *,
-        source_agent_id: str | None = None,
-        source_role: str = "gatekeeper",
-    ) -> list[QuestionRecord]:
-        return self.control_plane.set_pending_questions(
-            questions,
-            source_agent_id=source_agent_id,
-            source_role=source_role,
-        )
-
-    def resolve_question(self, question_id: str, *, answer: str | None = None) -> QuestionRecord:
-        record = self.orchestrator.question_store.get(question_id)
-        if record is None:
-            raise KeyError(f"Unknown question: {question_id}")
-        return self.orchestrator.question_store.resolve(question_id, answer=answer)
 
     def get_task_summaries(self) -> dict[str, str]:
         summaries: dict[str, tuple[float, str]] = {}
@@ -381,24 +310,6 @@ class OrchestratorFacade:
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str):
         return self.control_plane.escalate_review_ticket(ticket_id, reason=reason)
-
-    def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None) -> TaskInfo:
-        return self.control_plane.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
-
-    def mark_task_for_retry(
-        self,
-        task_id: str,
-        *,
-        failure_reason: str,
-        prompt: str | None = None,
-        acceptance_criteria: list[str] | None = None,
-    ) -> TaskInfo:
-        return self.control_plane.mark_task_for_retry(
-            task_id,
-            failure_reason=failure_reason,
-            prompt=prompt,
-            acceptance_criteria=acceptance_criteria,
-        )
 
     def list_pending_questions(self) -> list[str]:
         return [record.text for record in self.list_pending_question_records()]

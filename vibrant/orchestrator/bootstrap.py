@@ -165,7 +165,7 @@ class Orchestrator:
         )
         backend = OrchestratorBackend(commands=commands, queries=queries)
         control_plane = InterfaceControlPlane(backend=backend)
-        mcp_server = OrchestratorMCPServer(control_plane)
+        mcp_server = OrchestratorMCPServer(backend)
         mcp_host = OrchestratorFastMCPHost(mcp_server)
         session_binding = AgentSessionBindingService(mcp_server=mcp_server, mcp_host=mcp_host)
         gatekeeper_lifecycle.binding_service = session_binding
@@ -281,14 +281,14 @@ class Orchestrator:
     async def answer_user_decision(self, question_id: str, answer: str):
         return await self.control_plane.submit_user_input(answer, question_id=question_id)
 
-    async def start_execution(self) -> WorkflowSnapshot:
-        return await self.control_plane.start_execution()
+    def start_execution(self) -> WorkflowSnapshot:
+        return self.control_plane.start_execution()
 
-    async def pause_workflow(self) -> WorkflowSnapshot:
-        return await self.control_plane.pause_workflow()
+    def pause_workflow(self) -> WorkflowSnapshot:
+        return self.control_plane.pause_workflow()
 
-    async def resume_workflow(self) -> WorkflowSnapshot:
-        return await self.control_plane.resume_workflow()
+    def resume_workflow(self) -> WorkflowSnapshot:
+        return self.control_plane.resume_workflow()
 
     async def restart_gatekeeper(self, reason: str | None = None) -> GatekeeperLoopState:
         return await self.control_plane.restart_gatekeeper(reason)
@@ -385,37 +385,6 @@ class Orchestrator:
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str):
         return self.control_plane.escalate_review_ticket(ticket_id, reason=reason)
-
-    def set_pending_questions(
-        self,
-        questions: list[str],
-        *,
-        source_agent_id: str | None = None,
-        source_role: str = "gatekeeper",
-    ):
-        return self.control_plane.set_pending_questions(
-            questions,
-            source_agent_id=source_agent_id,
-            source_role=source_role,
-        )
-
-    def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None):
-        return self.control_plane.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
-
-    def mark_task_for_retry(
-        self,
-        task_id: str,
-        *,
-        failure_reason: str,
-        prompt: str | None = None,
-        acceptance_criteria: list[str] | None = None,
-    ):
-        return self.control_plane.mark_task_for_retry(
-            task_id,
-            failure_reason=failure_reason,
-            prompt=prompt,
-            acceptance_criteria=acceptance_criteria,
-        )
 
 
 def create_orchestrator(

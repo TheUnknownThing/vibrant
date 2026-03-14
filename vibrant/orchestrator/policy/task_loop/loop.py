@@ -329,6 +329,10 @@ class TaskLoop:
         ticket = self._require_ticket(ticket_id)
         merge_outcome: MergeOutcome | None = None
         follow_up_ticket_id: str | None = None
+        next_stage = TaskLoopStage.IDLE
+        next_active_lease = self._snapshot.active_lease
+        next_active_attempt_id: str | None = None
+        next_blocking_reason: str | None = None
 
         if command.decision == "accept":
             attempt = self.artifacts.attempt_store.get(ticket.attempt_id)
@@ -352,6 +356,12 @@ class TaskLoop:
                     active_attempt_id=None,
                 )
                 self._maybe_complete_workflow()
+                next_stage = (
+                    TaskLoopStage.COMPLETED
+                    if self.artifacts.workflow_state_store.load().workflow_status is WorkflowStatus.COMPLETED
+                    else TaskLoopStage.IDLE
+                )
+                next_active_lease = None
             else:
                 self.artifacts.attempt_store.update(ticket.attempt_id, status=AttemptStatus.REVIEW_PENDING)
                 follow_up = self.artifacts.review_ticket_store.create(
@@ -364,13 +374,8 @@ class TaskLoop:
                     diff_ref=ticket.diff_ref,
                 )
                 follow_up_ticket_id = follow_up.ticket_id
-                self._snapshot = TaskLoopSnapshot(
-                    active_lease=self._snapshot.active_lease,
-                    active_attempt_id=ticket.attempt_id,
-                    stage=TaskLoopStage.REVIEW_PENDING,
-                    pending_review_ticket_ids=tuple(item.ticket_id for item in self.artifacts.review_ticket_store.list_pending()),
-                    blocking_reason=None,
-                )
+                next_stage = TaskLoopStage.REVIEW_PENDING
+                next_active_attempt_id = ticket.attempt_id
         elif command.decision == "retry":
             self.artifacts.attempt_store.update(ticket.attempt_id, status=AttemptStatus.RETRY_PENDING)
             self.artifacts.roadmap_store.record_task_state(
@@ -378,17 +383,7 @@ class TaskLoop:
                 TaskState.READY,
                 active_attempt_id=None,
             )
-            self._snapshot = TaskLoopSnapshot(
-                active_lease=None,
-                active_attempt_id=None,
-                stage=TaskLoopStage.IDLE,
-                pending_review_ticket_ids=tuple(
-                    item.ticket_id
-                    for item in self.artifacts.review_ticket_store.list_pending()
-                    if item.ticket_id != ticket_id
-                ),
-                blocking_reason=None,
-            )
+            next_active_lease = None
         else:
             self.artifacts.attempt_store.update(ticket.attempt_id, status=AttemptStatus.ESCALATED)
             self.artifacts.roadmap_store.record_task_state(
@@ -396,17 +391,9 @@ class TaskLoop:
                 TaskState.ESCALATED,
                 active_attempt_id=None,
             )
-            self._snapshot = TaskLoopSnapshot(
-                active_lease=None,
-                active_attempt_id=None,
-                stage=TaskLoopStage.BLOCKED,
-                pending_review_ticket_ids=tuple(
-                    item.ticket_id
-                    for item in self.artifacts.review_ticket_store.list_pending()
-                    if item.ticket_id != ticket_id
-                ),
-                blocking_reason=command.failure_reason or "Task escalated",
-            )
+            next_stage = TaskLoopStage.BLOCKED
+            next_active_lease = None
+            next_blocking_reason = command.failure_reason or "Task escalated"
 
         resolution = ReviewResolutionRecord(
             ticket_id=ticket.ticket_id,
@@ -418,15 +405,13 @@ class TaskLoop:
             follow_up_ticket_id=follow_up_ticket_id,
         )
         self.artifacts.review_ticket_store.resolve(ticket_id, resolution, reason=command.failure_reason)
-        if command.decision == "accept" and merge_outcome is not None and merge_outcome.status == "merged":
-            next_stage = TaskLoopStage.COMPLETED if self.artifacts.workflow_state_store.load().workflow_status is WorkflowStatus.COMPLETED else TaskLoopStage.IDLE
-            self._snapshot = TaskLoopSnapshot(
-                active_lease=None,
-                active_attempt_id=None,
-                stage=next_stage,
-                pending_review_ticket_ids=tuple(item.ticket_id for item in self.artifacts.review_ticket_store.list_pending()),
-                blocking_reason=None,
-            )
+        self._snapshot = TaskLoopSnapshot(
+            active_lease=next_active_lease,
+            active_attempt_id=next_active_attempt_id,
+            stage=next_stage,
+            pending_review_ticket_ids=tuple(item.ticket_id for item in self.artifacts.review_ticket_store.list_pending()),
+            blocking_reason=next_blocking_reason,
+        )
         return resolution
 
     def _require_ticket(self, ticket_id: str) -> ReviewTicket:

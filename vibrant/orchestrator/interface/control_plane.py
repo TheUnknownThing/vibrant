@@ -1,4 +1,4 @@
-"""Internal interface adapter used by facade, MCP, and TUI."""
+"""UI-facing interface adapter used by the facade and TUI."""
 
 from __future__ import annotations
 
@@ -141,9 +141,6 @@ class InterfaceControlPlane:
     def withdraw_question(self, question_id: str, *, reason: str | None = None):
         return self.backend.commands.withdraw_question(question_id, reason=reason)
 
-    def set_pending_questions(self, questions: list[str], **kwargs):
-        return self.backend.commands.set_pending_questions(questions, **kwargs)
-
     def accept_review_ticket(self, ticket_id: str):
         return self.backend.commands.accept_review_ticket(ticket_id)
 
@@ -152,9 +149,3 @@ class InterfaceControlPlane:
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str):
         return self.backend.commands.escalate_review_ticket(ticket_id, reason=reason)
-
-    def review_task_outcome(self, task_id: str, *, decision: str, failure_reason: str | None = None):
-        return self.backend.commands.review_task_outcome(task_id, decision=decision, failure_reason=failure_reason)
-
-    def mark_task_for_retry(self, task_id: str, **kwargs):
-        return self.backend.commands.mark_task_for_retry(task_id, **kwargs)
