@@ -127,3 +127,6 @@ async def test_base_agent_runtime_forwards_invocation_plan(resume: bool) -> None
     assert runtime_agent.calls[0]["invocation_plan"] is invocation_plan
     assert runtime_agent.calls[0]["resume_thread_id"] == ("thread-123" if resume else None)
     assert result.state is RunState.COMPLETED
+    assert result.run_id == "run-task-001"
+    assert result.agent_id == "agent-task-001"
+    assert result.role == AgentType.CODE.value

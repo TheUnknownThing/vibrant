@@ -33,7 +33,10 @@ def test_snapshot_handle_reports_completed_run_state_and_thread() -> None:
         future = loop.create_future()
         future.set_result(
             NormalizedRunResult(
-                agent_record=record,
+                run_id=record.identity.run_id,
+                agent_id=record.identity.agent_id,
+                role=record.identity.role,
+                status=record.lifecycle.status,
                 state=RunState.COMPLETED,
                 provider_thread=ProviderResumeHandle(thread_id="thread-1"),
                 finished_at=record.lifecycle.finished_at,
@@ -81,7 +84,10 @@ def test_snapshot_handle_rejects_agent_id_aliases() -> None:
         future = loop.create_future()
         future.set_result(
             NormalizedRunResult(
-                agent_record=record,
+                run_id=record.identity.run_id,
+                agent_id=record.identity.agent_id,
+                role=record.identity.role,
+                status=record.lifecycle.status,
                 state=RunState.COMPLETED,
                 provider_thread=ProviderResumeHandle(),
             )

@@ -85,7 +85,10 @@ class NormalizedRunResult:
     inspect adapter internals.
     """
 
-    agent_record: AgentRecord
+    run_id: str
+    agent_id: str
+    role: str
+    status: AgentStatus
     state: RunState
     transcript: str = ""
     summary: str | None = None
@@ -93,6 +96,8 @@ class NormalizedRunResult:
     exit_code: int | None = None
     error: str | None = None
     provider_thread: ProviderThreadHandle = field(default_factory=ProviderThreadHandle)
+    provider_kind: str = "codex"
+    provider_events_ref: str | None = None
     input_requests: list[InputRequest] = field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -488,7 +493,10 @@ class BaseAgentRuntime:
                     state = RunState.AWAITING_INPUT
 
                 return NormalizedRunResult(
-                    agent_record=agent_record,
+                    run_id=agent_record.identity.run_id,
+                    agent_id=agent_record.identity.agent_id,
+                    role=agent_record.identity.role,
+                    status=agent_record.lifecycle.status,
                     state=state,
                     transcript=run_result.transcript,
                     summary=agent_record.outcome.summary,
@@ -496,6 +504,8 @@ class BaseAgentRuntime:
                     exit_code=run_result.exit_code,
                     error=run_result.error,
                     provider_thread=provider_thread,
+                    provider_kind=agent_record.provider.kind,
+                    provider_events_ref=agent_record.provider.canonical_event_log,
                     input_requests=list(handle._input_requests),
                     started_at=agent_record.lifecycle.started_at,
                     finished_at=agent_record.lifecycle.finished_at,
@@ -503,9 +513,14 @@ class BaseAgentRuntime:
                 )
             except Exception as exc:
                 return NormalizedRunResult(
-                    agent_record=agent_record,
+                    run_id=agent_record.identity.run_id,
+                    agent_id=agent_record.identity.agent_id,
+                    role=agent_record.identity.role,
+                    status=agent_record.lifecycle.status,
                     state=RunState.FAILED,
                     error=str(exc),
+                    provider_kind=agent_record.provider.kind,
+                    provider_events_ref=agent_record.provider.canonical_event_log,
                     started_at=agent_record.lifecycle.started_at,
                     finished_at=datetime.now(timezone.utc),
                 )

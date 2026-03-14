@@ -211,9 +211,9 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     assert result.succeeded is True
     assert result.state is RunState.COMPLETED
     assert result.provider_thread.thread_id == "thread-existing"
-    assert result.agent_record.identity.type is AgentType.GATEKEEPER
-    assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
-    assert result.agent_record.context.prompt_used is not None
+    assert result.role == AgentType.GATEKEEPER.value
+    assert result.status is AgentStatus.COMPLETED
+    assert result.run_id.startswith("gatekeeper-user_conversation-")
 
 
 @pytest.mark.asyncio
@@ -250,7 +250,7 @@ async def test_gatekeeper_start_run_surfaces_provider_requests_through_agent_han
     assert adapter.respond_calls[0]["request_id"] == "req-1"
     assert adapter.respond_calls[0]["result"] == {"answer": "Use OAuth first."}
     assert result.succeeded is True
-    assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
+    assert result.status is AgentStatus.COMPLETED
     assert "Recorded the user decision." in result.transcript
     assert any(event["type"] == "request.opened" for event in result.events)
     assert any(event["type"] == "request.resolved" for event in result.events)
@@ -282,5 +282,4 @@ async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_pat
     assert forwarded[0]["role"] == "gatekeeper"
     assert forwarded[0].get("task_id") is None
     assert any(event["type"] == "content.delta" for event in forwarded)
-    assert result.agent_record is not None
-    assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
+    assert result.status is AgentStatus.COMPLETED
