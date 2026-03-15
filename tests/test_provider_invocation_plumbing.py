@@ -79,6 +79,20 @@ class _RequestingAdapter(_FakeAdapter):
         return None
 
 
+class _DuplicatingTranscriptAdapter(_FakeAdapter):
+    async def start_turn(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        await self._on_canonical_event({"type": "content.delta", "delta": "Final answer."})
+        await self._on_canonical_event(
+            {
+                "type": "task.progress",
+                "item": {"type": "assistant_message", "text": "Final answer."},
+            }
+        )
+        await self._on_canonical_event({"type": "turn.completed"})
+        return {}
+
+
 class _TestAgent(AgentBase):
     def get_agent_type(self) -> AgentType:
         return AgentType.CODE
@@ -199,3 +213,23 @@ async def test_worker_runtime_auto_rejects_requests_without_exposing_awaiting_in
     assert result.state is RunState.FAILED
     assert result.awaiting_input is False
     assert result.error == f"{REQUEST_ERROR_MESSAGE} (approval)"
+
+
+@pytest.mark.asyncio
+async def test_agent_base_summary_ignores_duplicate_task_progress_text() -> None:
+    runtime = BaseAgentRuntime(
+        _TestAgent(
+            project_root="/tmp/project",
+            config=VibrantConfig(),
+            adapter_factory=lambda **kwargs: _DuplicatingTranscriptAdapter(**kwargs),
+        )
+    )
+
+    handle = await runtime.start(
+        agent_record=_make_agent_record(),
+        prompt="Start",
+    )
+    result = await handle.wait()
+
+    assert result.state is RunState.COMPLETED
+    assert result.summary == "Final answer."

@@ -71,9 +71,6 @@ class PolicyCommandAdapter:
     ) -> ConsensusDocument:
         return self.gatekeeper_loop.update_consensus(status=status, context=context)
 
-    def append_decision(self, **kwargs: Any) -> ConsensusDocument:
-        return self.gatekeeper_loop.append_decision(**kwargs)
-
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
         return self.gatekeeper_loop.write_consensus_document(document)
 

@@ -18,11 +18,8 @@ class ConsensusStatus(str, enum.Enum):
 
 
 DEFAULT_CONSENSUS_CONTEXT = """## Objectives
-<!-- OBJECTIVES:START -->
-<!-- OBJECTIVES:END -->
-## Design Choices
-<!-- DECISIONS:START -->
-<!-- DECISIONS:END -->
+Document the current goals, constraints, and open questions here.
+
 ## Getting Started
 Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."""
 

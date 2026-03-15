@@ -19,6 +19,7 @@ from ...types import (
 _EXCLUDED_PATHS = (".vibrant", ".vibrant/**")
 _BOT_NAME = "Vibrant"
 _BOT_EMAIL = "vibrant@example.invalid"
+_MAX_REPORTED_ORCHESTRATOR_PATHS = 5
 
 
 class WorkspaceService:
@@ -96,6 +97,7 @@ class WorkspaceService:
         workspace_root = Path(current.path)
         if not workspace_root.exists():
             raise FileNotFoundError(f"Workspace path does not exist: {current.path}")
+        self._fail_if_orchestrator_state_changed(workspace_root)
 
         head_commit = self._git_stdout(workspace_root, "rev-parse", "HEAD")
         if self._has_relevant_changes(workspace_root):
@@ -293,6 +295,32 @@ class WorkspaceService:
             *self._excluded_pathspec(),
         )
         return bool(status.strip())
+
+    def _fail_if_orchestrator_state_changed(self, workspace_root: Path) -> None:
+        changed_paths = self._orchestrator_state_changes(workspace_root)
+        if not changed_paths:
+            return
+        rendered_paths = ", ".join(changed_paths[:_MAX_REPORTED_ORCHESTRATOR_PATHS])
+        if len(changed_paths) > _MAX_REPORTED_ORCHESTRATOR_PATHS:
+            rendered_paths = f"{rendered_paths}, ..."
+        raise RuntimeError(
+            "Task workspace modified orchestrator-owned `.vibrant` state; these changes are not durable. "
+            f"Changed paths: {rendered_paths}"
+        )
+
+    def _orchestrator_state_changes(self, workspace_root: Path) -> list[str]:
+        status = self._git_stdout(workspace_root, "status", "--porcelain", "--", ".vibrant")
+        if not status:
+            return []
+        changed_paths: list[str] = []
+        for line in status.splitlines():
+            if not line:
+                continue
+            path_field = line[3:] if len(line) > 3 else ""
+            normalized = path_field.split(" -> ", 1)[-1].strip()
+            if normalized:
+                changed_paths.append(normalized)
+        return changed_paths
 
     @staticmethod
     def _excluded_pathspec() -> tuple[str, ...]:

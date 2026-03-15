@@ -326,9 +326,6 @@ class OrchestratorFacade:
     def update_consensus(self, *, status: ConsensusStatus | str | None = None, context: str | None = None) -> ConsensusDocument:
         return self.control_plane.update_consensus(status=status, context=context)
 
-    def append_decision(self, **kwargs: Any) -> ConsensusDocument:
-        return self.control_plane.append_decision(**kwargs)
-
     def request_user_decision(
         self,
         text: str,

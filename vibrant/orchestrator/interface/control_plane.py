@@ -159,9 +159,6 @@ class InterfaceControlPlane:
     def update_consensus(self, *, status=None, context: str | None = None):
         return self.backend.commands.update_consensus(status=status, context=context)
 
-    def append_decision(self, **kwargs):
-        return self.backend.commands.append_decision(**kwargs)
-
     def write_consensus_document(self, document):
         return self.backend.commands.write_consensus_document(document)
 

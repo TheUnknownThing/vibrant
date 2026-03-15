@@ -363,6 +363,18 @@ async def test_review_ticket_diff_is_built_from_real_git_commits(tmp_path: Path,
     assert "+after" in diff_text
 
 
+def test_workspace_capture_rejects_orchestrator_state_edits(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
+    workspace_root = Path(workspace.path)
+    consensus_path = workspace_root / ".vibrant" / "consensus.md"
+    original = consensus_path.read_text(encoding="utf-8")
+    consensus_path.write_text(f"{original}\n\nWorker-local edit.\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="orchestrator-owned `.vibrant` state"):
+        orchestrator.workspace_service.capture_result_commit(workspace)
+
+
 @pytest.mark.asyncio
 async def test_pending_review_ticket_can_be_resolved_after_restart(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)

@@ -181,7 +181,7 @@ class OrchestratorMCPServer:
         return {
             "vibrant.update_consensus": MCPToolDefinition(
                 name="vibrant.update_consensus",
-                description="Update orchestrator-owned consensus context or append a decision.",
+                description="Update orchestrator-owned consensus context and/or status.",
                 required_scopes=(CONSENSUS_WRITE_SCOPE,),
                 handler=self.tools.update_consensus,
             ),

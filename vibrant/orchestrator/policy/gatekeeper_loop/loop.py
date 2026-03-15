@@ -195,9 +195,6 @@ class GatekeeperUserLoop:
             document.status = status if isinstance(status, ConsensusStatus) else ConsensusStatus(str(status).upper())
         return self.consensus_store.write(document)
 
-    def append_decision(self, **kwargs: object) -> ConsensusDocument:
-        return self.consensus_store.append_decision(**kwargs)
-
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
         return self.consensus_store.write(document)
 
