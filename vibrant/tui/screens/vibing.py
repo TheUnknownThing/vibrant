@@ -10,7 +10,7 @@ from textual.widgets import Static, TabbedContent, TabPane
 
 from ...models.task import TaskInfo
 from ...orchestrator.facade import OrchestratorFacade
-from ..widgets.agent_output import AgentOutput
+from ..widgets.agent_log import AgentOutput
 from ..widgets.chat_panel import ChatPanel
 from ..widgets.consensus_view import ConsensusView
 from ..widgets.input_bar import InputBar

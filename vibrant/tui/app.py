@@ -15,7 +15,7 @@ from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.types import QuestionRecord, QuestionStatus, RuntimeExecutionResult
+from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary, QuestionRecord, QuestionStatus, RuntimeExecutionResult
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
@@ -125,8 +125,9 @@ class VibrantApp(App):
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
+        self._agent_output_conversation_subscriptions: dict[str, Any] = {}
+        self._bootstrapped_agent_output_conversations: set[str] = set()
         self._gatekeeper_conversation_id: str | None = None
-        self._pending_runtime_bootstrap_events: list[CanonicalEvent] = []
         self._workspace_screen: WorkspaceScreen | None = None
         self._task_execution_in_progress = False
         self._task_refresh_loop: asyncio.Task[None] | None = None
@@ -539,11 +540,6 @@ class VibrantApp(App):
         self.call_after_refresh(self._handle_runtime_event, dict(event))
 
     def _handle_runtime_event(self, event: CanonicalEvent) -> None:
-        vibing_screen = self._vibing_screen()
-        if vibing_screen is not None:
-            with suppress(Exception):
-                vibing_screen.agent_output.ingest_canonical_event(event)
-
         event_type = str(event.get("type") or "")
         if _is_gatekeeper_event(event):
             self._sync_gatekeeper_conversation_binding()
@@ -587,22 +583,76 @@ class VibrantApp(App):
         elif event.type in {"conversation.assistant.message.delta", "conversation.assistant.thinking.delta"}:
             self._set_status("Gatekeeper is responding…")
 
+    def _on_agent_output_conversation_event(self, event: AgentStreamEvent) -> None:
+        self.call_after_refresh(self._apply_agent_output_conversation_event, event)
+
+    def _apply_agent_output_conversation_event(self, event: AgentStreamEvent) -> None:
+        vibing_screen = self._vibing_screen()
+        if vibing_screen is None:
+            return
+        with suppress(Exception):
+            vibing_screen.agent_output.ingest_stream_event(event)
+
+    def _sync_agent_output_conversation_bindings(self, summaries: list[ConversationSummary]) -> None:
+        if self.orchestrator is None:
+            for subscription in self._agent_output_conversation_subscriptions.values():
+                with suppress(Exception):
+                    subscription.close()
+            self._agent_output_conversation_subscriptions = {}
+            self._bootstrapped_agent_output_conversations.clear()
+            return
+
+        desired_ids = {summary.conversation_id for summary in summaries}
+        for conversation_id, subscription in list(self._agent_output_conversation_subscriptions.items()):
+            if conversation_id in desired_ids:
+                continue
+            with suppress(Exception):
+                subscription.close()
+            self._agent_output_conversation_subscriptions.pop(conversation_id, None)
+            self._bootstrapped_agent_output_conversations.discard(conversation_id)
+
+        vibing_screen = self._vibing_screen()
+        agent_output = None
+        if vibing_screen is not None:
+            with suppress(Exception):
+                agent_output = vibing_screen.agent_output
+
+        for summary in summaries:
+            conversation_id = summary.conversation_id
+            if agent_output is not None and conversation_id not in self._bootstrapped_agent_output_conversations:
+                frames = self.orchestrator.control_plane.conversation_frames(conversation_id)
+                for frame in frames:
+                    agent_output.ingest_stream_event(frame)
+                self._bootstrapped_agent_output_conversations.add(conversation_id)
+            if conversation_id in self._agent_output_conversation_subscriptions:
+                continue
+            self._agent_output_conversation_subscriptions[conversation_id] = (
+                self.orchestrator.control_plane.subscribe_conversation(
+                    conversation_id,
+                    self._on_agent_output_conversation_event,
+                    replay=False,
+                )
+            )
+
     def _close_orchestrator_subscriptions(self) -> None:
         for subscription in (self._runtime_event_subscription, self._gatekeeper_conversation_subscription):
             if subscription is None:
                 continue
             with suppress(Exception):
                 subscription.close()
+        for subscription in self._agent_output_conversation_subscriptions.values():
+            with suppress(Exception):
+                subscription.close()
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
+        self._agent_output_conversation_subscriptions = {}
+        self._bootstrapped_agent_output_conversations.clear()
         self._gatekeeper_conversation_id = None
-        self._pending_runtime_bootstrap_events = []
 
     def _attach_orchestrator_subscriptions(self) -> None:
         self._close_orchestrator_subscriptions()
         if self.orchestrator is None:
             return
-        self._pending_runtime_bootstrap_events = self.orchestrator.control_plane.list_recent_events(limit=200)
         self._runtime_event_subscription = self.orchestrator.control_plane.subscribe_runtime_events(self._on_runtime_event)
 
     def _initialize_project_setup(self) -> None:
@@ -724,6 +774,7 @@ class VibrantApp(App):
             chat_panel = self._chat_panel()
             if chat_panel is not None:
                 chat_panel.clear_conversation()
+            self._sync_agent_output_conversation_bindings([])
             if vibing_screen is not None:
                 if plan_tree is not None:
                     plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
@@ -741,10 +792,9 @@ class VibrantApp(App):
         snapshot = orchestrator.snapshot()
         if agent_output is not None:
             agents = snapshot.agent_records
-            agent_output.sync_agents(agents)
-            for event in self._pending_runtime_bootstrap_events:
-                agent_output.ingest_canonical_event(event)
-            self._pending_runtime_bootstrap_events = []
+            conversation_summaries = orchestrator.control_plane.list_conversation_summaries()
+            agent_output.sync_conversations(conversation_summaries, agents)
+            self._sync_agent_output_conversation_bindings(conversation_summaries)
 
         roadmap = snapshot.roadmap
         roadmap_tasks = roadmap.tasks if roadmap is not None else []
