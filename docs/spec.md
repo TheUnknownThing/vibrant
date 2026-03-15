@@ -1,6 +1,6 @@
 # Project Vibrant — Specification Document
-> **Version**: 1.2.0
-> **Date**: 2026-03-13
+> **Version**: 1.2.1
+> **Date**: 2026-03-15
 > **Author**: Spec-Driven Development Architect
 > **Status**: APPROVED
 
@@ -29,6 +29,7 @@
 
 ## 0. Changelog
 
+- **1.2.1** (2026-03-15): Clarified interactive-request policy. Runtime may surface provider-side input requests generically, but worker-style agents must auto-reject them in v1. `awaiting_input` is reserved for Gatekeeper and other explicitly interactive roles.
 - **1.2.0** (2026-03-13): Replaced the legacy result-parsing orchestrator model with the command-driven redesign. The orchestrator now owns all durable state under `.vibrant/`, the Gatekeeper mutates state only through typed MCP tools, execution is attempt-centric, processed conversation history is orchestrator-owned, and workflow state is authoritative over consensus metadata.
 - **1.1.1** (2026-03-08): Corrected the Codex app-server protocol details.
 - **1.1.0** (2026-03-07): Updated the Codex integration design.
@@ -427,6 +428,15 @@ Runtime is the generic agent mechanism shared by Gatekeeper and workers. It must
 
 Runtime publishes canonical events only. It does not shape TUI conversation history.
 
+Runtime may surface provider-side interactive requests generically through canonical `request opened` and `request resolved` events plus runtime handle metadata. However, that capability is not permission for every role to pause for input.
+
+Policy rules:
+
+- Gatekeeper may remain interactive and may enter `awaiting_input`.
+- Worker-style agents such as code, validation, and merge agents must auto-reject provider or host requests in v1.
+- A worker attempt must not rely on human input to make forward progress.
+- If a worker reaches `awaiting_input`, that is an orchestration-policy violation and must be treated as an error path, not as a normal resumable workflow.
+
 ### 6.9 Conversation Stream
 
 Conversation stream owns:
@@ -525,6 +535,8 @@ The Gatekeeper may not:
 - resolve user answers itself
 - control worker lifecycle directly
 
+In v1, the Gatekeeper is also the only first-party role that is expected to participate in interactive request/response flows. Worker-style agents remain autonomous and must auto-reject such requests.
+
 ### 9.3 Prompt Expectations
 
 The Gatekeeper prompt must instruct the agent to:
@@ -576,6 +588,8 @@ Pipeline:
 ### 11.2 Retry and Escalation
 
 Retry is review-driven and attempt-scoped. A retry creates a new attempt against a versioned task definition. Escalation blocks the task until user or Gatekeeper action resolves it.
+
+Interactive provider requests from worker attempts are not a supported escalation path in v1. User-facing escalation flows are Gatekeeper-owned.
 
 ---
 

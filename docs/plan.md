@@ -392,10 +392,18 @@ Implement end-to-end code agent lifecycle:
 8. On accepted: merge branch (Task 1.3)
 9. On rejected: rollback + retry or escalate
 
+Execution policy note:
+
+- Code agents are autonomous workers.
+- Provider-side interactive requests must be auto-rejected for code agents.
+- `awaiting_input` is not a valid steady-state task outcome for v1 worker execution.
+- User-facing clarification or escalation must route through the Gatekeeper, not through a paused worker run.
+
 **Acceptance**:
 - E2E test: submit a task → agent executes → files modified in worktree → Gatekeeper accepts → merged to main
 - E2E test: agent fails → Gatekeeper re-prompts → retry succeeds
 - E2E test: max retries exceeded → task escalated to user
+- Unit test: worker/provider interactive request is auto-rejected and does not leave the task in `awaiting_input`
 - Agent record written with all fields from §4.3
 
 ---
