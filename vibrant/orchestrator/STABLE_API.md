@@ -12,7 +12,7 @@ as layered `basic`, `policy`, and `interface` packages.
 
 ## Status
 
-As of **March 14, 2026**, the stable contract is defined by:
+As of **March 15, 2026**, the stable contract is defined by:
 
 - the **interface control-plane model** described here
 - the **typed MCP resource/tool surface**
@@ -54,6 +54,30 @@ Consumers should not rely on:
 - provider-native logs as primary history
 - ad hoc status patching APIs
 - Gatekeeper prose as an authority channel
+
+## Stable Identity Model
+
+The stable integration boundary uses these identifiers:
+
+- `session_id`: one durable workflow session
+- `submission_id`: one host-originated Gatekeeper submission
+- `task_id`: one roadmap task definition
+- `attempt_id`: one execution attempt for one task
+- `workspace_id`: one isolated task or integration worktree record
+- `role`: policy and capability identity
+- `agent_id`: one stable logical actor instance
+- `run_id`: one execution of that actor
+- `conversation_id`: one orchestrator-owned conversation stream
+- `question_id`: one durable user-decision record
+- `ticket_id`: one durable review ticket
+- `event_id`: one canonical orchestrator event
+
+Provider-native ids such as `provider_thread_id`, `turn_id`, and `item_id` are
+resume or trace handles, not orchestrator primary keys.
+
+Unqualified `session_id` is reserved for workflow or Gatekeeper session state.
+Run-scoped binding and runtime contracts should use `run_id` or another
+explicitly scoped name instead.
 
 ## Stable Read Models
 
@@ -303,6 +327,7 @@ orchestrator-owned:
 - consensus store
 - question store
 - attempt store
+- workspace store
 - review ticket store
 - agent instance store
 - agent run store
@@ -325,6 +350,18 @@ Canonical events must include stable identity and replay ordering:
 
 - `event_id`
 - `sequence`
+- `role`
+- `agent_id`
+- `run_id`
+
+Optional routing fields may include:
+
+- `conversation_id`
+- `attempt_id`
+- `provider_thread_id`
+
+Task identity belongs to attempts, workspaces, and review tickets. Generic
+runtime events should not rely on `task_id` as a surrogate run identifier.
 
 The stable conversation contract requires:
 

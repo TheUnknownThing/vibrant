@@ -13,7 +13,9 @@ This guide reflects the current orchestrator MCP model:
 ## Prerequisites
 
 - dependencies installed with `uv`
-- MCP extras installed when needed:
+- MCP extras installed when needed via:
+- if your shell sets `HTTP_PROXY` or `HTTPS_PROXY`, ensure `NO_PROXY` includes
+  `127.0.0.1,localhost` so loopback MCP traffic stays local
 
 ```bash
 uv sync --extra mcp --dev

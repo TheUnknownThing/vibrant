@@ -21,7 +21,7 @@ DEFAULT_CONSENSUS_CONTEXT = """## Objectives
 Document the current goals, constraints, and open questions here.
 
 ## Getting Started
-Start by reviewing `docs/spec.md`, `docs/plan.md`, and `.vibrant/roadmap.md`."""
+Start by reviewing `docs/spec.md`, `docs/tui.md`, `vibrant/orchestrator/STABLE_API.md`, and `.vibrant/roadmap.md`."""
 
 
 class ConsensusDocument(BaseModel):

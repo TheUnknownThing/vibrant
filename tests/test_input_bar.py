@@ -111,8 +111,8 @@ async def test_enter_applies_active_slash_command_suggestion() -> None:
 async def test_at_paths_autocomplete_relative_to_base_path(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
+    (docs_dir / "spec.md").write_text("hello", encoding="utf-8")
     (docs_dir / "tui.md").write_text("hello", encoding="utf-8")
-    (docs_dir / "tui-todo.md").write_text("hello", encoding="utf-8")
 
     app = InputBarHarness(base_path=tmp_path)
 
@@ -134,15 +134,15 @@ async def test_at_paths_autocomplete_relative_to_base_path(tmp_path: Path) -> No
 
         assert field.value == "check @docs/"
         assert suggestions.display is True
-        assert [suggestions.get_option_at_index(index).prompt for index in range(suggestions.option_count)] == ["@docs/tui-todo.md", "@docs/tui.md"]
+        assert [suggestions.get_option_at_index(index).prompt for index in range(suggestions.option_count)] == ["@docs/spec.md", "@docs/tui.md"]
 
 
 @pytest.mark.asyncio
 async def test_enter_applies_active_file_suggestion(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
+    (docs_dir / "spec.md").write_text("hello", encoding="utf-8")
     (docs_dir / "tui.md").write_text("hello", encoding="utf-8")
-    (docs_dir / "tui-todo.md").write_text("hello", encoding="utf-8")
 
     app = InputBarHarness(base_path=tmp_path)
 
@@ -158,7 +158,7 @@ async def test_enter_applies_active_file_suggestion(tmp_path: Path) -> None:
 
         assert field.value == "check @docs/"
         assert suggestions.display is True
-        assert [suggestions.get_option_at_index(index).prompt for index in range(suggestions.option_count)] == ["@docs/tui-todo.md", "@docs/tui.md"]
+        assert [suggestions.get_option_at_index(index).prompt for index in range(suggestions.option_count)] == ["@docs/spec.md", "@docs/tui.md"]
 
 
 @pytest.mark.asyncio
