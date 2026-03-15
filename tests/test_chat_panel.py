@@ -127,7 +127,6 @@ def test_conversation_view_splits_staggered_thinking_around_tool_output():
                 sequence=sequence,
                 agent_id="gatekeeper-agent",
                 run_id="gatekeeper-run-1",
-                task_id=None,
                 turn_id="turn-1",
                 item_id=None,
                 type=event_type,
