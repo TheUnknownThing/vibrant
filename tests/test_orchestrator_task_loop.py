@@ -9,7 +9,11 @@ from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator import create_orchestrator
 from vibrant.orchestrator.policy import TaskLoopStage
-from vibrant.orchestrator.policy.task_loop.models import DispatchLease, PreparedTaskExecution
+from vibrant.orchestrator.policy.task_loop.models import (
+    DispatchLease,
+    PreparedTaskExecution,
+    WORKER_INPUT_UNSUPPORTED_ERROR,
+)
 from vibrant.orchestrator.types import AttemptCompletion, AttemptStatus, MergeOutcome, ValidationOutcome, WorkflowStatus
 from vibrant.project_init import initialize_project
 
@@ -207,6 +211,71 @@ async def test_failed_completion_marks_attempt_failed_and_inactive(tmp_path: Pat
 
     assert result is not None and result.outcome == "failed"
     assert attempt is not None and attempt.status is AttemptStatus.FAILED
+    assert orchestrator.attempt_store.list_active() == []
+
+
+@pytest.mark.asyncio
+async def test_execution_coordinator_converts_worker_awaiting_input_to_failed_completion(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator.attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-1",
+        conversation_id="attempt-conv-1",
+    )
+
+    async def fake_wait_for_run(run_id: str):
+        assert run_id == "run-1"
+        return SimpleNamespace(
+            awaiting_input=True,
+            error=None,
+            summary="Worker asked for approval",
+            provider_events_ref=None,
+        )
+
+    monkeypatch.setattr(orchestrator.runtime_service, "wait_for_run", fake_wait_for_run)
+
+    completion = await orchestrator.execution_coordinator.await_attempt_completion(attempt.attempt_id)
+
+    assert completion.status == "failed"
+    assert completion.error == WORKER_INPUT_UNSUPPORTED_ERROR
+
+
+@pytest.mark.asyncio
+async def test_reconcile_active_sessions_marks_stale_awaiting_input_attempt_failed(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator.attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.AWAITING_INPUT,
+        code_run_id="run-awaiting",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator.agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-awaiting",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.AWAITING_INPUT},
+            context={"worktree_path": workspace.path},
+            provider=AgentProviderMetadata(),
+        )
+    )
+
+    snapshots = orchestrator.execution_coordinator.reconcile_active_sessions()
+    reloaded = orchestrator.attempt_store.get(attempt.attempt_id)
+
+    assert len(snapshots) == 1
+    assert snapshots[0].status is AttemptStatus.FAILED
+    assert reloaded is not None and reloaded.status is AttemptStatus.FAILED
     assert orchestrator.attempt_store.list_active() == []
 
 

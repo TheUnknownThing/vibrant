@@ -18,6 +18,7 @@ from ...types import (
     AttemptStatus,
     InputRequest,
 )
+from .models import WORKER_INPUT_UNSUPPORTED_ERROR
 
 _CODE_PHASE_STATUSES = {
     AttemptStatus.LEASED,
@@ -177,8 +178,10 @@ class AttemptExecutionSessionResource:
             return None
 
         status = run_record.lifecycle.status
+        completion_error = run_record.outcome.error
         if status.value == "awaiting_input":
-            completion_status = "awaiting_input"
+            completion_status = "failed"
+            completion_error = completion_error or WORKER_INPUT_UNSUPPORTED_ERROR
         elif status.value == "completed":
             completion_status = "succeeded"
         elif status.value == "killed":
@@ -197,7 +200,7 @@ class AttemptExecutionSessionResource:
             diff_ref=None,
             validation=None,
             summary=run_record.outcome.summary,
-            error=run_record.outcome.error,
+            error=completion_error,
             conversation_ref=attempt.conversation_id,
             provider_events_ref=run_record.provider.canonical_event_log,
         )
@@ -236,10 +239,12 @@ class AttemptExecutionSessionResource:
     def _reconcile_snapshot(snapshot: AttemptExecutionSnapshot) -> AttemptExecutionSnapshot:
         if snapshot.live:
             return snapshot
+        if snapshot.status is AttemptStatus.AWAITING_INPUT:
+            return replace(snapshot, status=AttemptStatus.FAILED)
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.workspace_path is None:
             return replace(snapshot, status=AttemptStatus.FAILED)
         if snapshot.status is AttemptStatus.RUNNING and snapshot.run_status == "awaiting_input":
-            return replace(snapshot, status=AttemptStatus.AWAITING_INPUT)
+            return replace(snapshot, status=AttemptStatus.FAILED)
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_status == "failed":
             return replace(snapshot, status=AttemptStatus.FAILED)
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_status == "killed":

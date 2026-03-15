@@ -455,7 +455,7 @@ class BaseAgentRuntime:
 
         async def _event_bridge(event: CanonicalEvent) -> None:
             event_type = str(event.get("type") or "")
-            if event_type == "request.opened":
+            if event_type == "request.opened" and not self._agent.should_auto_reject_requests():
                 req = InputRequest(
                     request_id=str(event.get("request_id") or ""),
                     request_kind=str(event.get("request_kind") or "request"),

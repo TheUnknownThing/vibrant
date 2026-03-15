@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 
-from vibrant.agents.base import AgentBase, AgentRunResult
+from vibrant.agents.base import AgentBase, AgentRunResult, REQUEST_ERROR_MESSAGE
 from vibrant.agents.runtime import BaseAgentRuntime, RunState
 from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentRecord, AgentType, ProviderResumeHandle
@@ -47,6 +48,34 @@ class _FakeAdapter:
         return None
 
     async def respond_to_request(self, request_id: int | str, **kwargs: Any) -> None:
+        return None
+
+
+class _RequestingAdapter(_FakeAdapter):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.respond_calls: list[dict[str, Any]] = []
+
+    async def start_turn(self, **kwargs: Any) -> dict[str, Any]:
+        await self._on_canonical_event(
+            {
+                "type": "request.opened",
+                "request_id": "req-1",
+                "request_kind": "approval",
+                "message": "Approve the action.",
+            }
+        )
+        await self._on_canonical_event(
+            {
+                "type": "request.resolved",
+                "request_id": "req-1",
+                "request_kind": "approval",
+            }
+        )
+        return {"summary": "done"}
+
+    async def respond_to_request(self, request_id: int | str, **kwargs: Any) -> None:
+        self.respond_calls.append({"request_id": request_id, **kwargs})
         return None
 
 
@@ -130,3 +159,43 @@ async def test_base_agent_runtime_forwards_invocation_plan(resume: bool) -> None
     assert result.run_id == "run-task-001"
     assert result.agent_id == "agent-task-001"
     assert result.role == AgentType.CODE.value
+
+
+@pytest.mark.asyncio
+async def test_worker_runtime_auto_rejects_requests_without_exposing_awaiting_input() -> None:
+    captured_adapter: _RequestingAdapter | None = None
+
+    def adapter_factory(**kwargs: Any) -> _RequestingAdapter:
+        nonlocal captured_adapter
+        captured_adapter = _RequestingAdapter(**kwargs)
+        return captured_adapter
+
+    runtime = BaseAgentRuntime(
+        _TestAgent(
+            project_root="/tmp/project",
+            config=VibrantConfig(),
+            adapter_factory=adapter_factory,
+        )
+    )
+
+    handle = await runtime.start(
+        agent_record=_make_agent_record(),
+        prompt="Start",
+    )
+    await asyncio.sleep(0)
+
+    assert handle.awaiting_input is False
+    assert handle.input_requests == []
+
+    result = await handle.wait()
+
+    assert captured_adapter is not None
+    assert captured_adapter.respond_calls == [
+        {
+            "request_id": "req-1",
+            "error": {"code": -32000, "message": f"{REQUEST_ERROR_MESSAGE} (approval)"},
+        }
+    ]
+    assert result.state is RunState.FAILED
+    assert result.awaiting_input is False
+    assert result.error == f"{REQUEST_ERROR_MESSAGE} (approval)"
