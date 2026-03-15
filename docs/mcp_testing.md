@@ -1,155 +1,86 @@
-# Testing the MCP Server
+# Testing The MCP Surface
 
-> **Status**: developer guide
-> **Date**: 2026-03-12
+> Status: developer guide
+> Date: 2026-03-15
 
-This guide explains how to run Vibrant's MCP server locally and verify the
-current bearer-token transport behavior.
+This guide reflects the current orchestrator MCP model:
+
+- the active transport is the orchestrator-owned loopback FastMCP HTTP host
+- per-run access is enforced by registered bindings
+- requests identify the active binding with `X-Vibrant-Binding`
+- the older bearer-token transport notes are no longer the source of truth
 
 ## Prerequisites
 
-- Python dependencies installed with `uv`
-- optional MCP dependencies installed:
+- dependencies installed with `uv`
+- MCP extras installed when needed:
 
 ```bash
 uv sync --extra mcp --dev
 ```
 
-## Start the server over stdio
+Use a disposable project root for transport tests so stale local `.vibrant/`
+state does not affect the results.
 
-The repo includes a small dev launcher at `scripts/mcp_dev_server.py`.
+## Recommended Automated Tests
 
-For a clean local test project, use a temporary project root instead of the repository root. This avoids loading old `.vibrant/agent-runs/*.json` records that may not match the current schema.
+The current transport and binding behavior is covered by:
 
-This is the simplest way to explore the MCP surface locally because no HTTP
-auth is involved.
-
-```bash
-uv run python scripts/mcp_dev_server.py \
-  --project-root /tmp/vibrant-mcp-demo \
-  --transport stdio
-```
-
-## Start the server over HTTP
-
-HTTP transport now requires a bearer token stored in an environment variable.
-
-```bash
-export VIBRANT_MCP_BEARER_TOKEN=development-secret
-
-uv run python scripts/mcp_dev_server.py \
-  --project-root /tmp/vibrant-mcp-demo \
-  --host 127.0.0.1 \
-  --port 9000
-```
-
-The MCP endpoint will be:
-
-```text
-http://127.0.0.1:9000/mcp
-```
-
-If you want a different environment variable name, pass it explicitly:
-
-```bash
-export CUSTOM_MCP_TOKEN=development-secret
-
-uv run python scripts/mcp_dev_server.py \
-  --project-root /tmp/vibrant-mcp-demo \
-  --host 127.0.0.1 \
-  --port 9000 \
-  --bearer-token-env-var CUSTOM_MCP_TOKEN
-```
-
-## Quick HTTP verification
-
-Without the header, the server should reject the request:
-
-```bash
-curl -i http://127.0.0.1:9000/mcp
-```
-
-With the correct header, the request should reach the MCP app:
-
-```bash
-curl -i \
-  -H 'Authorization: Bearer development-secret' \
-  http://127.0.0.1:9000/mcp
-```
-
-The MCP app may still return a protocol-level error for an incomplete request,
-but it should no longer fail with `401`.
-
-## What to test manually
-
-For stdio or authenticated HTTP sessions, verify:
-
-- resources such as `vibrant://consensus/current`, `vibrant://roadmap/current`, and `vibrant://workflow/status`
-- safe reads such as `consensus_get`, `roadmap_get`, `task_get`, and `instance_list`
-- safe mutations in a disposable project such as `workflow_pause`, `workflow_resume`, `vibrant.update_consensus`, and `vibrant.update_roadmap`
-
-## Automated tests
-
-Relevant tests include:
-
-- `tests/test_mcp_bearer_auth.py`
-- `tests/test_orchestrator_mcp.py`
-- `tests/test_orchestrator_fastmcp.py`
+- `tests/test_orchestrator_mcp_transport.py`
+- `tests/test_provider_invocation_compiler.py`
+- `tests/test_orchestrator_mcp_surface.py`
 
 Example targeted runs:
 
 ```bash
-uv run pytest -q tests/test_mcp_bearer_auth.py
-uv run pytest -q tests/test_orchestrator_mcp.py
-uv run pytest -q tests/test_orchestrator_fastmcp.py
+uv run pytest -q tests/test_orchestrator_mcp_transport.py
+uv run pytest -q tests/test_provider_invocation_compiler.py
+uv run pytest -q tests/test_orchestrator_mcp_surface.py
 ```
 
-## Current permission model
+What these verify:
 
-The server does not perform per-tool authorization after transport auth.
+- the loopback FastMCP host exposes the expected tool and resource surface
+- worker bindings are filtered server-side
+- provider invocation plans include the MCP endpoint and per-run binding
+  headers
 
-Current behavior is:
+## Manual Inspection Strategy
 
-- HTTP requests must present the configured bearer token
-- stdio transport is trusted locally
-- once connected, the full MCP surface is available
-- Codex is responsible for constraining which tools a particular agent may call
+The simplest current manual path is to exercise the embedded host in tests or a
+small local harness rather than the older standalone dev-server flow.
 
-## Troubleshooting
+Manual checks should confirm:
 
-### `401 unauthorized`
+- the endpoint is loopback HTTP, typically `http://127.0.0.1:<port>/mcp`
+- requests without `X-Vibrant-Binding` are rejected
+- Gatekeeper bindings expose semantic write tools such as
+  `vibrant.add_task` and `vibrant.update_consensus`
+- worker bindings expose only the narrower read surface they are allowed to use
+- resources include `vibrant.get_workflow_session` so the orchestrator-owned
+  session and concurrency limit are visible to MCP consumers
 
-The request did not include the expected bearer token.
+## Current Permission Model
 
-Check:
+The current permission model is binding-based.
 
-- the header format is exactly `Authorization: Bearer <token>`
-- the token value matches the server environment variable
-- the server was started with the expected `--bearer-token-env-var`
+Current behavior:
 
-### `500 server_error`
+- the host is loopback-only
+- each run registers a binding id
+- the binding id is sent in `X-Vibrant-Binding`
+- the server resolves that binding to a principal plus allowed tools and
+  resources
+- visibility is enforced server-side, not only by provider launch config
 
-The configured environment variable is missing in the server process.
+## Transport Notes
 
-Set it before starting the HTTP server, for example:
+Provider launch integration currently works like this:
 
-```bash
-export VIBRANT_MCP_BEARER_TOKEN=development-secret
-```
+- the binding layer produces a provider-neutral access descriptor
+- the provider invocation compiler turns that into provider-native launch args
+- the resulting plan injects the loopback MCP endpoint and static binding
+  header for that run
 
-### `address already in use`
-
-Another process is already listening on the chosen port. Pick a different port:
-
-```bash
-uv run python scripts/mcp_dev_server.py \
-  --project-root /tmp/vibrant-mcp-demo \
-  --host 127.0.0.1 \
-  --port 9001
-```
-
-## Related docs
-
-- `docs/embedded_auth.md`
-- `vibrant/orchestrator/mcp/MCP.md`
-- `scripts/mcp_dev_server.py`
+This is why MCP transport docs should talk about bindings and invocation plans,
+not just raw HTTP reachability.

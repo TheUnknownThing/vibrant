@@ -16,6 +16,8 @@ As of **March 14, 2026**, the stable contract is defined by:
 
 - the **interface control-plane model** described here
 - the **typed MCP resource/tool surface**
+- the **workflow-session read model**, including the orchestrator-owned
+  concurrency limit
 - the **read models and conversation subscription semantics**
 - the **compatibility constraints** required during migration
 
@@ -33,6 +35,7 @@ The stable contract is governed by the following rules:
 4. The orchestrator never infers planning or review decisions from free-form text.
 5. Conversation history shown to the TUI is an orchestrator-owned artifact, not a provider-log projection.
 6. Workflow state is authoritative; consensus metadata may mirror it only as a one-way projection.
+7. The task concurrency limit is orchestrator workflow-session state, not provider state.
 
 ## Stable Consumer Model
 
@@ -75,6 +78,25 @@ Required semantic contents:
 
 The exact implementation may evolve, but the snapshot must remain a coherent,
 consumer-ready projection of orchestrator state.
+
+### `WorkflowSessionSnapshot`
+
+This read model is the stable durable view of the workflow session.
+
+It must preserve the meaning of:
+
+- `session_id`
+- workflow `status`
+- `resume_status`
+- `concurrency_limit`
+- Gatekeeper session projection
+- total agent spawn count
+- pending question ids
+- active attempt ids
+
+The important behavioral rule is that `concurrency_limit` belongs to the
+orchestrator session. It may be seeded from `vibrant.toml`, but enforcement and
+durable ownership remain in orchestrator workflow state.
 
 ### `AgentRunSnapshot`
 
@@ -161,6 +183,7 @@ class InterfaceControlPlane:
     def conversation(self, conversation_id: str) -> AgentConversationView | None: ...
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False): ...
     def workflow_snapshot(self) -> WorkflowSnapshot: ...
+    def workflow_session(self) -> WorkflowSessionSnapshot: ...
     def gatekeeper_state(self) -> GatekeeperLoopState: ...
     def task_loop_state(self) -> TaskLoopSnapshot: ...
     def list_roles(self) -> list[RoleSnapshot]: ...
@@ -178,6 +201,10 @@ services as their primary integration surface.
 
 `RuntimeExecutionResult` is the narrow wait result for those flows. It does not
 double as a raw event transcript or provider-debug bundle.
+
+The control plane currently exposes the workflow-session projection as a stable
+read surface. The concurrency limit is therefore observable through the public
+API even though there is not yet a dedicated stable write method for changing it.
 
 ## Compatibility Facade
 
@@ -209,12 +236,18 @@ Not allowed as compatibility behavior:
 stable part is the **resource/tool contract**, not any specific internal
 handler layering.
 
+The active transport model is an orchestrator-owned loopback FastMCP HTTP host
+with per-run binding registration and server-side filtering. The compatibility
+import path under `vibrant.orchestrator.mcp` should re-export that active
+implementation rather than define a second authority path.
+
 ### Stable Read Resources
 
 The Gatekeeper-facing stable resource set is:
 
 - `get_consensus()`
 - `get_roadmap()`
+- `get_workflow_session()`
 - `get_task(task_id)`
 - `get_workflow_status()`
 - `list_pending_questions()`
@@ -243,6 +276,22 @@ The semantic write tool set is:
 
 The stable rule is that these tools express **semantic control-plane
 commands**, not file patches and not free-form text deltas.
+
+### MCP Transport Semantics
+
+The transport-level behavior that consumers may rely on is:
+
+- the MCP endpoint is loopback HTTP
+- per-run visibility is enforced server-side from a registered binding
+- the binding identity is carried via `X-Vibrant-Binding`
+- provider-specific launch arguments are compiled from a provider-neutral
+  access descriptor instead of being authored directly in policy code
+
+Consumers should not rely on:
+
+- a shared global MCP profile
+- provider-specific flag shapes as part of the orchestrator contract
+- transport auth schemes from older experimental docs
 
 ## Durable Store Contract
 
