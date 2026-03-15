@@ -50,6 +50,7 @@ class RoadmapStore:
 
         insertion_index = len(document.tasks) if index is None else max(0, min(index, len(document.tasks)))
         document.tasks.insert(insertion_index, task)
+        self.parser.validate_dependency_graph(document.tasks)
         written = self.write(document)
 
         meta = self._load_meta()
@@ -57,7 +58,7 @@ class RoadmapStore:
         self._save_meta(meta)
         return written
 
-    def update_task_definition(self, task_id: str, patch: dict[str, Any] | None = None, **kwargs: Any) -> TaskInfo:
+    def update_task_definition(self, task_id: str, patch: dict[str, Any] | None = None) -> TaskInfo:
         document = self.load()
         task = _require_task(document, task_id)
         allowed_fields = {
@@ -72,7 +73,7 @@ class RoadmapStore:
         }
         changed = False
         combined_patch = dict(patch or {})
-        combined_patch.update({key: value for key, value in kwargs.items() if value is not None})
+        combined_patch = {key: value for key, value in combined_patch.items() if value is not None}
         for key, value in combined_patch.items():
             if key not in allowed_fields:
                 continue

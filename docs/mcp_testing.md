@@ -1,145 +1,204 @@
+auth is involved.
 # Testing the MCP Server
 
 > **Status**: developer guide
-> **Date**: 2026-03-12
+> **Date**: 2026-03-15
 
-This guide explains how to run Vibrant's MCP server locally and verify the
-current bearer-token transport behavior.
+This guide explains how to run Vibrant's current MCP development server and
+verify connectivity from CLI tools and MCP Inspector.
 
 ## Prerequisites
 
-- Python dependencies installed with `uv`
-- optional MCP dependencies installed:
+- Python dependencies installed with uv
+- Optional MCP dependencies installed:
 
 ```bash
 uv sync --extra mcp --dev
 ```
 
-## Start the server over stdio
+## Current transport model
 
-The repo includes a small dev launcher at `scripts/mcp_dev_server.py`.
+- The dev launcher is scripts/mcp_dev_server.py
+- HTTP is the supported transport for this launcher
+- The server uses a binding header, not bearer-token auth
+- By default, it runs in stateless Streamable HTTP mode
 
-For a clean local test project, use a temporary project root instead of the repository root. This avoids loading old `.vibrant/agent-runs/*.json` records that may not match the current schema.
+The required request header is:
 
-This is the simplest way to explore the MCP surface locally because no HTTP
-auth is involved.
-
-```bash
-uv run python scripts/mcp_dev_server.py \
-  --project-root /tmp/vibrant-mcp-demo \
-  --transport stdio
+```text
+X-Vibrant-Binding: <binding-id>
 ```
 
-## Start the server over HTTP
+The binding id is printed when the server starts.
 
-HTTP transport now requires a bearer token stored in an environment variable.
+## Start the server (local machine)
+
+Use a disposable project root for clean test data:
 
 ```bash
-export VIBRANT_MCP_BEARER_TOKEN=development-secret
-
 uv run python scripts/mcp_dev_server.py \
   --project-root /tmp/vibrant-mcp-demo \
+  --role gatekeeper \
   --host 127.0.0.1 \
   --port 9000
 ```
 
-The MCP endpoint will be:
+Expected startup output includes:
 
-```text
-http://127.0.0.1:9000/mcp
-```
+- Endpoint URL (for example http://127.0.0.1:9000/mcp)
+- Required X-Vibrant-Binding header value
+- Stateless HTTP mode status
 
-If you want a different environment variable name, pass it explicitly:
+## Start the server (LAN access)
+
+If a client runs on another machine in the same LAN, bind to your LAN IP:
 
 ```bash
-export CUSTOM_MCP_TOKEN=development-secret
+uv run python scripts/mcp_dev_server.py \
+  --project-root /tmp/vibrant-mcp-demo \
+  --role gatekeeper \
+  --host 10.80.73.51 \
+  --port 9000
+```
 
+Use that same IP in the client URL.
+
+## Connect with MCP Inspector
+
+Start Inspector:
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+In Inspector, use:
+
+- Transport: Streamable HTTP
+- URL: http://<server-host>:<server-port>/mcp
+- Header key: X-Vibrant-Binding
+- Header value: the binding id printed by server startup
+
+Notes:
+
+- For host 0.0.0.0, clients should still connect using a concrete IP or DNS name
+- Binding ids are generated per server start; refresh the header value after restart
+
+## Optional server modes and flags
+
+- Stateful mode:
+
+```bash
 uv run python scripts/mcp_dev_server.py \
   --project-root /tmp/vibrant-mcp-demo \
   --host 127.0.0.1 \
   --port 9000 \
-  --bearer-token-env-var CUSTOM_MCP_TOKEN
+  --stateful-http
 ```
+
+In stateful mode, the client must preserve and resend Mcp-Session-Id.
+
+- Worker-scoped binding:
+
+```bash
+uv run python scripts/mcp_dev_server.py \
+  --project-root /tmp/vibrant-mcp-demo \
+  --role worker \
+  --worker-agent-id dev-worker \
+  --worker-agent-type code
+```
+
+- Explicit CORS origins (repeatable):
+
+```bash
+uv run python scripts/mcp_dev_server.py \
+  --project-root /tmp/vibrant-mcp-demo \
+  --host 10.80.73.51 \
+  --cors-allow-origin http://10.80.73.54:6274
+```
+
+If no CORS origin is provided, the dev server allows all origins.
 
 ## Quick HTTP verification
 
-Without the header, the server should reject the request:
+Check browser preflight behavior:
 
 ```bash
-curl -i http://127.0.0.1:9000/mcp
+curl -i -X OPTIONS 'http://127.0.0.1:9000/mcp' \
+  -H 'Origin: http://127.0.0.1:6274' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: content-type,x-vibrant-binding'
 ```
 
-With the correct header, the request should reach the MCP app:
+Expected result: 200 OK with access-control-allow-* headers.
+
+Protocol-level request example with required headers:
 
 ```bash
-curl -i \
-  -H 'Authorization: Bearer development-secret' \
-  http://127.0.0.1:9000/mcp
+curl -i 'http://127.0.0.1:9000/mcp' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'Content-Type: application/json' \
+  -H 'X-Vibrant-Binding: <binding-id>' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```
-
-The MCP app may still return a protocol-level error for an incomplete request,
-but it should no longer fail with `401`.
 
 ## What to test manually
 
-For stdio or authenticated HTTP sessions, verify:
+With a gatekeeper binding, verify that expected tools/resources are visible and callable.
 
-- resources such as `vibrant://consensus/current`, `vibrant://roadmap/current`, and `vibrant://workflow/status`
-- safe reads such as `consensus_get`, `roadmap_get`, `task_get`, and `instance_list`
-- safe mutations in a disposable project such as `workflow_pause`, `workflow_resume`, `vibrant.update_consensus`, and `vibrant.update_roadmap`
+With a worker binding, verify that the server-side surface is filtered.
+
+Example checks:
+
+- list tools and confirm only expected entries are exposed
+- list resources and read known resources such as vibrant://consensus
+- call vibrant.add_task and read back via vibrant://tasks/<task-id>
 
 ## Automated tests
 
-Relevant tests include:
+Relevant tests:
 
-- `tests/test_mcp_bearer_auth.py`
-- `tests/test_orchestrator_mcp.py`
-- `tests/test_orchestrator_fastmcp.py`
+- tests/test_orchestrator_mcp_transport.py
+- tests/test_orchestrator_mcp_surface.py
 
 Example targeted runs:
 
 ```bash
-uv run pytest -q tests/test_mcp_bearer_auth.py
-uv run pytest -q tests/test_orchestrator_mcp.py
-uv run pytest -q tests/test_orchestrator_fastmcp.py
+uv run pytest -q tests/test_orchestrator_mcp_transport.py
+uv run pytest -q tests/test_orchestrator_mcp_surface.py
 ```
-
-## Current permission model
-
-The server does not perform per-tool authorization after transport auth.
-
-Current behavior is:
-
-- HTTP requests must present the configured bearer token
-- stdio transport is trusted locally
-- once connected, the full MCP surface is available
-- Codex is responsible for constraining which tools a particular agent may call
 
 ## Troubleshooting
 
-### `401 unauthorized`
+### 421 Misdirected Request with Invalid Host header
 
-The request did not include the expected bearer token.
+The request Host is not allowed by transport security.
 
-Check:
+Fix:
 
-- the header format is exactly `Authorization: Bearer <token>`
-- the token value matches the server environment variable
-- the server was started with the expected `--bearer-token-env-var`
+- start the server with the exact LAN IP or hostname clients will use
+- connect clients to that same host value
 
-### `500 server_error`
+### 405 Method Not Allowed on OPTIONS
 
-The configured environment variable is missing in the server process.
+A preflight request reached an app path without CORS handling.
 
-Set it before starting the HTTP server, for example:
+Fix:
 
-```bash
-export VIBRANT_MCP_BEARER_TOKEN=development-secret
-```
+- use the current scripts/mcp_dev_server.py (it installs CORS middleware)
+- restart any old server process still running an older script version
 
-### `address already in use`
+### -32600 Bad Request: Missing session ID
 
-Another process is already listening on the chosen port. Pick a different port:
+The server is in stateful mode, but the client is not sending Mcp-Session-Id.
+
+Fix:
+
+- prefer default stateless mode (no --stateful-http)
+- or update the client to preserve and resend Mcp-Session-Id
+
+### address already in use
+
+Choose a different port:
 
 ```bash
 uv run python scripts/mcp_dev_server.py \
@@ -150,6 +209,5 @@ uv run python scripts/mcp_dev_server.py \
 
 ## Related docs
 
-- `docs/embedded_auth.md`
-- `vibrant/orchestrator/mcp/MCP.md`
-- `scripts/mcp_dev_server.py`
+- docs/mcp_testing.md
+- scripts/mcp_dev_server.py
