@@ -157,6 +157,7 @@ class Orchestrator:
             review_ticket_store=review_ticket_store,
             workspace_service=workspace_service,
             execution=execution_coordinator,
+            gatekeeper_loop=gatekeeper_loop,
         )
 
         commands = PolicyCommandAdapter(

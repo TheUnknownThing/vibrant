@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ...basic.artifacts import build_workflow_snapshot
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, ReviewTicketStore, RoadmapStore, WorkflowStateStore
@@ -11,6 +12,9 @@ from ...types import ReviewResolutionRecord, ReviewTicket, TaskResult, WorkflowS
 from . import attempts, dispatch, reviews, task_projection
 from .execution import ExecutionCoordinator
 from .models import DispatchLease, TaskLoopSnapshot, TaskLoopStage
+
+if TYPE_CHECKING:
+    from ..gatekeeper_loop import GatekeeperUserLoop
 
 
 @dataclass(slots=True)
@@ -26,6 +30,7 @@ class TaskLoop:
     review_ticket_store: ReviewTicketStore
     workspace_service: WorkspaceService
     execution: ExecutionCoordinator
+    gatekeeper_loop: GatekeeperUserLoop | None = None
     _leased_task_ids: set[str] = field(default_factory=set, repr=False)
     _snapshot: TaskLoopSnapshot = field(default_factory=TaskLoopSnapshot, repr=False)
 

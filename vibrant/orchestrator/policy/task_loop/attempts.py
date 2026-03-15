@@ -5,7 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ...types import AttemptCompletion, AttemptRecord, AttemptStatus, TaskResult, ValidationOutcome, WorkflowStatus
+from vibrant.models.task import TaskStatus
+
+from ...types import (
+    AttemptCompletion,
+    AttemptRecord,
+    AttemptStatus,
+    ReviewTicket,
+    ReviewTicketStatus,
+    TaskResult,
+    ValidationOutcome,
+    WorkflowStatus,
+)
 from . import dispatch, reviews, task_projection
 from .models import DispatchLease, TaskLoopStage, TaskState, WORKER_INPUT_UNSUPPORTED_ERROR
 from .prompting import prepare_task_execution
@@ -99,10 +110,10 @@ async def await_attempt_result(loop: TaskLoop, lease: DispatchLease, attempt) ->
         )
         return TaskResult(task_id=attempt.task_id, outcome="failed", error=reason)
 
-    return consume_attempt_completion(loop, lease, completion)
+    return await consume_attempt_completion(loop, lease, completion)
 
 
-def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, completion: AttemptCompletion) -> TaskResult:
+async def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, completion: AttemptCompletion) -> TaskResult:
     if completion.status == "awaiting_input":
         reason = completion.error or WORKER_INPUT_UNSUPPORTED_ERROR
         loop.attempt_store.update(completion.attempt_id, status=AttemptStatus.FAILED)
@@ -173,7 +184,7 @@ def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, completion:
     workspace = loop.workspace_service.get_workspace(task_id=completion.task_id, workspace_id=completion.workspace_ref)
     diff = loop.workspace_service.collect_review_diff(workspace)
     workspace = loop.workspace_service.get_workspace(task_id=completion.task_id, workspace_id=completion.workspace_ref)
-    reviews.create_review_ticket(
+    ticket = reviews.create_review_ticket(
         loop,
         completion,
         workspace=workspace,
@@ -185,6 +196,17 @@ def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, completion:
         active_attempt_id=completion.attempt_id,
         blocking_reason=None,
     )
+    auto_review_result = await _auto_review_ticket(
+        loop,
+        lease=lease,
+        completion=completion,
+        ticket=ticket,
+        validation=validation,
+        workspace_path=workspace.path,
+    )
+    if auto_review_result is not None:
+        return auto_review_result
+
     return TaskResult(
         task_id=completion.task_id,
         outcome="review_pending",
@@ -217,7 +239,7 @@ async def recover_active_attempt(loop: TaskLoop) -> AttemptRecoveryResult:
                 continue
             lease = task_projection.build_attempt_lease(loop, attempt)
             return AttemptRecoveryResult(
-                task_result=consume_attempt_completion(loop, lease, durable_completion),
+                task_result=await consume_attempt_completion(loop, lease, durable_completion),
             )
 
     recover_selector = getattr(loop.execution, "next_attempt_to_recover", None)
@@ -287,3 +309,128 @@ async def run_until_blocked(loop: TaskLoop) -> list[TaskResult]:
         if result.outcome in {"awaiting_user", "review_pending", "failed"}:
             break
     return results
+
+
+async def _auto_review_ticket(
+    loop: TaskLoop,
+    *,
+    lease: DispatchLease,
+    completion: AttemptCompletion,
+    ticket: ReviewTicket,
+    validation: ValidationOutcome,
+    workspace_path: str,
+) -> TaskResult | None:
+    if loop.gatekeeper_loop is None:
+        return None
+
+    try:
+        submission = await loop.gatekeeper_loop.submit_review(
+            ticket,
+            validation=validation,
+            code_summary=completion.summary,
+        )
+        review_result = await loop.gatekeeper_loop.wait_for_submission(submission)
+    except Exception as exc:
+        reason = str(exc)
+        loop._set_snapshot(
+            stage=TaskLoopStage.BLOCKED,
+            active_lease=lease,
+            active_attempt_id=completion.attempt_id,
+            blocking_reason=reason,
+        )
+        return TaskResult(
+            task_id=completion.task_id,
+            outcome="failed",
+            summary=validation.summary or completion.summary,
+            error=reason,
+            worktree_path=workspace_path,
+        )
+
+    review_error = getattr(review_result, "error", None)
+    if isinstance(review_error, str) and review_error:
+        loop._set_snapshot(
+            stage=TaskLoopStage.BLOCKED,
+            active_lease=lease,
+            active_attempt_id=completion.attempt_id,
+            blocking_reason=review_error,
+        )
+        return TaskResult(
+            task_id=completion.task_id,
+            outcome="failed",
+            summary=validation.summary or completion.summary,
+            error=review_error,
+            worktree_path=workspace_path,
+        )
+
+    resolved_ticket = loop.review_ticket_store.get(ticket.ticket_id)
+    if resolved_ticket is None:
+        return None
+
+    if resolved_ticket.status is ReviewTicketStatus.ACCEPTED:
+        task = loop.roadmap_store.get_task(ticket.task_id)
+        if task is not None and task.status is TaskStatus.ACCEPTED:
+            return TaskResult(
+                task_id=ticket.task_id,
+                outcome="accepted",
+                summary=validation.summary or completion.summary,
+                worktree_path=workspace_path,
+            )
+        return TaskResult(
+            task_id=ticket.task_id,
+            outcome="review_pending",
+            summary=validation.summary or completion.summary,
+            worktree_path=workspace_path,
+        )
+
+    if resolved_ticket.status is ReviewTicketStatus.RETRY:
+        return TaskResult(
+            task_id=ticket.task_id,
+            outcome="retried",
+            summary=validation.summary or completion.summary,
+            error=resolved_ticket.resolution_reason,
+            worktree_path=workspace_path,
+        )
+
+    if resolved_ticket.status is ReviewTicketStatus.ESCALATED:
+        reason = resolved_ticket.resolution_reason or "Task escalated"
+        loop._set_snapshot(
+            stage=TaskLoopStage.BLOCKED,
+            active_lease=lease,
+            active_attempt_id=completion.attempt_id,
+            blocking_reason=reason,
+        )
+        return TaskResult(
+            task_id=ticket.task_id,
+            outcome="escalated",
+            summary=validation.summary or completion.summary,
+            error=reason,
+            worktree_path=workspace_path,
+        )
+
+    pending_review_question = _pending_review_question(loop, task_id=ticket.task_id)
+    if pending_review_question is not None:
+        reason = pending_review_question.text
+        loop._set_snapshot(
+            stage=TaskLoopStage.BLOCKED,
+            active_lease=lease,
+            active_attempt_id=completion.attempt_id,
+            blocking_reason=reason,
+        )
+        return TaskResult(
+            task_id=ticket.task_id,
+            outcome="awaiting_user",
+            summary=validation.summary or completion.summary,
+            error=reason,
+            worktree_path=workspace_path,
+        )
+
+    return None
+
+
+def _pending_review_question(loop: TaskLoop, *, task_id: str):
+    for question in loop.question_store.list_pending():
+        if question.task_id == task_id:
+            return question
+        if question.blocking_scope == "review":
+            return question
+    return None

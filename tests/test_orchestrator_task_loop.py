@@ -15,7 +15,14 @@ from vibrant.orchestrator.policy.task_loop.models import (
     PreparedTaskExecution,
     WORKER_INPUT_UNSUPPORTED_ERROR,
 )
-from vibrant.orchestrator.types import AttemptCompletion, AttemptStatus, MergeOutcome, ValidationOutcome, WorkflowStatus
+from vibrant.orchestrator.types import (
+    AttemptCompletion,
+    AttemptStatus,
+    MergeOutcome,
+    QuestionPriority,
+    ValidationOutcome,
+    WorkflowStatus,
+)
 from vibrant.project_init import initialize_project
 
 
@@ -52,9 +59,17 @@ def _prepare_orchestrator(tmp_path: Path):
     return orchestrator
 
 
-async def _queue_review_pending_attempt(orchestrator, monkeypatch, *, workspace_setup=None):
+async def _queue_review_pending_attempt(
+    orchestrator,
+    monkeypatch,
+    *,
+    workspace_setup=None,
+    submit_review=None,
+    wait_for_submission=None,
+):
     statuses: list[AttemptStatus] = []
     original_update = orchestrator.attempt_store.update
+    review_context: dict[str, object] = {}
 
     def record_update(attempt_id: str, **kwargs):
         status = kwargs.get("status")
@@ -63,6 +78,30 @@ async def _queue_review_pending_attempt(orchestrator, monkeypatch, *, workspace_
         return original_update(attempt_id, **kwargs)
 
     monkeypatch.setattr(orchestrator.attempt_store, "update", record_update)
+
+    async def default_submit_review(self, ticket, *, validation=None, code_summary=None):
+        del self
+        review_context["ticket_id"] = ticket.ticket_id
+        review_context["validation"] = validation
+        review_context["code_summary"] = code_summary
+        return SimpleNamespace(run_id="gatekeeper-review-run")
+
+    async def default_wait_for_submission(self, submission):
+        del self
+        review_context["submission"] = submission
+        return SimpleNamespace(error=None)
+
+    gatekeeper_loop_type = type(orchestrator.gatekeeper_loop)
+    monkeypatch.setattr(
+        gatekeeper_loop_type,
+        "submit_review",
+        submit_review or default_submit_review,
+    )
+    monkeypatch.setattr(
+        gatekeeper_loop_type,
+        "wait_for_submission",
+        wait_for_submission or default_wait_for_submission,
+    )
 
     async def fake_start_attempt(prepared):
         lease = prepared.lease
@@ -149,6 +188,47 @@ async def test_accept_review_ticket_enters_merge_stage_and_completes_task(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_run_next_task_auto_review_accepts_and_completes_task(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    ticket_id: str | None = None
+
+    async def fake_submit_review(self, ticket, *, validation=None, code_summary=None):
+        del self
+        nonlocal ticket_id
+        ticket_id = ticket.ticket_id
+        assert validation is not None
+        assert code_summary == "Implementation completed"
+        return SimpleNamespace(run_id="gatekeeper-review-run")
+
+    async def fake_wait_for_submission(self, submission):
+        del self
+        assert submission.run_id == "gatekeeper-review-run"
+        assert ticket_id is not None
+        orchestrator.task_loop.accept_review_ticket(ticket_id)
+        return SimpleNamespace(error=None)
+
+    def fake_merge(workspace):
+        return MergeOutcome(status="merged", message=f"Merged {workspace.workspace_id}", follow_up_required=False)
+
+    monkeypatch.setattr(orchestrator.workspace_service, "merge_task_result", fake_merge)
+
+    result, statuses = await _queue_review_pending_attempt(
+        orchestrator,
+        monkeypatch,
+        submit_review=fake_submit_review,
+        wait_for_submission=fake_wait_for_submission,
+    )
+
+    task = orchestrator.roadmap_store.get_task("task-1")
+    assert result is not None
+    assert result.outcome == "accepted"
+    assert AttemptStatus.MERGE_PENDING in statuses
+    assert AttemptStatus.ACCEPTED in statuses
+    assert task is not None and task.status is TaskStatus.ACCEPTED
+    assert orchestrator.task_loop.snapshot().stage is TaskLoopStage.COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_merge_failure_snapshot_only_lists_follow_up_review_ticket(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     await _queue_review_pending_attempt(orchestrator, monkeypatch)
@@ -185,6 +265,49 @@ async def test_retry_review_ticket_requeues_task_for_redispatch(tmp_path: Path, 
     assert task.retry_count == 1
     assert attempt is not None and attempt.status is AttemptStatus.RETRY_PENDING
     assert [lease.task_id for lease in leases] == ["task-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_next_task_auto_review_returns_awaiting_user_when_gatekeeper_requests_decision(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    task_id: str | None = None
+
+    async def fake_submit_review(self, ticket, *, validation=None, code_summary=None):
+        del self, validation, code_summary
+        nonlocal task_id
+        task_id = ticket.task_id
+        return SimpleNamespace(run_id="gatekeeper-review-run")
+
+    async def fake_wait_for_submission(self, submission):
+        del self
+        assert submission.run_id == "gatekeeper-review-run"
+        assert task_id is not None
+        orchestrator.question_store.create(
+            text="Need product approval for the review decision.",
+            priority=QuestionPriority.BLOCKING,
+            source_role="gatekeeper",
+            source_agent_id="gatekeeper",
+            source_conversation_id="gatekeeper-conv",
+            source_turn_id="turn-1",
+            blocking_scope="review",
+            task_id=task_id,
+        )
+        return SimpleNamespace(error=None)
+
+    result, _ = await _queue_review_pending_attempt(
+        orchestrator,
+        monkeypatch,
+        submit_review=fake_submit_review,
+        wait_for_submission=fake_wait_for_submission,
+    )
+
+    assert result is not None
+    assert result.outcome == "awaiting_user"
+    assert result.error == "Need product approval for the review decision."
+    assert orchestrator.task_loop.snapshot().stage is TaskLoopStage.BLOCKED
 
 
 @pytest.mark.asyncio
