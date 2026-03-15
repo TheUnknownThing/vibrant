@@ -24,7 +24,14 @@ from ...types import (
 )
 from ..shared.workflow import apply_workflow_status
 from .execution import ExecutionCoordinator
-from .models import DispatchLease, ReviewResolutionCommand, TaskLoopSnapshot, TaskLoopStage, TaskState
+from .models import (
+    DispatchLease,
+    ReviewResolutionCommand,
+    TaskLoopSnapshot,
+    TaskLoopStage,
+    TaskState,
+    WORKER_INPUT_UNSUPPORTED_ERROR,
+)
 from .prompting import prepare_task_execution, retry_definition_patch
 
 
@@ -195,8 +202,8 @@ class TaskLoop:
 
     def _consume_attempt_completion(self, lease: DispatchLease, completion: AttemptCompletion) -> TaskResult:
         if completion.status == "awaiting_input":
-            reason = completion.error or "Agent is awaiting input"
-            self.attempt_store.update(completion.attempt_id, status=AttemptStatus.AWAITING_INPUT)
+            reason = completion.error or WORKER_INPUT_UNSUPPORTED_ERROR
+            self.attempt_store.update(completion.attempt_id, status=AttemptStatus.FAILED)
             self._record_task_state(
                 completion.task_id,
                 TaskState.BLOCKED,

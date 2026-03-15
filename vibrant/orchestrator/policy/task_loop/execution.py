@@ -152,10 +152,25 @@ class ExecutionCoordinator:
             raise ValueError(f"Attempt has no code run: {attempt_id}")
 
         runtime_result = await self.runtime_service.wait_for_run(attempt.code_run_id)
+        if runtime_result.awaiting_input:
+            error = runtime_result.error or WORKER_INPUT_UNSUPPORTED_ERROR
+            return AttemptCompletion(
+                attempt_id=attempt.attempt_id,
+                task_id=attempt.task_id,
+                status="failed",
+                code_run_id=attempt.code_run_id,
+                workspace_ref=attempt.workspace_id,
+                diff_ref=None,
+                validation=None,
+                summary=runtime_result.summary,
+                error=error,
+                conversation_ref=attempt.conversation_id,
+                provider_events_ref=runtime_result.provider_events_ref,
+            )
         completion = AttemptCompletion(
             attempt_id=attempt.attempt_id,
             task_id=attempt.task_id,
-            status="awaiting_input" if runtime_result.awaiting_input else ("failed" if runtime_result.error else "succeeded"),
+            status="failed" if runtime_result.error else "succeeded",
             code_run_id=attempt.code_run_id,
             workspace_ref=attempt.workspace_id,
             diff_ref=None,
