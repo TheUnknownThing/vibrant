@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
@@ -14,6 +15,80 @@ from ...models.wire import JsonRpcNotification
 from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
 from ..invocation import ProviderInvocationPlan
 from .client import CodexClient
+
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolArrayObjectHint:
+    tool_name: str
+    field_name: str
+    object_shape: str
+
+
+def _schema_type_name(schema: Mapping[str, Any]) -> str:
+    value = schema.get("type")
+    if isinstance(value, str) and value:
+        return value
+    return "value"
+
+
+def _extract_local_ref_hints_from_schema(tool_name: str, schema: Mapping[str, Any]) -> list[_ToolArrayObjectHint]:
+    properties_raw = schema.get("properties")
+    definitions_raw = schema.get("$defs")
+    if not isinstance(properties_raw, Mapping) or not isinstance(definitions_raw, Mapping):
+        return []
+
+    hints: list[_ToolArrayObjectHint] = []
+    for field_name, field_schema_raw in properties_raw.items():
+        if not isinstance(field_name, str) or not isinstance(field_schema_raw, Mapping):
+            continue
+        if field_schema_raw.get("type") != "array":
+            continue
+        items_raw = field_schema_raw.get("items")
+        if not isinstance(items_raw, Mapping):
+            continue
+        ref = items_raw.get("$ref")
+        if not isinstance(ref, str) or not ref.startswith("#/$defs/"):
+            continue
+        definition_name = ref.removeprefix("#/$defs/")
+        definition_raw = definitions_raw.get(definition_name)
+        if not isinstance(definition_raw, Mapping) or definition_raw.get("type") != "object":
+            continue
+
+        definition_properties_raw = definition_raw.get("properties")
+        if not isinstance(definition_properties_raw, Mapping):
+            continue
+        parts: list[str] = []
+        for property_name, property_schema_raw in definition_properties_raw.items():
+            if not isinstance(property_name, str) or not isinstance(property_schema_raw, Mapping):
+                continue
+            parts.append(f"{property_name}: {_schema_type_name(property_schema_raw)}")
+        if not parts:
+            continue
+
+        hints.append(
+            _ToolArrayObjectHint(
+                tool_name=tool_name,
+                field_name=field_name,
+                object_shape="{" + ", ".join(parts) + "}",
+            )
+        )
+    return hints
+
+
+def _build_mcp_schema_hint_block(hints: Sequence[_ToolArrayObjectHint]) -> str | None:
+    if not hints:
+        return None
+    lines = [
+        "MCP tool input shape note:",
+        "If a tool argument is listed below, pass JSON objects (not dotted strings).",
+    ]
+    for hint in hints:
+        lines.append(
+            f"- `{hint.tool_name}.{hint.field_name}[]` expects objects shaped like {hint.object_shape}."
+        )
+    return "\n".join(lines)
+
 
 DEFAULT_CLIENT_INFO = {"name": "vibrant", "title": "Vibrant", "version": "0.1.0"}
 NotificationHandler = Callable[[JsonRpcNotification], Any]
@@ -58,6 +133,9 @@ class CodexProviderAdapter(ProviderAdapter):
         self._session_started = False
         self._pending_requests: dict[int | str, dict[str, Any]] = {}
         self._awaiting_thread_started_for: str | None = None
+        self._mcp_schema_hint_block: str | None = None
+        self._mcp_schema_hint_thread_id: str | None = None
+        self._mcp_schema_hint_initialized = False
         self._on_raw_notification = on_raw_notification
         self._on_stderr_line = on_stderr_line
         self._native_logger = native_logger
@@ -219,7 +297,7 @@ class CodexProviderAdapter(ProviderAdapter):
         effort = kwargs.pop("effort", kwargs.pop("reasoning_effort", None))
         summary = kwargs.pop("summary", kwargs.pop("reasoning_summary", None))
         payload = {
-            "input": [dict(item) for item in input_items],
+            "input": await self._turn_input_with_mcp_schema_hints(input_items),
             "sandboxPolicy": runtime_mode.codex_turn_sandbox_policy,
             "approvalPolicy": approval_policy,
             **kwargs,
@@ -232,6 +310,59 @@ class CodexProviderAdapter(ProviderAdapter):
         if self.provider_thread_id and "threadId" not in payload:
             payload["threadId"] = self.provider_thread_id
         return await client.send_request("turn/start", payload)
+
+    async def _turn_input_with_mcp_schema_hints(
+        self,
+        input_items: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        items = [dict(item) for item in input_items]
+        hint_block = await self._resolve_mcp_schema_hint_block()
+        if hint_block is None:
+            return items
+        hint_item = {"type": "text", "text": hint_block, "text_elements": []}
+        return [hint_item, *items]
+
+    async def _resolve_mcp_schema_hint_block(self) -> str | None:
+        if self._mcp_schema_hint_initialized and self._mcp_schema_hint_thread_id == self.provider_thread_id:
+            return self._mcp_schema_hint_block
+
+        self._mcp_schema_hint_initialized = True
+        self._mcp_schema_hint_thread_id = self.provider_thread_id
+        self._mcp_schema_hint_block = None
+        tool_listing = await self._safe_list_tools()
+        if tool_listing is None:
+            return None
+
+        hints: list[_ToolArrayObjectHint] = []
+        for tool in tool_listing:
+            tool_name = tool.get("name")
+            input_schema = tool.get("inputSchema")
+            if not isinstance(tool_name, str) or not isinstance(input_schema, Mapping):
+                continue
+            hints.extend(_extract_local_ref_hints_from_schema(tool_name, input_schema))
+
+        hint_block = _build_mcp_schema_hint_block(hints)
+        self._mcp_schema_hint_block = hint_block
+        return hint_block
+
+    async def _safe_list_tools(self) -> list[Mapping[str, Any]] | None:
+        client = self._ensure_client()
+        try:
+            response = await client.send_request("tools/list", None)
+        except Exception:
+            return None
+        if not isinstance(response, Mapping):
+            return None
+
+        tools_raw = response.get("tools")
+        if not isinstance(tools_raw, list):
+            return None
+
+        tools: list[Mapping[str, Any]] = []
+        for item in tools_raw:
+            if isinstance(item, Mapping):
+                tools.append(item)
+        return tools
 
     async def interrupt_turn(self, **kwargs: Any) -> Any:
         client = self._ensure_client()

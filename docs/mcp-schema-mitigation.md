@@ -10,6 +10,14 @@ For tools like Snowflake `query_semantic_view`, that yields a predictable patter
 - MCP runtime rejects inputs because the contract expects objects (for example `{ "table": "PAID", "name": "PAID_DT" }`).
 - The same call may only succeed on a second attempt after the model infers shape from the error.
 
+## Upstream Codex finding (codex-rs)
+
+A direct review of `codex-rs/core/src/tools/spec.rs` shows MCP schemas are passed through `sanitize_json_schema()` during tool conversion.
+
+That sanitizer enforces/infers `type` on every schema object and defaults unknown forms to `"string"`. For nodes that are primarily local refs (for example `{"$ref": "#/$defs/SemanticExpression"}`), this can introduce a synthetic `"type": "string"` instead of preserving the referenced object shape.
+
+In practice, this is consistent with the observed degradation where object-array inputs can appear as string arrays in model-visible tool metadata, despite MCP runtime still validating against the original object contract.
+
 ## Constraints in Vibrant's current architecture
 
 Vibrant currently launches Codex as a subprocess via `codex app-server` and communicates over JSON-RPC through `CodexClient` and `CodexProviderAdapter`.

@@ -380,6 +380,70 @@ class TestCodexProviderAdapter:
         assert client.calls[0][1]["sandbox"] == "read-only"
         assert client.calls[0][1]["approvalPolicy"] == "on-request"
 
+
+    @pytest.mark.asyncio
+    async def test_start_turn_injects_mcp_schema_shape_hints_for_local_ref_arrays(self):
+        client = FakeCodexClient()
+        client.responses["tools/list"] = {
+            "tools": [
+                {
+                    "name": "query_semantic_view",
+                    "inputSchema": {
+                        "$defs": {
+                            "SemanticExpression": {
+                                "type": "object",
+                                "properties": {
+                                    "table": {"type": "string"},
+                                    "name": {"type": "string"},
+                                },
+                            }
+                        },
+                        "type": "object",
+                        "properties": {
+                            "dimensions": {
+                                "type": "array",
+                                "items": {"$ref": "#/$defs/SemanticExpression"},
+                            }
+                        },
+                    },
+                }
+            ]
+        }
+        adapter = CodexProviderAdapter(client=client)
+
+        await adapter.start_turn(
+            input_items=[{"type": "text", "text": "Summarize paid revenue"}],
+            runtime_mode=RuntimeMode.READ_ONLY,
+            approval_policy="never",
+        )
+
+        assert client.calls[0] == ("tools/list", None)
+        assert client.calls[1][0] == "turn/start"
+        input_items = client.calls[1][1]["input"]
+        assert input_items[0]["type"] == "text"
+        assert "MCP tool input shape note:" in input_items[0]["text"]
+        assert "`query_semantic_view.dimensions[]` expects objects shaped like {table: string, name: string}." in input_items[0]["text"]
+        assert input_items[1] == {"type": "text", "text": "Summarize paid revenue"}
+
+    @pytest.mark.asyncio
+    async def test_start_turn_caches_mcp_shape_hints_for_same_thread(self):
+        client = FakeCodexClient()
+        client.responses["tools/list"] = {"tools": []}
+        adapter = CodexProviderAdapter(client=client)
+
+        await adapter.start_turn(
+            input_items=[{"type": "text", "text": "First"}],
+            runtime_mode=RuntimeMode.READ_ONLY,
+            approval_policy="never",
+        )
+        await adapter.start_turn(
+            input_items=[{"type": "text", "text": "Second"}],
+            runtime_mode=RuntimeMode.READ_ONLY,
+            approval_policy="never",
+        )
+
+        assert [call[0] for call in client.calls].count("tools/list") == 1
+
     @pytest.mark.asyncio
     async def test_runtime_error_maps_stable_error_fields(self):
         events: list[dict[str, Any]] = []
