@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from vibrant.agents.code_agent import CodeAgent
 from vibrant.agents.runtime import BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig
 from vibrant.models.agent import AgentInstanceProviderConfig, AgentRunRecord, ProviderResumeHandle
 from vibrant.models.task import TaskInfo
+from vibrant.providers.invocation_compiler import compile_provider_invocation
 from vibrant.providers.registry import provider_transport
 
 from ...basic.conversation import ConversationStreamService
@@ -29,6 +32,11 @@ from ...types import (
 from .models import PreparedTaskExecution, WORKER_INPUT_UNSUPPORTED_ERROR
 from .roles import ensure_task_agent_instance
 from .sessions import AttemptExecutionSessionResource
+from ..shared.capabilities import worker_binding_preset
+
+if TYPE_CHECKING:
+    from ...basic.binding import AgentSessionBindingService
+    from ...interface.mcp import OrchestratorFastMCPHost
 
 
 @dataclass(slots=True)
@@ -44,9 +52,13 @@ class ExecutionCoordinator:
     runtime_service: AgentRuntimeService
     conversation_stream: ConversationStreamService
     adapter_factory: ProviderAdapterFactory
+    binding_service: AgentSessionBindingService | None = None
+    mcp_host: OrchestratorFastMCPHost | None = None
     execution_session: AttemptExecutionSessionResource = field(init=False, repr=False)
+    _binding_ids_by_run_id: dict[str, str] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self._binding_ids_by_run_id = {}
         self.execution_session = AttemptExecutionSessionResource(
             attempt_store=self.attempt_store,
             run_store=self.agent_run_store,
@@ -54,6 +66,15 @@ class ExecutionCoordinator:
             runtime_service=self.runtime_service,
             resume_callback=self._resume_attempt_live,
         )
+
+    def attach_mcp_bridge(
+        self,
+        *,
+        binding_service: AgentSessionBindingService,
+        mcp_host: OrchestratorFastMCPHost,
+    ) -> None:
+        self.binding_service = binding_service
+        self.mcp_host = mcp_host
 
     async def start_attempt(self, prepared: PreparedTaskExecution) -> AttemptRecord:
         lease = prepared.lease
@@ -95,6 +116,7 @@ class ExecutionCoordinator:
                 prompt=prepared.prompt,
                 workspace_path=workspace.path,
                 provider_thread=None,
+                conversation_id=conversation_id,
             )
         except Exception:
             self.execution_session.set_status(attempt.attempt_id, AttemptStatus.FAILED)
@@ -194,24 +216,59 @@ class ExecutionCoordinator:
         prompt: str,
         workspace_path: str,
         provider_thread: ProviderResumeHandle | None,
+        conversation_id: str | None,
     ) -> None:
         runtime = BaseAgentRuntime(self._build_code_agent())
+        binding_service, mcp_host = self._require_mcp_bridge()
+        await mcp_host.ensure_started()
+        bound_capabilities = binding_service.bind_preset(
+            preset=worker_binding_preset(
+                binding_service.mcp_server,
+                agent_record.identity.agent_id,
+                agent_record.identity.role,
+            ),
+            run_id=agent_record.identity.run_id,
+            conversation_id=conversation_id,
+        )
+        registered_binding = mcp_host.register_binding(bound_capabilities)
+        self._binding_ids_by_run_id[agent_record.identity.run_id] = registered_binding.binding_id
+        invocation_plan = compile_provider_invocation(
+            agent_record.provider.kind,
+            bound_capabilities.access,
+        )
+
+        handle = None
         if provider_thread is not None and provider_thread.resumable:
-            await self.runtime_service.resume_run(
-                agent_record=agent_record,
-                prompt=prompt,
-                provider_thread=provider_thread,
-                cwd=workspace_path,
-                runtime=runtime,
-                on_record_updated=self._persist_run,
-            )
-            return
-        await self.runtime_service.start_run(
-            agent_record=agent_record,
-            prompt=prompt,
-            cwd=workspace_path,
-            runtime=runtime,
-            on_record_updated=self._persist_run,
+            try:
+                handle = await self.runtime_service.resume_run(
+                    agent_record=agent_record,
+                    prompt=prompt,
+                    provider_thread=provider_thread,
+                    cwd=workspace_path,
+                    runtime=runtime,
+                    on_record_updated=self._persist_run,
+                    invocation_plan=invocation_plan,
+                )
+            except Exception:
+                self._release_binding(agent_record.identity.run_id)
+                raise
+        else:
+            try:
+                handle = await self.runtime_service.start_run(
+                    agent_record=agent_record,
+                    prompt=prompt,
+                    cwd=workspace_path,
+                    runtime=runtime,
+                    on_record_updated=self._persist_run,
+                    invocation_plan=invocation_plan,
+                )
+            except Exception:
+                self._release_binding(agent_record.identity.run_id)
+                raise
+
+        asyncio.create_task(
+            self._monitor_handle(agent_record.identity.run_id, handle),
+            name=f"attempt-mcp-binding-{agent_record.identity.run_id}",
         )
 
     async def _resume_attempt_live(
@@ -255,6 +312,7 @@ class ExecutionCoordinator:
             prompt=prompt,
             workspace_path=workspace.path,
             provider_thread=resume_handle,
+            conversation_id=conversation_id,
         )
         return replace(
             session,
@@ -305,3 +363,21 @@ class ExecutionCoordinator:
             transport=provider_transport(self.config.provider_kind),
             runtime_mode=self.config.sandbox_mode,
         )
+
+    async def _monitor_handle(self, run_id: str, handle: Any) -> None:
+        try:
+            await handle.wait()
+        finally:
+            self._release_binding(run_id)
+
+    def _release_binding(self, run_id: str | None) -> None:
+        if run_id is None:
+            return
+        binding_id = self._binding_ids_by_run_id.pop(run_id, None)
+        if binding_id is not None and self.mcp_host is not None:
+            self.mcp_host.unregister_binding(binding_id)
+
+    def _require_mcp_bridge(self) -> tuple[AgentSessionBindingService, OrchestratorFastMCPHost]:
+        if self.binding_service is None or self.mcp_host is None:
+            raise RuntimeError("ExecutionCoordinator requires MCP binding services before starting worker runs")
+        return self.binding_service, self.mcp_host

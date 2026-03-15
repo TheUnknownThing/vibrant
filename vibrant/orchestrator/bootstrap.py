@@ -180,6 +180,10 @@ class Orchestrator:
             binding_service=session_binding,
             mcp_host=mcp_host,
         )
+        execution_coordinator.attach_mcp_bridge(
+            binding_service=session_binding,
+            mcp_host=mcp_host,
+        )
 
         orchestrator = cls(
             project_root=root,

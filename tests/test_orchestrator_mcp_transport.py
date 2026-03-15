@@ -9,10 +9,12 @@ import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from vibrant.agents.gatekeeper import GatekeeperRequest, GatekeeperTrigger
+from vibrant.models.task import TaskInfo
 
 from vibrant.orchestrator import create_orchestrator
 from vibrant.orchestrator.mcp import BINDING_HEADER_NAME
 from vibrant.orchestrator.policy.shared.capabilities import gatekeeper_binding_preset, worker_binding_preset
+from vibrant.orchestrator.policy.task_loop.models import DispatchLease, PreparedTaskExecution
 from vibrant.orchestrator.types import AttemptStatus
 from vibrant.project_init import initialize_project
 
@@ -196,6 +198,55 @@ async def test_gatekeeper_lifecycle_compiles_and_passes_invocation_plan(tmp_path
             submission_id="submission-1",
             resume=False,
         )
+        await asyncio.sleep(0)
+
+        invocation_plan = captured["invocation_plan"]
+        assert invocation_plan is not None
+        assert invocation_plan.binding_id is not None
+        assert "--config" in invocation_plan.launch_args
+        assert any(arg.startswith("mcp_servers.") for arg in invocation_plan.launch_args if arg != "--config")
+    finally:
+        await orchestrator.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_execution_coordinator_compiles_and_passes_worker_invocation_plan(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    captured: dict[str, object] = {}
+
+    class _FakeHandle:
+        async def wait(self):
+            return None
+
+    async def fake_start_run(**kwargs):
+        captured.update(kwargs)
+        return _FakeHandle()
+
+    monkeypatch.setattr(orchestrator.execution_coordinator.runtime_service, "start_run", fake_start_run)
+
+    async def fake_ensure_started() -> str:
+        orchestrator.mcp_host.transport.port = 8765
+        orchestrator.mcp_host.fastmcp.settings.port = 8765
+        return "http://127.0.0.1:8765/mcp"
+
+    monkeypatch.setattr(orchestrator.mcp_host, "ensure_started", fake_ensure_started)
+
+    try:
+        prepared = PreparedTaskExecution(
+            lease=DispatchLease(
+                task_id="task-1",
+                lease_id="lease-1",
+                task_definition_version=1,
+            ),
+            task=TaskInfo(
+                id="task-1",
+                title="Wire worker MCP access",
+                acceptance_criteria=["worker can read orchestrator MCP resources"],
+            ),
+            prompt="Implement the task.",
+        )
+
+        await orchestrator.execution_coordinator.start_attempt(prepared)
         await asyncio.sleep(0)
 
         invocation_plan = captured["invocation_plan"]
