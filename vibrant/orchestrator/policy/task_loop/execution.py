@@ -18,8 +18,10 @@ from ...types import (
     AttemptRecord,
     AttemptRecoveryState,
     AttemptStatus,
+    ProviderAdapterFactory,
+    WorkspaceHandle,
 )
-from .models import PreparedTaskExecution
+from .models import PreparedTaskExecution, WORKER_INPUT_UNSUPPORTED_ERROR
 from .roles import ensure_task_agent_instance
 from .sessions import AttemptExecutionSessionResource
 
