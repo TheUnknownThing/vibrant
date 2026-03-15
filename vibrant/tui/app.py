@@ -789,22 +789,10 @@ class VibrantApp(App):
     def _update_consensus_view(
         self,
         consensus_view: ConsensusView,
-        document,
-        *,
-        tasks: list[TaskInfo],
-        source_path,
+        document: ConsensusDocument | None,
     ) -> None:
-        try:
-            consensus_view.update_consensus(
-                document,
-                tasks=tasks,
-                source_path=source_path,
-            )
-        except TypeError:
-            consensus_view.update_consensus(
-                document,
-                tasks=tasks,
-            )
+        consensus_view.update_consensus(document)
+
 
     def _clear_consensus_view(self, consensus_view: ConsensusView) -> None:
         consensus_view.clear_summary()
