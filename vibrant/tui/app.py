@@ -752,8 +752,7 @@ class VibrantApp(App):
         consensus_path = snapshot.consensus_path
 
         if vibing_screen is not None:
-            # TODO: vibing_screen doesn't has `sync_task_views` method
-            sync_task_views  = getattr(vibing_screen, "sync_task_views", None)
+            sync_task_views = getattr(vibing_screen, "sync_task_views", None)
             if callable(sync_task_views):
                 sync_task_views(
                     roadmap_tasks,
