@@ -19,9 +19,6 @@ class InterfaceControlPlane:
     async def wait_for_gatekeeper_submission(self, submission):
         return await self.backend.commands.wait_for_gatekeeper_submission(submission)
 
-    def start_execution(self):
-        return self.backend.commands.start_execution()
-
     def end_planning_phase(self):
         return self.backend.commands.end_planning_phase()
 
@@ -138,9 +135,6 @@ class InterfaceControlPlane:
     def get_attempt_execution(self, attempt_id: str):
         return self.backend.queries.get_attempt_execution(attempt_id)
 
-    def get_attempt_execution_session(self, attempt_id: str):
-        return self.backend.queries.attempt_execution_session(attempt_id)
-
     def get_review_ticket(self, ticket_id: str):
         return self.backend.queries.get_review_ticket(ticket_id)
 
@@ -149,9 +143,6 @@ class InterfaceControlPlane:
 
     def gatekeeper_busy(self) -> bool:
         return self.backend.queries.gatekeeper_busy()
-
-    def runtime_handle(self, run_id: str):
-        return self.backend.queries.runtime_handle(run_id)
 
     def add_task(self, task, *, index: int | None = None):
         return self.backend.commands.add_task(task, index=index)

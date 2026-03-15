@@ -77,7 +77,7 @@ async def _queue_review_pending_attempt(orchestrator, monkeypatch, *, workspace_
         start_attempt=fake_start_attempt,
         await_attempt_completion=fake_await_attempt_completion,
     )
-    result = await orchestrator.run_next_task()
+    result = await orchestrator.task_loop.run_next_task()
     return result, statuses
 
 
@@ -92,22 +92,22 @@ async def test_run_next_task_enters_validation_then_review(tmp_path: Path, monke
     assert AttemptStatus.VALIDATING in statuses
     assert AttemptStatus.REVIEW_PENDING in statuses
     assert orchestrator.task_loop.snapshot().stage is TaskLoopStage.REVIEW_PENDING
-    assert len(orchestrator.list_pending_review_tickets()) == 1
+    assert len(orchestrator.task_loop.list_pending_review_tickets()) == 1
 
 
 @pytest.mark.asyncio
 async def test_accept_review_ticket_enters_merge_stage_and_completes_task(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     _, statuses = await _queue_review_pending_attempt(orchestrator, monkeypatch)
-    ticket = orchestrator.list_pending_review_tickets()[0]
+    ticket = orchestrator.task_loop.list_pending_review_tickets()[0]
 
     def fake_merge(workspace):
         return MergeOutcome(status="merged", message=f"Merged {workspace.workspace_id}", follow_up_required=False)
 
     monkeypatch.setattr(orchestrator.workspace_service, "merge_task_result", fake_merge)
 
-    resolution = orchestrator.accept_review_ticket(ticket.ticket_id)
-    task = orchestrator.get_task("task-1")
+    resolution = orchestrator.task_loop.accept_review_ticket(ticket.ticket_id)
+    task = orchestrator.roadmap_store.get_task("task-1")
     attempt = orchestrator.attempt_store.get(ticket.attempt_id)
 
     assert resolution.decision == "accept"
@@ -122,15 +122,15 @@ async def test_accept_review_ticket_enters_merge_stage_and_completes_task(tmp_pa
 async def test_merge_failure_snapshot_only_lists_follow_up_review_ticket(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     await _queue_review_pending_attempt(orchestrator, monkeypatch)
-    ticket = orchestrator.list_pending_review_tickets()[0]
+    ticket = orchestrator.task_loop.list_pending_review_tickets()[0]
 
     def fake_merge(workspace):
         return MergeOutcome(status="failed", message=f"Merge failed for {workspace.workspace_id}", follow_up_required=True)
 
     monkeypatch.setattr(orchestrator.workspace_service, "merge_task_result", fake_merge)
 
-    resolution = orchestrator.accept_review_ticket(ticket.ticket_id)
-    pending_ids = [item.ticket_id for item in orchestrator.list_pending_review_tickets()]
+    resolution = orchestrator.task_loop.accept_review_ticket(ticket.ticket_id)
+    pending_ids = [item.ticket_id for item in orchestrator.task_loop.list_pending_review_tickets()]
     snapshot = orchestrator.task_loop.snapshot()
 
     assert resolution.follow_up_ticket_id is not None
@@ -143,10 +143,10 @@ async def test_merge_failure_snapshot_only_lists_follow_up_review_ticket(tmp_pat
 async def test_retry_review_ticket_requeues_task_for_redispatch(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     await _queue_review_pending_attempt(orchestrator, monkeypatch)
-    ticket = orchestrator.list_pending_review_tickets()[0]
+    ticket = orchestrator.task_loop.list_pending_review_tickets()[0]
 
-    resolution = orchestrator.retry_review_ticket(ticket.ticket_id, failure_reason="Address review feedback")
-    task = orchestrator.get_task("task-1")
+    resolution = orchestrator.task_loop.retry_review_ticket(ticket.ticket_id, failure_reason="Address review feedback")
+    task = orchestrator.roadmap_store.get_task("task-1")
     attempt = orchestrator.attempt_store.get(ticket.attempt_id)
     leases = orchestrator.task_loop.select_next(limit=1)
 
@@ -201,7 +201,7 @@ async def test_failed_completion_marks_attempt_failed_and_inactive(tmp_path: Pat
         await_attempt_completion=fake_await_attempt_completion,
     )
 
-    result = await orchestrator.run_next_task()
+    result = await orchestrator.task_loop.run_next_task()
     assert attempt_id is not None
     attempt = orchestrator.attempt_store.get(attempt_id)
 
@@ -220,7 +220,7 @@ async def test_start_attempt_failure_releases_task_lease(tmp_path: Path) -> None
 
     orchestrator.task_loop.execution = SimpleNamespace(start_attempt=fake_start_attempt)
 
-    result = await orchestrator.run_next_task()
+    result = await orchestrator.task_loop.run_next_task()
 
     assert result is not None and result.outcome == "failed"
     assert result.error == "workspace bootstrap failed"
@@ -237,9 +237,9 @@ async def test_accept_review_ticket_merges_workspace_changes_back_into_project(t
         (workspace_path / "demo.txt").write_text("workspace-change\n", encoding="utf-8")
 
     await _queue_review_pending_attempt(orchestrator, monkeypatch, workspace_setup=workspace_setup)
-    ticket = orchestrator.list_pending_review_tickets()[0]
+    ticket = orchestrator.task_loop.list_pending_review_tickets()[0]
 
-    resolution = orchestrator.accept_review_ticket(ticket.ticket_id)
+    resolution = orchestrator.task_loop.accept_review_ticket(ticket.ticket_id)
 
     assert resolution.decision == "accept"
     assert project_file.read_text(encoding="utf-8") == "workspace-change\n"
@@ -249,11 +249,11 @@ async def test_accept_review_ticket_merges_workspace_changes_back_into_project(t
 async def test_pending_review_ticket_can_be_resolved_after_restart(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     await _queue_review_pending_attempt(orchestrator, monkeypatch)
-    ticket = orchestrator.list_pending_review_tickets()[0]
+    ticket = orchestrator.task_loop.list_pending_review_tickets()[0]
 
     restarted = create_orchestrator(tmp_path)
-    resolution = restarted.accept_review_ticket(ticket.ticket_id)
-    task = restarted.get_task("task-1")
+    resolution = restarted.task_loop.accept_review_ticket(ticket.ticket_id)
+    task = restarted.roadmap_store.get_task("task-1")
 
     assert resolution.decision == "accept"
     assert task is not None and task.status is TaskStatus.ACCEPTED
@@ -302,7 +302,7 @@ async def test_execution_coordinator_recover_attempt_resumes_existing_provider_t
     monkeypatch.setattr(orchestrator.runtime_service, "resume_run", fake_resume_run)
     monkeypatch.setattr(orchestrator.runtime_service, "start_run", fake_start_run)
 
-    task = orchestrator.get_task("task-1")
+    task = orchestrator.roadmap_store.get_task("task-1")
     assert task is not None
     prepared = PreparedTaskExecution(
         lease=DispatchLease(task_id="task-1", lease_id="lease-1", task_definition_version=1, branch_hint=task.branch),
@@ -362,7 +362,7 @@ async def test_execution_coordinator_recover_attempt_falls_back_to_fresh_start(t
     monkeypatch.setattr(orchestrator.runtime_service, "start_run", fake_start_run)
     monkeypatch.setattr(orchestrator.runtime_service, "resume_run", fake_resume_run)
 
-    task = orchestrator.get_task("task-1")
+    task = orchestrator.roadmap_store.get_task("task-1")
     assert task is not None
     prepared = PreparedTaskExecution(
         lease=DispatchLease(task_id="task-1", lease_id="lease-2", task_definition_version=1, branch_hint=task.branch),
@@ -388,7 +388,7 @@ async def test_run_next_task_recovers_active_attempt_before_dispatching_new_work
         code_run_id="run-stale",
         conversation_id="attempt-conv-1",
     )
-    task = orchestrator.get_task("task-1")
+    task = orchestrator.roadmap_store.get_task("task-1")
     assert task is not None
     orchestrator.roadmap_store.replace_task(
         task.model_copy(update={"status": TaskStatus.IN_PROGRESS}),
@@ -430,7 +430,7 @@ async def test_run_next_task_recovers_active_attempt_before_dispatching_new_work
         await_attempt_completion=fake_await_attempt_completion,
     )
 
-    result = await orchestrator.run_next_task()
+    result = await orchestrator.task_loop.run_next_task()
 
     assert result is not None and result.outcome == "failed"
     assert calls == [f"recover:{attempt.attempt_id}", f"await:{attempt.attempt_id}"]
@@ -447,7 +447,7 @@ async def test_run_next_task_surfaces_recovery_failure_without_dispatching_new_w
         code_run_id="run-stale",
         conversation_id="attempt-conv-1",
     )
-    task = orchestrator.get_task("task-1")
+    task = orchestrator.roadmap_store.get_task("task-1")
     assert task is not None
     orchestrator.roadmap_store.replace_task(
         task.model_copy(update={"status": TaskStatus.IN_PROGRESS}),
@@ -474,7 +474,7 @@ async def test_run_next_task_surfaces_recovery_failure_without_dispatching_new_w
         await_attempt_completion=fake_await_attempt_completion,
     )
 
-    result = await orchestrator.run_next_task()
+    result = await orchestrator.task_loop.run_next_task()
     failed_attempt = orchestrator.attempt_store.get(attempt.attempt_id)
 
     assert result is not None and result.outcome == "failed"

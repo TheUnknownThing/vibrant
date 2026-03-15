@@ -218,9 +218,6 @@ class BasicQueryAdapter:
     def get_attempt_execution(self, attempt_id: str):
         return self.task_loop.execution.attempt_execution(attempt_id)
 
-    def attempt_execution_session(self, attempt_id: str):
-        return self.task_loop.execution.execution_session.get(attempt_id)
-
     def get_review_ticket(self, ticket_id: str):
         return self.task_loop.get_review_ticket(ticket_id)
 
@@ -229,9 +226,6 @@ class BasicQueryAdapter:
 
     def gatekeeper_busy(self) -> bool:
         return self.gatekeeper_loop.snapshot().busy
-
-    def runtime_handle(self, run_id: str):
-        return self.runtime_service.snapshot_handle(run_id)
 
     def _project_instance(self, record) -> AgentInstanceSnapshot:
         return AgentInstanceSnapshot(

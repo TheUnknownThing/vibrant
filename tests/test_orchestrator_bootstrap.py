@@ -58,7 +58,7 @@ def test_bootstrap_projects_gatekeeper_resume_from_run_record(tmp_path: Path) ->
     workflow_state_store.save(state)
 
     orchestrator = create_orchestrator(tmp_path)
-    snapshot = orchestrator.snapshot()
+    snapshot = orchestrator.control_plane.workflow_snapshot()
 
     assert snapshot.gatekeeper.run_id == "gatekeeper-run-1"
     assert snapshot.gatekeeper.provider_thread_id == "thread-existing"
@@ -199,25 +199,27 @@ def test_facade_derives_task_run_queries_from_attempts(tmp_path: Path) -> None:
 
 def test_workflow_state_commands_are_sync(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
 
-    started = orchestrator.start_execution()
-    paused = orchestrator.pause_workflow()
-    resumed = orchestrator.resume_workflow()
+    started = facade.end_planning_phase()
+    paused = facade.pause_workflow()
+    resumed = facade.resume_workflow()
 
-    assert started.status.value == "executing"
-    assert paused.status.value == "paused"
-    assert resumed.status.value == "executing"
+    assert started.value == "executing"
+    assert paused.value == "paused"
+    assert resumed.value == "executing"
 
 
 def test_resume_workflow_restores_planning_phase(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
 
     orchestrator.control_plane.set_workflow_status(WorkflowStatus.PLANNING)
-    paused = orchestrator.pause_workflow()
-    resumed = orchestrator.resume_workflow()
+    paused = facade.pause_workflow()
+    resumed = facade.resume_workflow()
 
-    assert paused.status.value == "paused"
-    assert resumed.status.value == "planning"
+    assert paused.value == "paused"
+    assert resumed.value == "planning"
 
 
 def test_facade_surfaces_failed_workflow_without_paused_fallback(tmp_path: Path) -> None:

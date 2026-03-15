@@ -9,8 +9,6 @@ from typing import Any
 from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.consensus import ConsensusDocument
-from vibrant.models.task import TaskInfo
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.registry import resolve_provider_adapter
 
@@ -32,10 +30,9 @@ from .basic.stores.gatekeeper_session import project_gatekeeper_session
 from .basic.workspace import WorkspaceService
 from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBackend, PolicyCommandAdapter
 from .interface.mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
-from .policy import GatekeeperLoopState
 from .policy.gatekeeper_loop import GatekeeperLifecycleService, GatekeeperUserLoop
 from .policy.task_loop import ExecutionCoordinator, TaskLoop
-from .types import GatekeeperLifecycleStatus, GatekeeperSessionSnapshot, TaskResult, WorkflowSnapshot, WorkflowStatus
+from .types import GatekeeperLifecycleStatus, GatekeeperSessionSnapshot
 
 
 @dataclass(slots=True)
@@ -219,10 +216,6 @@ class Orchestrator:
         return orchestrator
 
     @property
-    def agent_record_store(self) -> AgentRunStore:
-        return self.agent_run_store
-
-    @property
     def roadmap_path(self) -> Path:
         return self.roadmap_store.path
 
@@ -242,131 +235,8 @@ class Orchestrator:
         self.config = load_config(start_path=self.project_root)
         return self.roadmap_store.load()
 
-    async def submit_user_message(self, text: str):
-        return await self.control_plane.submit_user_input(text)
-
-    async def answer_user_decision(self, question_id: str, answer: str):
-        return await self.control_plane.submit_user_input(answer, question_id=question_id)
-
-    def start_execution(self) -> WorkflowSnapshot:
-        return self.control_plane.start_execution()
-
-    def pause_workflow(self) -> WorkflowSnapshot:
-        return self.control_plane.pause_workflow()
-
-    def resume_workflow(self) -> WorkflowSnapshot:
-        return self.control_plane.resume_workflow()
-
-    async def restart_gatekeeper(self, reason: str | None = None) -> GatekeeperLoopState:
-        return await self.control_plane.restart_gatekeeper(reason)
-
-    async def stop_gatekeeper(self) -> GatekeeperLoopState:
-        return await self.control_plane.stop_gatekeeper()
-
-    async def run_until_blocked(self) -> list[TaskResult]:
-        return await self.control_plane.run_until_blocked()
-
-    async def run_next_task(self) -> TaskResult | None:
-        return await self.control_plane.run_next_task()
-
-    def snapshot(self) -> WorkflowSnapshot:
-        return self.control_plane.workflow_snapshot()
-
-    def list_recent_events(self, limit: int = 20) -> list[dict[str, Any]]:
-        return self.event_log.list_recent_events(limit=limit)
-
     async def shutdown(self) -> None:
         await self.mcp_host.stop()
-
-    def get_consensus_document(self) -> ConsensusDocument | None:
-        return self.control_plane.get_consensus_document()
-
-    def get_roadmap(self) -> RoadmapDocument:
-        return self.control_plane.get_roadmap()
-
-    def get_task(self, task_id: str) -> TaskInfo | None:
-        return self.control_plane.get_task(task_id)
-
-    def get_workflow_status(self):
-        return self.control_plane.get_workflow_status()
-
-    def list_roles(self):
-        return self.control_plane.list_roles()
-
-    def get_role(self, role: str):
-        return self.control_plane.get_role(role)
-
-    def list_instances(self):
-        return self.control_plane.list_instances()
-
-    def get_instance(self, agent_id: str):
-        return self.control_plane.get_instance(agent_id)
-
-    def list_runs(self):
-        return self.control_plane.list_runs()
-
-    def list_active_runs(self):
-        return self.control_plane.list_active_runs()
-
-    def get_run(self, run_id: str):
-        return self.control_plane.get_run(run_id)
-
-    def list_active_attempts(self):
-        return self.control_plane.list_active_attempts()
-
-    def get_review_ticket(self, ticket_id: str):
-        return self.control_plane.get_review_ticket(ticket_id)
-
-    def list_pending_review_tickets(self):
-        return self.control_plane.list_pending_review_tickets()
-
-    def request_user_decision(self, text: str, **kwargs: Any):
-        return self.control_plane.request_user_decision(text, **kwargs)
-
-    def withdraw_question(self, question_id: str, *, reason: str | None = None):
-        return self.control_plane.withdraw_question(question_id, reason=reason)
-
-    def update_consensus(self, *, context: str | None = None, status: str | None = None):
-        return self.control_plane.update_consensus(context=context, status=status)
-
-    def append_decision(self, **kwargs: Any):
-        return self.control_plane.append_decision(**kwargs)
-
-    def add_task(self, task: TaskInfo, *, index: int | None = None):
-        return self.control_plane.add_task(task, index=index)
-
-    def update_task_definition(self, task_id: str, **patch: Any):
-        return self.control_plane.update_task_definition(task_id, **patch)
-
-    def reorder_tasks(self, task_ids: list[str]):
-        return self.control_plane.reorder_tasks(task_ids)
-
-    def replace_roadmap(self, *, tasks: list[TaskInfo], project: str | None = None):
-        return self.control_plane.replace_roadmap(tasks=tasks, project=project)
-
-    def end_planning_phase(self):
-        return self.control_plane.end_planning_phase()
-
-    def accept_review_ticket(self, ticket_id: str):
-        return self.control_plane.accept_review_ticket(ticket_id)
-
-    def retry_review_ticket(
-        self,
-        ticket_id: str,
-        *,
-        failure_reason: str,
-        prompt_patch: str | None = None,
-        acceptance_patch: list[str] | None = None,
-    ):
-        return self.control_plane.retry_review_ticket(
-            ticket_id,
-            failure_reason=failure_reason,
-            prompt_patch=prompt_patch,
-            acceptance_patch=acceptance_patch,
-        )
-
-    def escalate_review_ticket(self, ticket_id: str, *, reason: str):
-        return self.control_plane.escalate_review_ticket(ticket_id, reason=reason)
 
 
 def create_orchestrator(

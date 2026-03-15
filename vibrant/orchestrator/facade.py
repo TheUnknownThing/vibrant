@@ -22,6 +22,7 @@ from .policy.shared.workflow import orchestrator_status_from_workflow
 from .types import (
     AgentInstanceSnapshot,
     AgentRunSnapshot,
+    GatekeeperLifecycleStatus,
     QuestionPriority,
     QuestionView,
     RoleSnapshot,
@@ -164,12 +165,6 @@ class OrchestratorFacade:
     def get_workflow_status(self) -> OrchestratorStatus:
         return orchestrator_status_from_workflow(self.control_plane.get_workflow_status())
 
-    def get_workflow_session(self):
-        return self.control_plane.workflow_session()
-
-    def get_gatekeeper_session(self):
-        return self.control_plane.gatekeeper_session()
-
     def get_consensus_document(self) -> ConsensusDocument | None:
         return self.control_plane.get_consensus_document()
 
@@ -241,11 +236,34 @@ class OrchestratorFacade:
     def get_attempt_execution(self, attempt_id: str):
         return self.control_plane.get_attempt_execution(attempt_id)
 
-    def get_attempt_execution_session(self, attempt_id: str):
-        return self.control_plane.get_attempt_execution_session(attempt_id)
-
     def get_conversation(self, conversation_id: str):
         return self.control_plane.conversation_session(conversation_id)
+
+    def conversation(self, conversation_id: str):
+        return self.control_plane.conversation(conversation_id)
+
+    def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
+        return self.control_plane.subscribe_conversation(conversation_id, callback, replay=replay)
+
+    def gatekeeper_conversation_id(self) -> str | None:
+        return self.control_plane.gatekeeper_conversation_id()
+
+    def subscribe_runtime_events(
+        self,
+        callback,
+        *,
+        agent_id: str | None = None,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        event_types=None,
+    ):
+        return self.control_plane.subscribe_runtime_events(
+            callback,
+            agent_id=agent_id,
+            run_id=run_id,
+            task_id=task_id,
+            event_types=event_types,
+        )
 
     def task_id_for_run(self, run_id: str) -> str | None:
         normalized_run_id = run_id.strip() if isinstance(run_id, str) else ""
@@ -311,29 +329,6 @@ class OrchestratorFacade:
     def append_decision(self, **kwargs: Any) -> ConsensusDocument:
         return self.control_plane.append_decision(**kwargs)
 
-    def ask_question(
-        self,
-        text: str,
-        *,
-        source_agent_id: str | None = None,
-        source_role: str = "gatekeeper",
-        priority: QuestionPriority = QuestionPriority.BLOCKING,
-        blocking_scope: str = "planning",
-        task_id: str | None = None,
-        source_conversation_id: str | None = None,
-        source_turn_id: str | None = None,
-    ) -> QuestionView:
-        return self.control_plane.request_user_decision(
-            text,
-            source_agent_id=source_agent_id,
-            source_role=source_role,
-            priority=priority,
-            blocking_scope=blocking_scope,
-            task_id=task_id,
-            source_conversation_id=source_conversation_id,
-            source_turn_id=source_turn_id,
-        )
-
     def request_user_decision(
         self,
         text: str,
@@ -346,7 +341,7 @@ class OrchestratorFacade:
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
     ) -> QuestionView:
-        return self.ask_question(
+        return self.control_plane.request_user_decision(
             text,
             source_agent_id=source_agent_id,
             source_role=source_role,
@@ -394,6 +389,15 @@ class OrchestratorFacade:
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
         return self.control_plane.write_consensus_document(document)
 
+    async def submit_user_message(self, text: str):
+        return await self.control_plane.submit_user_input(text)
+
+    async def answer_user_decision(self, question_id: str, answer: str):
+        return await self.control_plane.submit_user_input(answer, question_id=question_id)
+
+    async def wait_for_gatekeeper_submission(self, submission):
+        return await self.control_plane.wait_for_gatekeeper_submission(submission)
+
     async def submit_gatekeeper_input(self, text: str, *, question_id: str | None = None):
         submission = await self.control_plane.submit_user_input(text, question_id=question_id)
         return submission, await self.control_plane.wait_for_gatekeeper_submission(submission)
@@ -401,6 +405,22 @@ class OrchestratorFacade:
     async def submit_gatekeeper_message(self, text: str):
         _, result = await self.submit_gatekeeper_input(text)
         return result
+
+    async def run_next_task(self):
+        return await self.control_plane.run_next_task()
+
+    async def run_until_blocked(self):
+        return await self.control_plane.run_until_blocked()
+
+    async def interrupt_gatekeeper(self) -> bool:
+        if not self.control_plane.gatekeeper_busy():
+            return False
+        session = await self.orchestrator.gatekeeper_lifecycle.interrupt_active_turn()
+        return session.lifecycle_state in {
+            GatekeeperLifecycleStatus.RUNNING,
+            GatekeeperLifecycleStatus.AWAITING_USER,
+            GatekeeperLifecycleStatus.IDLE,
+        }
 
     async def answer_pending_question(self, answer: str, *, question: str | None = None):
         pending = self.list_pending_question_records()
@@ -493,3 +513,6 @@ class OrchestratorFacade:
 
     def list_recent_events(self, *, limit: int = 20):
         return self.control_plane.list_recent_events(limit=limit)
+
+    def gatekeeper_busy(self) -> bool:
+        return self.control_plane.gatekeeper_busy()

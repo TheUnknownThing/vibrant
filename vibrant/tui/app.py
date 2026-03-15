@@ -298,7 +298,8 @@ class VibrantApp(App):
         self._set_status("Opened Agent Logs tab")
 
     async def action_run_next_task(self) -> None:
-        if self.orchestrator is None:
+        orchestrator = self.orchestrator_facade
+        if orchestrator is None:
             self.notify(
                 f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
                 severity="warning",
@@ -338,7 +339,7 @@ class VibrantApp(App):
         self._refresh_gatekeeper_state()
 
     async def _run_roadmap_tasks(self, *, notify_when_idle: bool) -> None:
-        assert self.orchestrator is not None
+        assert self.orchestrator_facade is not None
 
         automatic = self._roadmap_execution_mode() is RoadmapExecutionMode.AUTOMATIC
 
@@ -349,13 +350,13 @@ class VibrantApp(App):
 
         try:
             if automatic:
-                results = await self.orchestrator.run_until_blocked()
+                results = await self.orchestrator_facade.run_until_blocked()
                 if results:
                     self._handle_task_results(results)
                 elif notify_when_idle:
                     self._handle_task_result(None)
             else:
-                result = await self.orchestrator.run_next_task()
+                result = await self.orchestrator_facade.run_next_task()
                 if result is not None:
                     self._handle_task_result(result)
                 elif notify_when_idle:
@@ -405,23 +406,23 @@ class VibrantApp(App):
         )
 
     async def _start_gatekeeper_message(self, text: str) -> None:
-        assert self.orchestrator is not None
+        assert self.orchestrator_facade is not None
         pending_question = self._current_pending_gatekeeper_question_record()
         try:
             if pending_question is not None:
-                submission = await self.orchestrator.answer_user_decision(
+                submission = await self.orchestrator_facade.answer_user_decision(
                     pending_question.question_id,
                     text,
                 )
             else:
-                submission = await self.orchestrator.submit_user_message(text)
+                submission = await self.orchestrator_facade.submit_user_message(text)
             self._sync_gatekeeper_conversation_binding(
                 conversation_id=submission.conversation_id,
                 force=True,
             )
             self._refresh_gatekeeper_state()
 
-            result = await self.orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
+            result = await self.orchestrator_facade.wait_for_gatekeeper_submission(submission)
             self._refresh_project_views()
             if _extract_planning_completion_request(result):
                 self._transition_to_vibing(prefer_chat_history=True)
@@ -621,10 +622,10 @@ class VibrantApp(App):
 
     def _attach_orchestrator_subscriptions(self) -> None:
         self._close_orchestrator_subscriptions()
-        if self._orchestrator is None:
+        if self._orchestrator_facade is None:
             return
-        self._pending_runtime_bootstrap_events = self._orchestrator.control_plane.list_recent_events(limit=200)
-        self._runtime_event_subscription = self._orchestrator.control_plane.subscribe_runtime_events(self._on_runtime_event)
+        self._pending_runtime_bootstrap_events = self._orchestrator_facade.list_recent_events(limit=200)
+        self._runtime_event_subscription = self._orchestrator_facade.subscribe_runtime_events(self._on_runtime_event)
 
     def _initialize_project_setup(self) -> None:
         self._close_orchestrator_subscriptions()
@@ -942,12 +943,12 @@ class VibrantApp(App):
         force: bool = False,
     ) -> None:
         chat_panel = self._chat_panel()
-        if self._orchestrator is None or chat_panel is None:
+        if self._orchestrator_facade is None or chat_panel is None:
             return
 
         resolved_conversation_id = conversation_id
         if resolved_conversation_id is None:
-            resolved_conversation_id = self._orchestrator.control_plane.gatekeeper_conversation_id()
+            resolved_conversation_id = self._orchestrator_facade.gatekeeper_conversation_id()
 
         if not resolved_conversation_id:
             if force or self._gatekeeper_conversation_id is not None:
@@ -962,9 +963,7 @@ class VibrantApp(App):
         needs_rebind = force or resolved_conversation_id != self._gatekeeper_conversation_id
         if not needs_rebind:
             if chat_panel.current_conversation_id != resolved_conversation_id:
-                chat_panel.bind_conversation(
-                    self._orchestrator.control_plane.conversation(resolved_conversation_id)
-                )
+                chat_panel.bind_conversation(self._orchestrator_facade.conversation(resolved_conversation_id))
             return
 
         if self._gatekeeper_conversation_subscription is not None:
@@ -972,10 +971,8 @@ class VibrantApp(App):
                 self._gatekeeper_conversation_subscription.close()
 
         self._gatekeeper_conversation_id = resolved_conversation_id
-        chat_panel.bind_conversation(
-            self._orchestrator.control_plane.conversation(resolved_conversation_id)
-        )
-        self._gatekeeper_conversation_subscription = self._orchestrator.control_plane.subscribe_conversation(
+        chat_panel.bind_conversation(self._orchestrator_facade.conversation(resolved_conversation_id))
+        self._gatekeeper_conversation_subscription = self._orchestrator_facade.subscribe_conversation(
             resolved_conversation_id,
             self._on_gatekeeper_conversation_event,
             replay=False,
@@ -989,43 +986,18 @@ class VibrantApp(App):
         facade = self.orchestrator_facade or self._orchestrator_facade
         if facade is None:
             return []
-
-        list_records = getattr(facade, "list_question_records", None)
-        if callable(list_records):
-            return list(list_records())
-
-        questions = getattr(facade, "questions", None)
-        list_method = getattr(questions, "list", None)
-        if callable(list_method):
-            return list(list_method())
-        return []
+        return list(facade.list_question_records())
 
     def _pending_question_records(self) -> list[object]:
         facade = self.orchestrator_facade or self._orchestrator_facade
         if facade is None:
             return []
-
-        list_pending = getattr(facade, "list_pending_question_records", None)
-        if callable(list_pending):
-            return list(list_pending())
-
-        questions = getattr(facade, "questions", None)
-        pending_method = getattr(questions, "pending", None)
-        if callable(pending_method):
-            return list(pending_method())
-        return []
+        return list(facade.list_pending_question_records())
 
     def _notification_bell_enabled(self) -> bool:
         facade = self.orchestrator_facade or self._orchestrator_facade
         if facade is None:
             return False
-
-        bell_method = getattr(facade, "is_notification_bell_enabled", None)
-        if callable(bell_method):
-            try:
-                return bool(bell_method())
-            except Exception:
-                return False
 
         try:
             snapshot = facade.snapshot()
@@ -1036,7 +1008,7 @@ class VibrantApp(App):
     def _gatekeeper_is_busy(self) -> bool:
         return bool(
             self._gatekeeper_request_task is not None and not self._gatekeeper_request_task.done()
-        ) or bool(getattr(self.orchestrator, "gatekeeper_busy", False))
+        ) or bool(self.orchestrator_facade and self.orchestrator_facade.gatekeeper_busy())
 
     def _gatekeeper_interrupt_supported(self) -> bool:
         orchestrator = self.orchestrator_facade

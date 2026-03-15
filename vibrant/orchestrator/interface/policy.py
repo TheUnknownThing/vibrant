@@ -36,9 +36,6 @@ class PolicyCommandAdapter:
     def set_workflow_status(self, status: WorkflowStatus) -> WorkflowSnapshot:
         return self.gatekeeper_loop.transition_workflow(status)
 
-    def start_execution(self) -> WorkflowSnapshot:
-        return self.gatekeeper_loop.end_planning()
-
     def end_planning_phase(self) -> WorkflowSnapshot:
         return self.gatekeeper_loop.end_planning()
 
