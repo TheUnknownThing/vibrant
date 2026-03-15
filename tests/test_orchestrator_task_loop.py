@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -18,8 +19,33 @@ from vibrant.orchestrator.types import AttemptCompletion, AttemptStatus, MergeOu
 from vibrant.project_init import initialize_project
 
 
+def _git(project_root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _initialize_git_repo(project_root: Path) -> None:
+    _git(project_root, "init", "-b", "main")
+    _git(project_root, "config", "user.name", "Vibrant Tests")
+    _git(project_root, "config", "user.email", "vibrant-tests@example.com")
+    _git(project_root, "add", ".")
+    _git(project_root, "commit", "-m", "Initial commit")
+
+
+def _commit_all(project_root: Path, message: str) -> None:
+    _git(project_root, "add", ".")
+    _git(project_root, "commit", "-m", message)
+
+
 def _prepare_orchestrator(tmp_path: Path):
     initialize_project(tmp_path)
+    _initialize_git_repo(tmp_path)
     orchestrator = create_orchestrator(tmp_path)
     orchestrator.roadmap_store.add_task(TaskInfo(id="task-1", title="Implement the layered orchestrator"), index=0)
     orchestrator.workflow_state_store.update_workflow_status(WorkflowStatus.EXECUTING)
@@ -301,6 +327,7 @@ async def test_accept_review_ticket_merges_workspace_changes_back_into_project(t
     orchestrator = _prepare_orchestrator(tmp_path)
     project_file = tmp_path / "demo.txt"
     project_file.write_text("root\n", encoding="utf-8")
+    _commit_all(tmp_path, "Add demo baseline")
 
     def workspace_setup(workspace_path: Path) -> None:
         (workspace_path / "demo.txt").write_text("workspace-change\n", encoding="utf-8")
@@ -312,6 +339,28 @@ async def test_accept_review_ticket_merges_workspace_changes_back_into_project(t
 
     assert resolution.decision == "accept"
     assert project_file.read_text(encoding="utf-8") == "workspace-change\n"
+
+
+@pytest.mark.asyncio
+async def test_review_ticket_diff_is_built_from_real_git_commits(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    project_file = tmp_path / "demo.txt"
+    project_file.write_text("before\n", encoding="utf-8")
+    _commit_all(tmp_path, "Seed tracked file")
+
+    def workspace_setup(workspace_path: Path) -> None:
+        (workspace_path / "demo.txt").write_text("after\n", encoding="utf-8")
+
+    await _queue_review_pending_attempt(orchestrator, monkeypatch, workspace_setup=workspace_setup)
+    ticket = orchestrator.task_loop.list_pending_review_tickets()[0]
+
+    assert ticket.base_commit is not None
+    assert ticket.result_commit is not None
+    assert ticket.diff_ref is not None
+    diff_text = Path(ticket.diff_ref).read_text(encoding="utf-8")
+    assert "diff --git a/demo.txt b/demo.txt" in diff_text
+    assert "-before" in diff_text
+    assert "+after" in diff_text
 
 
 @pytest.mark.asyncio

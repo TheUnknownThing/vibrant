@@ -87,6 +87,10 @@ class ExecutionCoordinator:
             task_definition_version=lease.task_definition_version,
             workspace_id=workspace.workspace_id,
         )
+        workspace = self.workspace_service.attach_attempt(
+            workspace_id=workspace.workspace_id,
+            attempt_id=attempt.attempt_id,
+        )
         agent_record = self._build_run_record(
             task=prepared.task,
             workspace=workspace,
@@ -192,6 +196,12 @@ class ExecutionCoordinator:
             conversation_ref=attempt.conversation_id,
             provider_events_ref=runtime_result.provider_events_ref,
         )
+        if completion.status == "succeeded":
+            workspace = self.workspace_service.get_workspace(
+                task_id=attempt.task_id,
+                workspace_id=attempt.workspace_id,
+            )
+            self.workspace_service.capture_result_commit(workspace)
         return completion
 
     def reconcile_active_sessions(self) -> list[AttemptExecutionSnapshot]:

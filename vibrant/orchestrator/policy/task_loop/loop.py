@@ -270,7 +270,12 @@ class TaskLoop:
         )
         workspace = self.workspace_service.get_workspace(task_id=completion.task_id, workspace_id=completion.workspace_ref)
         diff = self.workspace_service.collect_review_diff(workspace)
-        self._create_review_ticket(completion, diff.path if diff is not None else completion.diff_ref)
+        workspace = self.workspace_service.get_workspace(task_id=completion.task_id, workspace_id=completion.workspace_ref)
+        self._create_review_ticket(
+            completion,
+            workspace=workspace,
+            diff_ref=diff.path if diff is not None else completion.diff_ref,
+        )
         self._set_snapshot(
             stage=TaskLoopStage.REVIEW_PENDING,
             active_lease=lease,
@@ -463,6 +468,9 @@ class TaskLoop:
                     conversation_id=ticket.conversation_id,
                     summary=merge_outcome.message,
                     diff_ref=ticket.diff_ref,
+                    base_commit=ticket.base_commit,
+                    result_commit=ticket.result_commit,
+                    integration_commit=merge_outcome.integration_commit,
                 )
                 follow_up_ticket_id = follow_up.ticket_id
                 next_stage = TaskLoopStage.REVIEW_PENDING
@@ -511,7 +519,13 @@ class TaskLoop:
             raise KeyError(f"Review ticket not found: {ticket_id}")
         return ticket
 
-    def _create_review_ticket(self, completion, diff_ref: str | None) -> ReviewTicket:
+    def _create_review_ticket(
+        self,
+        completion,
+        *,
+        workspace,
+        diff_ref: str | None,
+    ) -> ReviewTicket:
         return self.review_ticket_store.create(
             task_id=completion.task_id,
             attempt_id=completion.attempt_id,
@@ -520,6 +534,9 @@ class TaskLoop:
             conversation_id=completion.conversation_ref,
             summary=completion.summary,
             diff_ref=diff_ref,
+            base_commit=workspace.base_commit,
+            result_commit=workspace.result_commit,
+            integration_commit=workspace.integration_commit,
         )
 
     def _maybe_complete_workflow(self) -> None:

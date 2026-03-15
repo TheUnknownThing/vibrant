@@ -79,6 +79,21 @@ class ReviewTicketStatus(str, Enum):
     ESCALATED = "escalated"
 
 
+class WorkspaceKind(str, Enum):
+    TASK = "task"
+    INTEGRATION = "integration"
+
+
+class WorkspaceStatus(str, Enum):
+    ACTIVE = "active"
+    NO_CHANGES = "no_changes"
+    RESULT_CAPTURED = "result_captured"
+    INTEGRATING = "integrating"
+    MERGED = "merged"
+    CONFLICTED = "conflicted"
+    FAILED = "failed"
+
+
 @dataclass(slots=True)
 class GatekeeperSessionSnapshot:
     agent_id: str | None = None
@@ -187,14 +202,17 @@ class AttemptCompletion:
 class DiffArtifact:
     workspace_id: str
     path: str
+    base_commit: str | None = None
+    result_commit: str | None = None
     summary: str | None = None
 
 
 @dataclass(slots=True)
 class MergeOutcome:
-    status: Literal["merged", "conflicted", "failed"]
+    status: Literal["merged", "conflicted", "failed", "validation_failed", "dirty_target", "stale_target"]
     message: str | None = None
     follow_up_required: bool = False
+    integration_commit: str | None = None
 
 
 @dataclass(slots=True)
@@ -204,6 +222,15 @@ class WorkspaceHandle:
     path: str
     branch: str
     base_branch: str
+    attempt_id: str | None = None
+    kind: WorkspaceKind = WorkspaceKind.TASK
+    target_ref: str = ""
+    base_commit: str | None = None
+    result_commit: str | None = None
+    integration_commit: str | None = None
+    status: WorkspaceStatus = WorkspaceStatus.ACTIVE
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)
@@ -217,6 +244,9 @@ class ReviewTicket:
     status: ReviewTicketStatus = ReviewTicketStatus.PENDING
     summary: str | None = None
     diff_ref: str | None = None
+    base_commit: str | None = None
+    result_commit: str | None = None
+    integration_commit: str | None = None
     created_at: str = field(default_factory=utc_now)
     resolved_at: str | None = None
     resolution_reason: str | None = None

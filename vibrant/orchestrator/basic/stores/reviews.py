@@ -33,6 +33,9 @@ class ReviewTicketStore:
         ticket_id: str | None = None,
         summary: str | None = None,
         diff_ref: str | None = None,
+        base_commit: str | None = None,
+        result_commit: str | None = None,
+        integration_commit: str | None = None,
     ) -> ReviewTicket:
         tickets = self._load_tickets()
         ticket = ReviewTicket(
@@ -44,6 +47,9 @@ class ReviewTicketStore:
             conversation_id=_optional_string(conversation_id),
             summary=_optional_string(summary),
             diff_ref=_optional_string(diff_ref),
+            base_commit=_optional_string(base_commit),
+            result_commit=_optional_string(result_commit),
+            integration_commit=_optional_string(integration_commit),
         )
         tickets[ticket.ticket_id] = ticket
         self._save_tickets(tickets)
@@ -122,6 +128,9 @@ def _normalize_review_payload(payload: dict[str, object]) -> dict[str, object] |
             "status": ReviewTicketStatus(str(payload.get("status", ReviewTicketStatus.PENDING.value))),
             "summary": _optional_string(payload.get("summary")),
             "diff_ref": _optional_string(payload.get("diff_ref")),
+            "base_commit": _optional_string(payload.get("base_commit")),
+            "result_commit": _optional_string(payload.get("result_commit")),
+            "integration_commit": _optional_string(payload.get("integration_commit")),
             "created_at": str(payload.get("created_at") or utc_now()),
             "resolved_at": _optional_string(payload.get("resolved_at")),
             "resolution_reason": _optional_string(payload.get("resolution_reason")),

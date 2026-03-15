@@ -16,7 +16,9 @@ GITIGNORE_ENTRIES = [
     "conversations/",
     "agent-instances/*.json",
     "agent-runs/*.json",
+    "review-diffs/",
     "state.json",
+    "workspaces.json",
 ]
 
 DIRECTORIES = [

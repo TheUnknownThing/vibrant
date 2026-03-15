@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import subprocess
 
 import httpx
 import pytest
@@ -19,8 +20,28 @@ from vibrant.orchestrator.types import AttemptStatus
 from vibrant.project_init import initialize_project
 
 
+def _git(project_root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _initialize_git_repo(project_root: Path) -> None:
+    _git(project_root, "init", "-b", "main")
+    _git(project_root, "config", "user.name", "Vibrant Tests")
+    _git(project_root, "config", "user.email", "vibrant-tests@example.com")
+    _git(project_root, "add", ".")
+    _git(project_root, "commit", "-m", "Initial commit")
+
+
 def _prepare_orchestrator(tmp_path: Path):
     initialize_project(tmp_path)
+    _initialize_git_repo(tmp_path)
     return create_orchestrator(tmp_path)
 
 

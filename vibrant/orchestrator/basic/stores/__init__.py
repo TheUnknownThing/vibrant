@@ -8,6 +8,7 @@ from .questions import QuestionStore
 from .reviews import ReviewTicketStore
 from .roadmap import RoadmapStore
 from .workflow_state import WorkflowStateStore
+from .workspaces import WorkspaceStore
 
 __all__ = [
     "AgentInstanceStore",
@@ -18,4 +19,5 @@ __all__ = [
     "ReviewTicketStore",
     "RoadmapStore",
     "WorkflowStateStore",
+    "WorkspaceStore",
 ]

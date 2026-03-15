@@ -25,6 +25,7 @@ from .basic.stores import (
     ReviewTicketStore,
     RoadmapStore,
     WorkflowStateStore,
+    WorkspaceStore,
 )
 from .basic.stores.gatekeeper_session import project_gatekeeper_session
 from .basic.workspace import WorkspaceService
@@ -48,6 +49,7 @@ class Orchestrator:
     consensus_store: ConsensusStore
     roadmap_store: RoadmapStore
     review_ticket_store: ReviewTicketStore
+    workspace_store: WorkspaceStore
     agent_instance_store: AgentInstanceStore
     agent_run_store: AgentRunStore
     conversation_store: ConversationStore
@@ -89,12 +91,18 @@ class Orchestrator:
         consensus_store = ConsensusStore(vibrant_dir / "consensus.md", project_name=root.name)
         roadmap_store = RoadmapStore(vibrant_dir / "roadmap.md", project_name=root.name)
         review_ticket_store = ReviewTicketStore(vibrant_dir / "reviews.json")
+        workspace_store = WorkspaceStore(vibrant_dir / "workspaces.json")
         agent_instance_store = AgentInstanceStore(vibrant_dir / "agent-instances")
         agent_run_store = AgentRunStore(vibrant_dir / "agent-runs")
         conversation_store = ConversationStore(vibrant_dir)
         conversation_stream = ConversationStreamService(conversation_store)
         runtime_service = AgentRuntimeService()
-        workspace_service = WorkspaceService(project_root=root, worktree_root=config.worktree_directory)
+        workspace_service = WorkspaceService(
+            project_root=root,
+            worktree_root=config.worktree_directory,
+            workspace_store=workspace_store,
+            artifacts_root=vibrant_dir / "review-diffs",
+        )
         _repair_runtime_state(
             workflow_state_store=workflow_state_store,
             agent_run_store=agent_run_store,
@@ -195,6 +203,7 @@ class Orchestrator:
             consensus_store=consensus_store,
             roadmap_store=roadmap_store,
             review_ticket_store=review_ticket_store,
+            workspace_store=workspace_store,
             agent_instance_store=agent_instance_store,
             agent_run_store=agent_run_store,
             conversation_store=conversation_store,
