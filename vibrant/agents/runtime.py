@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol, runtime_checkable
 
+from vibrant.agents.base import AgentBase
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.invocation import ProviderInvocationPlan
@@ -361,9 +362,7 @@ class BaseAgentRuntime:
       ``interrupt``, and ``kill``.
     """
 
-    def __init__(self, agent: Any) -> None:
-        # ``agent`` is an AgentBase instance but we accept Any to avoid
-        # an import cycle; the protocol is purely structural.
+    def __init__(self, agent: "AgentBase") -> None:
         self._agent = agent
 
     async def start(

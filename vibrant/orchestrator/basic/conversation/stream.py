@@ -327,11 +327,14 @@ def _find_open_entry(
     kind: Literal["message", "thinking", "tool_call"],
     turn_id: str | None,
 ) -> AgentConversationEntry | None:
-    for entry in reversed(entries):
-        if entry.role != role or entry.kind != kind:
-            continue
-        if entry.turn_id != turn_id:
-            continue
-        if entry.finished_at is None:
-            return entry
-    return None
+    # Only the trailing open block can absorb more streamed content. Once a
+    # later block has been appended, keep the transcript chronological by
+    # starting a new block instead of mutating an older one.
+    if not entries:
+        return None
+    entry = entries[-1]
+    if entry.role != role or entry.kind != kind:
+        return None
+    if entry.turn_id != turn_id or entry.finished_at is not None:
+        return None
+    return entry

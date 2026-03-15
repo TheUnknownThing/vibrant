@@ -219,6 +219,7 @@ class AgentRuntimeService:
         return runtime
 
     def _attach_event_bridge(self, runtime: AgentRuntime, agent_record: AgentRunRecord) -> None:
+        # TODO: need to proof its correctness
         agent = getattr(runtime, "_agent", None)
         if agent is None or getattr(agent, "_orchestrator_runtime_bridge", False):
             return

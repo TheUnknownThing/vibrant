@@ -22,7 +22,7 @@ from uuid import uuid4
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
-from vibrant.providers.registry import provider_transport, resolve_provider_adapter
+from vibrant.providers.registry import provider_transport, resolve_configured_adapter_factory
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
 
 from .base import ReadOnlyAgentBase
@@ -196,7 +196,7 @@ class Gatekeeper:
         self.agent = GatekeeperAgent(
             self.project_root,
             self.config,
-            adapter_factory=adapter_factory or resolve_provider_adapter(self.config.provider_kind),
+            adapter_factory=resolve_configured_adapter_factory(self.config, adapter_factory=adapter_factory),
             on_canonical_event=on_canonical_event,
             timeout_seconds=timeout_seconds,
         )

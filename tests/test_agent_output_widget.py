@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.containers import Vertical
+from textual.widgets import Collapsible, Static
 
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.tui.widgets.agent_output import AgentOutput
@@ -182,6 +184,71 @@ async def test_agent_output_debug_view_renders_canonical_payloads():
 
         assert "tool.call.started" in debug_text
         assert "vibrant.ask_question" in debug_text
+
+
+@pytest.mark.asyncio
+async def test_agent_output_starts_new_reasoning_widget_after_visible_output():
+    record = AgentRecord(
+        identity={
+            "run_id": "run-task-004",
+            "agent_id": "agent-task-004",
+            "role": AgentType.CODE.value,
+            "type": AgentType.CODE,
+        },
+        lifecycle={"status": AgentStatus.RUNNING, "started_at": datetime.now(timezone.utc)},
+    )
+
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+        widget.sync_agents([record], task_ids_by_run={"run-task-004": "task-004"})
+        widget.ingest_canonical_event(
+            {
+                "agent_id": "agent-task-004",
+                "run_id": "run-task-004",
+                "type": "reasoning.summary.delta",
+                "timestamp": "2026-03-11T12:10:00Z",
+                "item_id": "reason-4",
+                "delta": "First reasoning block",
+            }
+        )
+        widget.ingest_canonical_event(
+            {
+                "agent_id": "agent-task-004",
+                "run_id": "run-task-004",
+                "type": "tool.call.started",
+                "timestamp": "2026-03-11T12:10:01Z",
+                "tool_name": "vibrant.request_user_decision",
+            }
+        )
+        widget.ingest_canonical_event(
+            {
+                "agent_id": "agent-task-004",
+                "run_id": "run-task-004",
+                "timestamp": "2026-03-11T12:10:02Z",
+                "type": "task.progress",
+                "item": {
+                    "id": "reason-4",
+                    "type": "reasoning",
+                    "summary": ["Second reasoning block"],
+                },
+            }
+        )
+        await pilot.pause()
+
+        stream = widget.query_one("#agent-output-stream", Vertical)
+        entries = list(stream.children)
+
+        assert len(entries) == 3
+        assert isinstance(entries[0], Collapsible)
+        assert isinstance(entries[1], Static)
+        assert isinstance(entries[2], Collapsible)
+        assert "First reasoning block" in str(entries[0].query_one(".agent-output-reasoning-body", Static).render())
+        assert "🛠 vibrant.request_user_decision started" in str(entries[1].render())
+        assert "Second reasoning block" in str(entries[2].query_one(".agent-output-reasoning-body", Static).render())
+        assert widget.get_thoughts_text() == "Second reasoning block"
+        assert widget.thoughts_running() is False
 
 
 @pytest.mark.asyncio

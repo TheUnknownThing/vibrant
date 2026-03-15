@@ -68,8 +68,7 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
             text="Attempt resumed for transport inspection.",
         )
         orchestrator.mcp_host.transport.port = 8765
-        orchestrator.mcp_host.fastmcp.settings.port = 8765
-        app = orchestrator.mcp_host.fastmcp.streamable_http_app()
+        app = orchestrator.mcp_host.http_app()
         bound = orchestrator.binding_service.bind_preset(
             preset=gatekeeper_binding_preset(orchestrator.mcp_server, "gatekeeper-test"),
             run_id="gatekeeper-test",
@@ -149,8 +148,7 @@ async def test_fastmcp_host_filters_worker_bindings_server_side(tmp_path: Path) 
     orchestrator = _prepare_orchestrator(tmp_path)
     try:
         orchestrator.mcp_host.transport.port = 8765
-        orchestrator.mcp_host.fastmcp.settings.port = 8765
-        app = orchestrator.mcp_host.fastmcp.streamable_http_app()
+        app = orchestrator.mcp_host.http_app()
         bound = orchestrator.binding_service.bind_preset(
             preset=worker_binding_preset(orchestrator.mcp_server, "worker-1", "code"),
             run_id="task-1",
@@ -204,7 +202,6 @@ async def test_gatekeeper_lifecycle_compiles_and_passes_invocation_plan(tmp_path
     monkeypatch.setattr(orchestrator.gatekeeper_lifecycle.runtime_service, "start_run", fake_start_run)
     async def fake_ensure_started() -> str:
         orchestrator.mcp_host.transport.port = 8765
-        orchestrator.mcp_host.fastmcp.settings.port = 8765
         return "http://127.0.0.1:8765/mcp"
 
     monkeypatch.setattr(orchestrator.mcp_host, "ensure_started", fake_ensure_started)
@@ -247,7 +244,6 @@ async def test_execution_coordinator_compiles_and_passes_worker_invocation_plan(
 
     async def fake_ensure_started() -> str:
         orchestrator.mcp_host.transport.port = 8765
-        orchestrator.mcp_host.fastmcp.settings.port = 8765
         return "http://127.0.0.1:8765/mcp"
 
     monkeypatch.setattr(orchestrator.mcp_host, "ensure_started", fake_ensure_started)

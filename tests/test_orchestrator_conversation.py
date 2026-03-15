@@ -5,6 +5,8 @@ from pathlib import Path
 
 from vibrant.orchestrator.basic.conversation.store import ConversationStore
 from vibrant.orchestrator.basic.conversation.stream import ConversationStreamService
+
+
 def test_conversation_stream_rebuilds_processed_history(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     stream = ConversationStreamService(store)

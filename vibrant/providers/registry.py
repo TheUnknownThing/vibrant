@@ -41,3 +41,15 @@ def resolve_provider_adapter(value: ProviderKind | str | None) -> Any:
 
         return ClaudeProviderAdapter
     raise ValueError(f"Unsupported provider kind: {value!r}")
+
+
+def resolve_configured_adapter_factory(config: Any, adapter_factory: Any | None = None) -> Any:
+    """Resolve the adapter factory for a runtime configuration."""
+
+    if adapter_factory is not None:
+        return adapter_factory
+    if bool(getattr(config, "mock_responses", False)):
+        from .mock.adapter import MockCodexAdapter
+
+        return MockCodexAdapter
+    return resolve_provider_adapter(getattr(config, "provider_kind", None))

@@ -42,7 +42,6 @@ class OrchestratorSnapshot:
     runs: tuple[AgentRunSnapshot, ...]
     execution_mode: RoadmapExecutionMode | None
     user_input_banner: str
-    notification_bell_enabled: bool
 
 
 @dataclass(slots=True)
@@ -159,7 +158,6 @@ class OrchestratorFacade:
             runs=tuple(self.list_runs()),
             execution_mode=self.orchestrator.execution_mode,
             user_input_banner=self.get_user_input_banner(),
-            notification_bell_enabled=False,
         )
 
     def get_workflow_status(self) -> OrchestratorStatus:
