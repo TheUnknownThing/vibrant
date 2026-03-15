@@ -131,6 +131,7 @@ class Orchestrator:
             conversation_stream=conversation_stream,
             adapter_factory=resolved_adapter_factory,
         )
+        execution_coordinator.reconcile_active_sessions()
         gatekeeper_loop = GatekeeperUserLoop(
             project_name=root.name,
             workflow_state_store=workflow_state_store,

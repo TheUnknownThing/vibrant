@@ -7,19 +7,23 @@ from pathlib import Path
 
 from vibrant.models.agent import AgentInstanceRecord, AgentRunRecord
 
+from ..repository import JsonDirectoryRepository
+
 
 class AgentInstanceStore:
     """Persist one JSON document per stable instance under ``.vibrant/agent-instances/``."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        self.path.mkdir(parents=True, exist_ok=True)
+        self._repository = JsonDirectoryRepository(
+            self.path,
+            parse_text=AgentInstanceRecord.model_validate_json,
+            serialize_record=lambda record: record.model_dump_json(indent=2),
+            key_for=lambda record: record.identity.agent_id,
+        )
 
     def get(self, agent_id: str) -> AgentInstanceRecord | None:
-        record_path = self.path / f"{agent_id}.json"
-        if not record_path.exists():
-            return None
-        return AgentInstanceRecord.model_validate_json(record_path.read_text(encoding="utf-8"))
+        return self._repository.get(agent_id)
 
     def find(
         self,
@@ -41,23 +45,13 @@ class AgentInstanceStore:
         return None
 
     def list(self) -> list[AgentInstanceRecord]:
-        records: list[AgentInstanceRecord] = []
-        for path in sorted(self.path.glob("*.json")):
-            try:
-                records.append(AgentInstanceRecord.model_validate_json(path.read_text(encoding="utf-8")))
-            except Exception:
-                continue
-        return records
+        return self._repository.list()
 
     def upsert(self, record: AgentInstanceRecord) -> AgentInstanceRecord:
-        path = self.path / f"{record.identity.agent_id}.json"
-        path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-        return record
+        return self._repository.upsert(record)
 
     def delete(self, agent_id: str) -> None:
-        path = self.path / f"{agent_id}.json"
-        if path.exists():
-            path.unlink()
+        self._repository.delete(agent_id)
 
     def reconcile_active_runs(
         self,

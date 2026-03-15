@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from ..json_store import read_json, write_json
+from ..repository import JsonDataclassMappingRepository
 from ...types import AttemptRecord, AttemptStatus, utc_now
 
 
@@ -26,6 +25,13 @@ class AttemptStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self._repository = JsonDataclassMappingRepository(
+            self.path,
+            record_type=AttemptRecord,
+            key_for=lambda record: record.attempt_id,
+            key_field="attempt_id",
+            normalize_payload=_normalize_attempt_payload,
+        )
 
     def create(
         self,
@@ -60,7 +66,7 @@ class AttemptStore:
         return record
 
     def get(self, attempt_id: str) -> AttemptRecord | None:
-        return self._load_records().get(attempt_id)
+        return self._repository.get(attempt_id)
 
     def get_active_by_task(self, task_id: str) -> AttemptRecord | None:
         for record in self._load_records().values():
@@ -94,7 +100,7 @@ class AttemptStore:
         return [record for record in self._load_records().values() if record.status in ACTIVE_ATTEMPT_STATUSES]
 
     def list_all(self) -> list[AttemptRecord]:
-        return list(self._load_records().values())
+        return self._repository.list()
 
     def update(
         self,
@@ -135,34 +141,39 @@ class AttemptStore:
         return record
 
     def _load_records(self) -> dict[str, AttemptRecord]:
-        raw = read_json(self.path, default={})
-        if not isinstance(raw, dict):
-            return {}
-
-        records: dict[str, AttemptRecord] = {}
-        for attempt_id, payload in raw.items():
-            if not isinstance(payload, dict):
-                continue
-            try:
-                records[attempt_id] = AttemptRecord(
-                    attempt_id=str(payload.get("attempt_id") or attempt_id),
-                    task_id=str(payload["task_id"]),
-                    status=AttemptStatus(str(payload["status"])),
-                    workspace_id=str(payload["workspace_id"]),
-                    code_run_id=_optional_string(payload.get("code_run_id")),
-                    validation_run_ids=_string_list(payload.get("validation_run_ids")),
-                    merge_run_id=_optional_string(payload.get("merge_run_id")),
-                    task_definition_version=int(payload["task_definition_version"]),
-                    conversation_id=_optional_string(payload.get("conversation_id")),
-                    created_at=str(payload.get("created_at") or utc_now()),
-                    updated_at=str(payload.get("updated_at") or payload.get("created_at") or utc_now()),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-        return records
+        return self._repository.load_all()
 
     def _save_records(self, records: dict[str, AttemptRecord]) -> None:
-        write_json(self.path, {attempt_id: asdict(record) | {"status": record.status.value} for attempt_id, record in records.items()})
+        self._repository.save_all(records)
+
+
+def _attempt_run_ids(record: AttemptRecord) -> set[str]:
+    run_ids: set[str] = set()
+    if record.code_run_id:
+        run_ids.add(record.code_run_id)
+    if record.merge_run_id:
+        run_ids.add(record.merge_run_id)
+    run_ids.update(run_id for run_id in record.validation_run_ids if run_id)
+    return run_ids
+
+
+def _normalize_attempt_payload(payload: dict[str, object]) -> dict[str, object] | None:
+    try:
+        return {
+            "attempt_id": str(payload["attempt_id"]),
+            "task_id": str(payload["task_id"]),
+            "status": AttemptStatus(str(payload["status"])),
+            "workspace_id": str(payload["workspace_id"]),
+            "code_run_id": _optional_string(payload.get("code_run_id")),
+            "validation_run_ids": _string_list(payload.get("validation_run_ids")),
+            "merge_run_id": _optional_string(payload.get("merge_run_id")),
+            "task_definition_version": int(payload["task_definition_version"]),
+            "conversation_id": _optional_string(payload.get("conversation_id")),
+            "created_at": str(payload.get("created_at") or utc_now()),
+            "updated_at": str(payload.get("updated_at") or payload.get("created_at") or utc_now()),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _optional_string(value: object) -> str | None:
@@ -176,13 +187,3 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-
-
-def _attempt_run_ids(record: AttemptRecord) -> set[str]:
-    run_ids: set[str] = set()
-    if record.code_run_id:
-        run_ids.add(record.code_run_id)
-    if record.merge_run_id:
-        run_ids.add(record.merge_run_id)
-    run_ids.update(run_id for run_id in record.validation_run_ids if run_id)
-    return run_ids

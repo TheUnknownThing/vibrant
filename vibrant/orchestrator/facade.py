@@ -241,6 +241,9 @@ class OrchestratorFacade:
     def get_attempt_execution(self, attempt_id: str):
         return self.control_plane.get_attempt_execution(attempt_id)
 
+    def get_attempt_execution_session(self, attempt_id: str):
+        return self.control_plane.get_attempt_execution_session(attempt_id)
+
     def get_conversation(self, conversation_id: str):
         return self.control_plane.conversation_session(conversation_id)
 

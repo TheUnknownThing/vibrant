@@ -20,6 +20,7 @@ from ..basic.stores import (
 )
 from ..policy.gatekeeper_loop.roles import GATEKEEPER_ROLE
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
+from ..policy.shared.workflow import WorkflowSessionResource
 from ..policy.task_loop.roles import DEFAULT_TASK_AGENT_ROLE
 from ..policy.task_loop import TaskLoop
 from ..types import (
@@ -63,7 +64,14 @@ class BasicQueryAdapter:
         )
 
     def workflow_session(self):
-        return self.workflow_snapshot()
+        return WorkflowSessionResource(
+            workflow_state_store=self.workflow_state_store,
+            agent_run_store=self.agent_run_store,
+            consensus_store=self.consensus_store,
+            roadmap_store=self.roadmap_store,
+            question_store=self.question_store,
+            attempt_store=self.attempt_store,
+        ).get()
 
     def get_workflow_status(self):
         return self.workflow_state_store.load().workflow_status
@@ -209,6 +217,9 @@ class BasicQueryAdapter:
 
     def get_attempt_execution(self, attempt_id: str):
         return self.task_loop.execution.attempt_execution(attempt_id)
+
+    def attempt_execution_session(self, attempt_id: str):
+        return self.task_loop.execution.execution_session.get(attempt_id)
 
     def get_review_ticket(self, ticket_id: str):
         return self.task_loop.get_review_ticket(ticket_id)

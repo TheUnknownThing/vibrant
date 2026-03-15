@@ -6,27 +6,27 @@ from pathlib import Path
 
 from vibrant.models.agent import AgentRunRecord, AgentStatus, ProviderResumeHandle
 
+from ..repository import JsonDirectoryRepository
+from ..session import authoritative_resume_handle
+
 
 class AgentRunStore:
     """Persist one JSON document per run under ``.vibrant/agent-runs/``."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        self.path.mkdir(parents=True, exist_ok=True)
+        self._repository = JsonDirectoryRepository(
+            self.path,
+            parse_text=AgentRunRecord.model_validate_json,
+            serialize_record=lambda record: record.model_dump_json(indent=2),
+            key_for=lambda record: record.identity.run_id,
+        )
 
     def get(self, run_id: str) -> AgentRunRecord | None:
-        record_path = self.path / f"{run_id}.json"
-        if not record_path.exists():
-            return None
-        return AgentRunRecord.model_validate_json(record_path.read_text(encoding="utf-8"))
+        return self._repository.get(run_id)
 
     def list(self) -> list[AgentRunRecord]:
-        records: list[AgentRunRecord] = []
-        for path in sorted(self.path.glob("*.json")):
-            try:
-                records.append(AgentRunRecord.model_validate_json(path.read_text(encoding="utf-8")))
-            except Exception:
-                continue
+        records = self._repository.list()
         records.sort(
             key=lambda record: (
                 (record.lifecycle.started_at or record.lifecycle.finished_at) is None,
@@ -56,17 +56,12 @@ class AgentRunStore:
         record = self.get(run_id)
         if record is None:
             return None
-        handle = ProviderResumeHandle.from_provider_metadata(record.provider)
-        if handle is None or handle.empty:
-            return None
-        return handle
+        return authoritative_resume_handle(
+            ProviderResumeHandle.from_provider_metadata(record.provider)
+        )
 
     def upsert(self, record: AgentRunRecord) -> AgentRunRecord:
-        path = self.path / f"{record.identity.run_id}.json"
-        path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-        return record
+        return self._repository.upsert(record)
 
     def delete(self, run_id: str) -> None:
-        path = self.path / f"{run_id}.json"
-        if path.exists():
-            path.unlink()
+        self._repository.delete(run_id)

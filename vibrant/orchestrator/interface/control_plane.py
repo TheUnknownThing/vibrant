@@ -138,6 +138,9 @@ class InterfaceControlPlane:
     def get_attempt_execution(self, attempt_id: str):
         return self.backend.queries.get_attempt_execution(attempt_id)
 
+    def get_attempt_execution_session(self, attempt_id: str):
+        return self.backend.queries.attempt_execution_session(attempt_id)
+
     def get_review_ticket(self, ticket_id: str):
         return self.backend.queries.get_review_ticket(ticket_id)
 

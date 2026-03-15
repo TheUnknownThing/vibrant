@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from vibrant.models.agent import AgentRunRecord, ProviderResumeHandle
 
+from ..session import authoritative_resume_handle
 from ...types import GatekeeperSessionSnapshot
 
 
@@ -14,10 +15,9 @@ def resume_handle_from_run(record: AgentRunRecord | None) -> ProviderResumeHandl
 
     if record is None:
         return None
-    handle = ProviderResumeHandle.from_provider_metadata(record.provider)
-    if handle is None or handle.empty:
-        return None
-    return handle
+    return authoritative_resume_handle(
+        ProviderResumeHandle.from_provider_metadata(record.provider)
+    )
 
 
 def project_gatekeeper_session(

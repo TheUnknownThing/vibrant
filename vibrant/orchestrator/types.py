@@ -9,7 +9,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from vibrant.agents.runtime import InputRequest
-from vibrant.models.agent import AgentStatus
+from vibrant.models.agent import AgentStatus, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 
 if TYPE_CHECKING:
@@ -141,6 +141,25 @@ class AttemptExecutionView:
     conversation_id: str | None
     run_id: str | None
     run_status: str | None
+    provider_thread_id: str | None = None
+    resumable: bool = False
+    live: bool = False
+    awaiting_input: bool = False
+    input_requests: list[InputRequest] = field(default_factory=list)
+    updated_at: str | None = None
+
+
+@dataclass(slots=True)
+class AttemptExecutionSnapshot:
+    attempt_id: str
+    task_id: str
+    status: AttemptStatus
+    workspace_id: str
+    workspace_path: str | None
+    conversation_id: str | None
+    run_id: str | None
+    run_status: str | None
+    provider_resume_handle: ProviderResumeHandle | None = None
     provider_thread_id: str | None = None
     resumable: bool = False
     live: bool = False
@@ -324,6 +343,19 @@ class WorkflowState:
     gatekeeper_session: GatekeeperSessionSnapshot
     resume_status: WorkflowStatus | None = None
     total_agent_spawns: int = 0
+
+
+@dataclass(slots=True)
+class WorkflowSessionSnapshot:
+    session_id: str
+    started_at: str
+    status: WorkflowStatus
+    resume_status: WorkflowStatus | None
+    concurrency_limit: int
+    gatekeeper: GatekeeperSessionSnapshot
+    total_agent_spawns: int = 0
+    pending_question_ids: tuple[str, ...] = ()
+    active_attempt_ids: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
