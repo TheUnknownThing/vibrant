@@ -6,7 +6,7 @@ import asyncio
 import inspect
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from vibrant.agents.gatekeeper import (
@@ -29,6 +29,10 @@ from ...types import (
     utc_now,
 )
 
+if TYPE_CHECKING:
+    from ...basic.binding import AgentSessionBindingService
+    from ...interface.mcp import OrchestratorFastMCPHost
+
 
 class GatekeeperLifecycleService:
     """Own the runtime lifecycle of the single Gatekeeper session."""
@@ -40,8 +44,8 @@ class GatekeeperLifecycleService:
         runtime_service: AgentRuntimeService,
         conversation_service: ConversationStreamService,
         gatekeeper: Gatekeeper | None = None,
-        binding_service: Any | None = None,
-        mcp_host: Any | None = None,
+        binding_service: AgentSessionBindingService | None = None,
+        mcp_host: OrchestratorFastMCPHost | None = None,
         instance_store: AgentInstanceStore,
         run_store: AgentRunStore,
         session_loader: Callable[[], GatekeeperSessionSnapshot] | None = None,
@@ -51,8 +55,8 @@ class GatekeeperLifecycleService:
         self.runtime_service = runtime_service
         self.conversation_service = conversation_service
         self.gatekeeper = gatekeeper or Gatekeeper(self.project_root)
-        self.binding_service = binding_service
-        self.mcp_host = mcp_host
+        self._binding_service = binding_service
+        self._mcp_host = mcp_host
         self.instance_store = instance_store
         self.run_store = run_store
         self._session_loader = session_loader
@@ -62,6 +66,15 @@ class GatekeeperLifecycleService:
         self._active_handle_run_id: str | None = None
         self._binding_ids_by_run_id: dict[str, str] = {}
         self._subscription = self.runtime_service.subscribe_canonical_events(self._on_runtime_event)
+
+    def attach_mcp_bridge(
+        self,
+        *,
+        binding_service: AgentSessionBindingService,
+        mcp_host: OrchestratorFastMCPHost,
+    ) -> None:
+        self._binding_service = binding_service
+        self._mcp_host = mcp_host
 
     @property
     def busy(self) -> bool:
@@ -129,16 +142,15 @@ class GatekeeperLifecycleService:
         self._session.updated_at = utc_now()
         self._persist()
 
-        if self.binding_service is None or self.mcp_host is None:
-            raise RuntimeError("GatekeeperLifecycleService requires binding_service and mcp_host before submit()")
+        binding_service, mcp_host = self._require_mcp_bridge()
 
-        await self.mcp_host.ensure_started()
-        bound_capabilities = self.binding_service.bind_preset(
-            preset=gatekeeper_binding_preset(self.binding_service.mcp_server, agent_record.identity.run_id),
+        await mcp_host.ensure_started()
+        bound_capabilities = binding_service.bind_preset(
+            preset=gatekeeper_binding_preset(binding_service.mcp_server, agent_record.identity.run_id),
             run_id=agent_record.identity.run_id,
             conversation_id=conversation_id,
         )
-        registered_binding = self.mcp_host.register_binding(bound_capabilities)
+        registered_binding = mcp_host.register_binding(bound_capabilities)
         self._binding_ids_by_run_id[agent_record.identity.run_id] = registered_binding.binding_id
         invocation_plan = compile_provider_invocation(
             agent_record.provider.kind,
@@ -311,8 +323,13 @@ class GatekeeperLifecycleService:
         if run_id is None:
             return
         binding_id = self._binding_ids_by_run_id.pop(run_id, None)
-        if binding_id is not None and self.mcp_host is not None:
-            self.mcp_host.unregister_binding(binding_id)
+        if binding_id is not None and self._mcp_host is not None:
+            self._mcp_host.unregister_binding(binding_id)
+
+    def _require_mcp_bridge(self) -> tuple[AgentSessionBindingService, OrchestratorFastMCPHost]:
+        if self._binding_service is None or self._mcp_host is None:
+            raise RuntimeError("GatekeeperLifecycleService requires MCP binding services before submit()")
+        return self._binding_service, self._mcp_host
 
     def _ensure_no_active_submission(self) -> None:
         if self._active_handle_run_id is None:

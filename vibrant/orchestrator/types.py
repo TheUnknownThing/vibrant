@@ -328,6 +328,7 @@ class AgentConversationView:
 
 AgentStreamCallback = Callable[[AgentStreamEvent], Any]
 CanonicalEventHandler = Callable[[CanonicalEvent], Any]
+ProviderAdapterFactory = Callable[..., Any]
 
 
 class StreamSubscription(Protocol):

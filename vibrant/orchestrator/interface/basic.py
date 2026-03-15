@@ -38,6 +38,9 @@ from ..types import (
     RoleSnapshot,
 )
 
+_ACTIVE_RUN_STATUSES = frozenset({"spawning", "connecting", "running", "awaiting_input"})
+_DONE_RUN_STATUSES = frozenset({"completed", "failed", "killed"})
+
 
 @dataclass(slots=True)
 class BasicQueryAdapter:
@@ -249,17 +252,19 @@ class BasicQueryAdapter:
         )
 
     def _project_run(self, record) -> AgentRunSnapshot:
+        state = record.lifecycle.status.value
+        awaiting_input = False
+        input_requests = []
+        has_handle = False
         try:
             runtime_snapshot = self.runtime_service.snapshot_handle(record.identity.run_id)
+        except KeyError:
+            pass
+        else:
             state = runtime_snapshot.state
             awaiting_input = runtime_snapshot.awaiting_input
             input_requests = runtime_snapshot.input_requests
             has_handle = True
-        except Exception:
-            state = record.lifecycle.status.value
-            awaiting_input = False
-            input_requests = []
-            has_handle = False
 
         return AgentRunSnapshot(
             identity=AgentRunIdentitySnapshot(
@@ -271,8 +276,8 @@ class BasicQueryAdapter:
                 status=record.lifecycle.status.value,
                 state=state,
                 has_handle=has_handle,
-                active=record.lifecycle.status.value in {"spawning", "connecting", "running", "awaiting_input"},
-                done=record.lifecycle.status.value in {"completed", "failed", "killed"},
+                active=record.lifecycle.status.value in _ACTIVE_RUN_STATUSES,
+                done=record.lifecycle.status.value in _DONE_RUN_STATUSES,
                 awaiting_input=awaiting_input,
                 pid=record.lifecycle.pid,
                 started_at=record.lifecycle.started_at,

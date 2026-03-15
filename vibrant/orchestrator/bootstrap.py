@@ -32,7 +32,7 @@ from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBac
 from .interface.mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
 from .policy.gatekeeper_loop import GatekeeperLifecycleService, GatekeeperUserLoop
 from .policy.task_loop import ExecutionCoordinator, TaskLoop
-from .types import GatekeeperLifecycleStatus, GatekeeperSessionSnapshot
+from .types import CanonicalEventHandler, GatekeeperLifecycleStatus, GatekeeperSessionSnapshot, ProviderAdapterFactory
 
 
 @dataclass(slots=True)
@@ -65,7 +65,7 @@ class Orchestrator:
     mcp_server: OrchestratorMCPServer
     mcp_host: OrchestratorFastMCPHost
     gatekeeper: Gatekeeper
-    adapter_factory: Any
+    adapter_factory: ProviderAdapterFactory
 
     @classmethod
     def load(
@@ -73,8 +73,8 @@ class Orchestrator:
         project_root: str | Path,
         *,
         gatekeeper: Gatekeeper | None = None,
-        adapter_factory: Any | None = None,
-        on_canonical_event: Any | None = None,
+        adapter_factory: ProviderAdapterFactory | None = None,
+        on_canonical_event: CanonicalEventHandler | None = None,
         **_: Any,
     ) -> "Orchestrator":
         root = find_project_root(project_root)
@@ -110,8 +110,6 @@ class Orchestrator:
             runtime_service=runtime_service,
             conversation_service=conversation_stream,
             gatekeeper=resolved_gatekeeper,
-            binding_service=None,
-            mcp_host=None,
             instance_store=agent_instance_store,
             run_store=agent_run_store,
             session_loader=lambda: workflow_state_store.load().gatekeeper_session,
@@ -178,8 +176,10 @@ class Orchestrator:
             mcp_server=mcp_server,
             mcp_host=mcp_host,
         )
-        gatekeeper_lifecycle.binding_service = session_binding
-        gatekeeper_lifecycle.mcp_host = mcp_host
+        gatekeeper_lifecycle.attach_mcp_bridge(
+            binding_service=session_binding,
+            mcp_host=mcp_host,
+        )
 
         orchestrator = cls(
             project_root=root,
@@ -243,8 +243,8 @@ def create_orchestrator(
     project_root: str | Path,
     *,
     gatekeeper: Gatekeeper | None = None,
-    adapter_factory: Any | None = None,
-    on_canonical_event: Any | None = None,
+    adapter_factory: ProviderAdapterFactory | None = None,
+    on_canonical_event: CanonicalEventHandler | None = None,
     **kwargs: Any,
 ) -> Orchestrator:
     """Build a fully wired orchestrator for one project."""

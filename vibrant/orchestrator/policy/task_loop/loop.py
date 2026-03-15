@@ -219,9 +219,9 @@ class TaskLoop:
             )
             return TaskResult(
                 task_id=completion.task_id,
-                outcome="awaiting_user",
+                outcome="failed",
                 summary=completion.summary,
-                error=completion.error,
+                error=reason,
             )
 
         if completion.status in {"failed", "cancelled"}:

@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any
+from pathlib import Path
 
 from vibrant.agents.code_agent import CodeAgent
 from vibrant.agents.runtime import BaseAgentRuntime
-from vibrant.config import DEFAULT_CONFIG_DIR
-from vibrant.models.agent import AgentInstanceProviderConfig, ProviderResumeHandle
+from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig
+from vibrant.models.agent import AgentInstanceProviderConfig, AgentRunRecord, ProviderResumeHandle
+from vibrant.models.task import TaskInfo
 from vibrant.providers.registry import provider_transport
 
+from ...basic.conversation import ConversationStreamService
+from ...basic.runtime import AgentRuntimeService
+from ...basic.stores import AgentInstanceStore, AgentRunStore, AttemptStore
+from ...basic.workspace import WorkspaceService
 from ...types import (
     AttemptCompletion,
     AttemptExecutionSnapshot,
@@ -30,15 +35,15 @@ from .sessions import AttemptExecutionSessionResource
 class ExecutionCoordinator:
     """Run code-stage mechanics for one task attempt."""
 
-    project_root: Any
-    config: Any
-    attempt_store: Any
-    agent_instance_store: Any
-    agent_run_store: Any
-    workspace_service: Any
-    runtime_service: Any
-    conversation_stream: Any
-    adapter_factory: Any
+    project_root: Path
+    config: VibrantConfig
+    attempt_store: AttemptStore
+    agent_instance_store: AgentInstanceStore
+    agent_run_store: AgentRunStore
+    workspace_service: WorkspaceService
+    runtime_service: AgentRuntimeService
+    conversation_stream: ConversationStreamService
+    adapter_factory: ProviderAdapterFactory
     execution_session: AttemptExecutionSessionResource = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -61,28 +66,10 @@ class ExecutionCoordinator:
             task_definition_version=lease.task_definition_version,
             workspace_id=workspace.workspace_id,
         )
-        code_agent = CodeAgent(
-            self.project_root,
-            self.config,
-            adapter_factory=self.adapter_factory,
-            on_agent_record_updated=self._persist_run,
-        )
-        instance = ensure_task_agent_instance(
-            self.agent_instance_store,
+        agent_record = self._build_run_record(
             task=prepared.task,
-            provider=AgentInstanceProviderConfig(
-                kind=self.config.provider_kind.value,
-                transport=provider_transport(self.config.provider_kind),
-                runtime_mode=self.config.sandbox_mode,
-            ),
-        )
-        agent_record = code_agent.build_run_record(
-            task=prepared.task,
-            worktree=workspace,
+            workspace=workspace,
             prompt=prepared.prompt,
-            agent_id=instance.identity.agent_id,
-            role=instance.identity.role,
-            vibrant_dir=self.project_root / DEFAULT_CONFIG_DIR,
         )
         self._persist_run(agent_record)
 
@@ -112,7 +99,10 @@ class ExecutionCoordinator:
         except Exception:
             self.execution_session.set_status(attempt.attempt_id, AttemptStatus.FAILED)
             raise
-        return self.attempt_store.get(attempt.attempt_id)
+        persisted_attempt = self.attempt_store.get(attempt.attempt_id)
+        if persisted_attempt is None:
+            raise KeyError(f"Attempt not found after start: {attempt.attempt_id}")
+        return persisted_attempt
 
     def attempt_execution(self, attempt_id: str) -> AttemptExecutionView | None:
         return self.execution_session.get_view(attempt_id)
@@ -185,7 +175,7 @@ class ExecutionCoordinator:
     def reconcile_active_sessions(self) -> list[AttemptExecutionSnapshot]:
         return self.execution_session.reconcile_active()
 
-    def _persist_run(self, run_record) -> None:
+    def _persist_run(self, run_record: AgentRunRecord) -> None:
         self.agent_run_store.upsert(run_record)
         instance = self.agent_instance_store.get(run_record.identity.agent_id)
         if instance is None:
@@ -200,19 +190,12 @@ class ExecutionCoordinator:
     async def _launch_code_runtime(
         self,
         *,
-        agent_record,
+        agent_record: AgentRunRecord,
         prompt: str,
         workspace_path: str,
         provider_thread: ProviderResumeHandle | None,
     ) -> None:
-        runtime = BaseAgentRuntime(
-            CodeAgent(
-                self.project_root,
-                self.config,
-                adapter_factory=self.adapter_factory,
-                on_agent_record_updated=self._persist_run,
-            )
-        )
+        runtime = BaseAgentRuntime(self._build_code_agent())
         if provider_thread is not None and provider_thread.resumable:
             await self.runtime_service.resume_run(
                 agent_record=agent_record,
@@ -255,28 +238,10 @@ class ExecutionCoordinator:
             if existing_run_record is not None and existing_run_record.context.prompt_used
             else prepared.prompt
         )
-        code_agent = CodeAgent(
-            self.project_root,
-            self.config,
-            adapter_factory=self.adapter_factory,
-            on_agent_record_updated=self._persist_run,
-        )
-        instance = ensure_task_agent_instance(
-            self.agent_instance_store,
+        agent_record = self._build_run_record(
             task=prepared.task,
-            provider=AgentInstanceProviderConfig(
-                kind=self.config.provider_kind.value,
-                transport=provider_transport(self.config.provider_kind),
-                runtime_mode=self.config.sandbox_mode,
-            ),
-        )
-        agent_record = code_agent.build_run_record(
-            task=prepared.task,
-            worktree=workspace,
+            workspace=workspace,
             prompt=prompt,
-            agent_id=instance.identity.agent_id,
-            role=instance.identity.role,
-            vibrant_dir=self.project_root / DEFAULT_CONFIG_DIR,
         )
         self._persist_run(agent_record)
 
@@ -303,4 +268,40 @@ class ExecutionCoordinator:
             provider_thread_id=None,
             resumable=False,
             run_status=None,
+        )
+
+    def _build_code_agent(self) -> CodeAgent:
+        return CodeAgent(
+            self.project_root,
+            self.config,
+            adapter_factory=self.adapter_factory,
+            on_agent_record_updated=self._persist_run,
+        )
+
+    def _build_run_record(
+        self,
+        *,
+        task: TaskInfo,
+        workspace: WorkspaceHandle,
+        prompt: str,
+    ) -> AgentRunRecord:
+        instance = ensure_task_agent_instance(
+            self.agent_instance_store,
+            task=task,
+            provider=self._task_agent_provider_config(),
+        )
+        return self._build_code_agent().build_run_record(
+            task=task,
+            worktree=workspace,
+            prompt=prompt,
+            agent_id=instance.identity.agent_id,
+            role=instance.identity.role,
+            vibrant_dir=self.project_root / DEFAULT_CONFIG_DIR,
+        )
+
+    def _task_agent_provider_config(self) -> AgentInstanceProviderConfig:
+        return AgentInstanceProviderConfig(
+            kind=self.config.provider_kind.value,
+            transport=provider_transport(self.config.provider_kind),
+            runtime_mode=self.config.sandbox_mode,
         )
