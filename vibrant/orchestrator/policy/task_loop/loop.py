@@ -14,6 +14,7 @@ from ...types import (
     AttemptRecord,
     AttemptStatus,
     MergeOutcome,
+    QuestionPriority,
     ReviewResolutionRecord,
     ReviewTicket,
     ReviewTicketStatus,
@@ -597,15 +598,22 @@ class TaskLoop:
     def _pending_review_ticket_ids(self) -> tuple[str, ...]:
         return tuple(ticket.ticket_id for ticket in self.review_ticket_store.list_pending())
 
-    @staticmethod
-    def _task_execution_block_reason(workflow) -> str | None:
-        if workflow.pending_question_ids:
+    def _task_execution_block_reason(self, workflow) -> str | None:
+        if self._has_globally_blocking_question():
             return "Pending user input blocks task execution."
         if workflow.gatekeeper.lifecycle_state.value == "awaiting_user":
             return "Gatekeeper is awaiting input."
         if workflow.gatekeeper.lifecycle_state.value == "failed":
             return workflow.gatekeeper.last_error or "Gatekeeper is in a failed state."
         return None
+
+    def _has_globally_blocking_question(self) -> bool:
+        for question in self.question_store.list_pending():
+            if question.priority is not QuestionPriority.BLOCKING:
+                continue
+            if question.blocking_scope in {"planning", "workflow"}:
+                return True
+        return False
 
     @staticmethod
     def _execution_slots_available(workflow) -> int:
