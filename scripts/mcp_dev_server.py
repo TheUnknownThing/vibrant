@@ -50,23 +50,7 @@ def register_binding(
 def allow_host_for_transport_security(orchestrator: Orchestrator, host: str) -> None:
     """Allow LAN access for the configured dev-server host."""
 
-    transport_security = orchestrator.mcp_host.fastmcp.settings.transport_security
-    if transport_security is None:
-        return
-    if host in {"0.0.0.0", "::"}:
-        return
-
-    allowed_hosts = list(transport_security.allowed_hosts or [])
-    for candidate in (host, f"{host}:*"):
-        if candidate not in allowed_hosts:
-            allowed_hosts.append(candidate)
-    transport_security.allowed_hosts = allowed_hosts
-
-    allowed_origins = list(transport_security.allowed_origins or [])
-    for candidate in (f"http://{host}", f"http://{host}:*"):
-        if candidate not in allowed_origins:
-            allowed_origins.append(candidate)
-    transport_security.allowed_origins = allowed_origins
+    orchestrator.mcp_host.allow_host(host)
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,10 +89,7 @@ def main() -> None:
     orchestrator.mcp_host.transport.host = args.host
     orchestrator.mcp_host.transport.path = args.mcp_path
     orchestrator.mcp_host.transport.port = args.port
-    orchestrator.mcp_host.fastmcp.settings.host = args.host
-    orchestrator.mcp_host.fastmcp.settings.port = args.port
-    orchestrator.mcp_host.fastmcp.settings.streamable_http_path = args.mcp_path
-    orchestrator.mcp_host.fastmcp.settings.stateless_http = not args.stateful_http
+    orchestrator.mcp_host.stateless_http = not args.stateful_http
     allow_host_for_transport_security(orchestrator, args.host)
 
     binding_id = register_binding(
@@ -123,9 +104,9 @@ def main() -> None:
     print(f"Serving Vibrant MCP for project: {root}")
     print(f"Endpoint: http://{args.host}:{args.port}{args.mcp_path}")
     print(f"Required header: {BINDING_HEADER_NAME}: {binding_id}")
-    print(f"Stateless HTTP: {orchestrator.mcp_host.fastmcp.settings.stateless_http}")
+    print(f"Stateless HTTP: {orchestrator.mcp_host.stateless_http}")
 
-    app = orchestrator.mcp_host.fastmcp.streamable_http_app()
+    app = orchestrator.mcp_host.http_app()
     cors_allow_origins = args.cors_allow_origin or ["*"]
     app.add_middleware(
         CORSMiddleware,
