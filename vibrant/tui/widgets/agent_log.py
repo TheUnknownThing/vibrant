@@ -364,7 +364,13 @@ class AgentOutput(Static):
     ) -> None:
         """Refresh known conversations and runtime metadata."""
 
-        for summary in conversations:
+        incoming_summaries = list(conversations)
+        incoming_ids = {summary.conversation_id for summary in incoming_summaries}
+        for conversation_id in list(self._conversations):
+            if conversation_id not in incoming_ids:
+                self._conversations.pop(conversation_id, None)
+
+        for summary in incoming_summaries:
             state = self._ensure_conversation(summary.conversation_id)
             state.summary = _merge_summary(state.summary, summary)
 

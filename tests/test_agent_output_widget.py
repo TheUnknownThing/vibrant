@@ -507,3 +507,55 @@ async def test_agent_output_appends_output_delta_into_existing_widget():
         assert len(list(stream.children)) == 1
         assert widget.get_buffer_line_count("attempt-006") == 1
         assert "Hello, world" in _rendered(widget)
+
+
+@pytest.mark.asyncio
+async def test_agent_output_sync_conversations_prunes_stale_conversations():
+    older = _agent_record(
+        run_id="run-007-old",
+        agent_id="agent-task-007",
+        task_id="task-007",
+        status=AgentStatus.COMPLETED,
+        started_at=datetime(2026, 3, 11, 9, 0, tzinfo=timezone.utc),
+    )
+    newer = _agent_record(
+        run_id="run-007-new",
+        agent_id="agent-task-007",
+        task_id="task-007",
+        status=AgentStatus.RUNNING,
+        started_at=datetime(2026, 3, 11, 9, 5, tzinfo=timezone.utc),
+    )
+    old_summary = _conversation_summary(
+        "attempt-007-old",
+        agent_ids=["agent-task-007"],
+        task_ids=["task-007"],
+        latest_run_id="run-007-old",
+        updated_at="2026-03-11T09:00:00Z",
+    )
+    new_summary = _conversation_summary(
+        "attempt-007-new",
+        agent_ids=["agent-task-007"],
+        task_ids=["task-007"],
+        latest_run_id="run-007-new",
+        updated_at="2026-03-11T09:05:00Z",
+    )
+
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+        widget.sync_conversations([old_summary, new_summary], [older, newer])
+        await pilot.pause()
+
+        assert widget.active_conversation_id == "attempt-007-new"
+        widget.action_cycle_agent()
+        await pilot.pause()
+        assert widget.active_conversation_id == "attempt-007-old"
+
+        widget.sync_conversations([new_summary], [older, newer])
+        await pilot.pause()
+
+        assert widget.active_conversation_id == "attempt-007-new"
+        widget.action_cycle_agent()
+        await pilot.pause()
+        assert widget.active_conversation_id == "attempt-007-new"

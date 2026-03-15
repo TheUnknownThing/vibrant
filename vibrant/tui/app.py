@@ -126,7 +126,6 @@ class VibrantApp(App):
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
         self._agent_output_conversation_subscriptions: dict[str, Any] = {}
-        self._bootstrapped_agent_output_conversations: set[str] = set()
         self._gatekeeper_conversation_id: str | None = None
         self._workspace_screen: WorkspaceScreen | None = None
         self._task_execution_in_progress = False
@@ -599,7 +598,6 @@ class VibrantApp(App):
                 with suppress(Exception):
                     subscription.close()
             self._agent_output_conversation_subscriptions = {}
-            self._bootstrapped_agent_output_conversations.clear()
             return
 
         desired_ids = {summary.conversation_id for summary in summaries}
@@ -609,28 +607,16 @@ class VibrantApp(App):
             with suppress(Exception):
                 subscription.close()
             self._agent_output_conversation_subscriptions.pop(conversation_id, None)
-            self._bootstrapped_agent_output_conversations.discard(conversation_id)
-
-        vibing_screen = self._vibing_screen()
-        agent_output = None
-        if vibing_screen is not None:
-            with suppress(Exception):
-                agent_output = vibing_screen.agent_output
 
         for summary in summaries:
             conversation_id = summary.conversation_id
-            if agent_output is not None and conversation_id not in self._bootstrapped_agent_output_conversations:
-                frames = self.orchestrator.control_plane.conversation_frames(conversation_id)
-                for frame in frames:
-                    agent_output.ingest_stream_event(frame)
-                self._bootstrapped_agent_output_conversations.add(conversation_id)
             if conversation_id in self._agent_output_conversation_subscriptions:
                 continue
             self._agent_output_conversation_subscriptions[conversation_id] = (
                 self.orchestrator.control_plane.subscribe_conversation(
                     conversation_id,
                     self._on_agent_output_conversation_event,
-                    replay=False,
+                    replay=True,
                 )
             )
 
@@ -646,7 +632,6 @@ class VibrantApp(App):
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
         self._agent_output_conversation_subscriptions = {}
-        self._bootstrapped_agent_output_conversations.clear()
         self._gatekeeper_conversation_id = None
 
     def _attach_orchestrator_subscriptions(self) -> None:
