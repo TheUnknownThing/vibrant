@@ -2,16 +2,22 @@
 
 This document defines the stable public contract for the orchestrator redesign.
 
+Related design notes:
+
+- [`TYPES_AUDIT.md`](/home/rogerw/project/vibrant/vibrant/orchestrator/TYPES_AUDIT.md): audit of larger orchestrator types and cleanup plan
+
 It is written from the perspective of **external and first-party consumers**
 that need a durable integration boundary while the implementation is organized
 as layered `basic`, `policy`, and `interface` packages.
 
 ## Status
 
-As of **March 14, 2026**, the stable contract is defined by:
+As of **March 15, 2026**, the stable contract is defined by:
 
 - the **interface control-plane model** described here
 - the **typed MCP resource/tool surface**
+- the **workflow-session read model**, including the orchestrator-owned
+  concurrency limit
 - the **read models and conversation subscription semantics**
 - the **compatibility constraints** required during migration
 
@@ -29,6 +35,7 @@ The stable contract is governed by the following rules:
 4. The orchestrator never infers planning or review decisions from free-form text.
 5. Conversation history shown to the TUI is an orchestrator-owned artifact, not a provider-log projection.
 6. Workflow state is authoritative; consensus metadata may mirror it only as a one-way projection.
+7. The task concurrency limit is orchestrator workflow-session state, not provider state.
 
 ## Stable Consumer Model
 
@@ -48,6 +55,30 @@ Consumers should not rely on:
 - ad hoc status patching APIs
 - Gatekeeper prose as an authority channel
 
+## Stable Identity Model
+
+The stable integration boundary uses these identifiers:
+
+- `session_id`: one durable workflow session
+- `submission_id`: one host-originated Gatekeeper submission
+- `task_id`: one roadmap task definition
+- `attempt_id`: one execution attempt for one task
+- `workspace_id`: one isolated task or integration worktree record
+- `role`: policy and capability identity
+- `agent_id`: one stable logical actor instance
+- `run_id`: one execution of that actor
+- `conversation_id`: one orchestrator-owned conversation stream
+- `question_id`: one durable user-decision record
+- `ticket_id`: one durable review ticket
+- `event_id`: one canonical orchestrator event
+
+Provider-native ids such as `provider_thread_id`, `turn_id`, and `item_id` are
+resume or trace handles, not orchestrator primary keys.
+
+Unqualified `session_id` is reserved for workflow or Gatekeeper session state.
+Run-scoped binding and runtime contracts should use `run_id` or another
+explicitly scoped name instead.
+
 ## Stable Read Models
 
 ### `OrchestratorSnapshot`
@@ -63,25 +94,63 @@ Required semantic contents:
 - consensus view
 - pending question views
 - active review tickets or review summaries
-- active agent/runtime summaries
+- role summaries
+- instance summaries
+- run/runtime summaries
 - active attempt summaries
 - user-input banner or blocking-state projection when applicable
 
 The exact implementation may evolve, but the snapshot must remain a coherent,
 consumer-ready projection of orchestrator state.
 
-### `OrchestratorAgentSnapshot`
+### `WorkflowSessionSnapshot`
 
-This read model represents the orchestrator’s combined durable and live view of
-one agent.
+This read model is the stable durable view of the workflow session.
 
 It must preserve the meaning of:
 
-- stable agent identity
+- `session_id`
+- workflow `status`
+- `resume_status`
+- `concurrency_limit`
+- Gatekeeper session projection
+- total agent spawn count
+- pending question ids
+- active attempt ids
+
+The important behavioral rule is that `concurrency_limit` belongs to the
+orchestrator session. It may be seeded from `vibrant.toml`, but enforcement and
+durable ownership remain in orchestrator workflow state.
+
+### `AgentRunSnapshot`
+
+This read model represents the orchestrator’s combined durable and live view of
+one run.
+
+It must preserve the meaning of:
+
+- stable instance identity
+- concrete run identity
 - runtime/lifecycle state
 - provider resume metadata
 - workspace context
 - best-known summary/error/output projection
+
+### `AgentInstanceSnapshot`
+
+This read model represents one stable logical actor instance.
+
+It must preserve the meaning of:
+
+- stable `agent_id`
+- role identity
+- scope and provider defaults
+- latest-run and active-run linkage
+
+### `RoleSnapshot`
+
+This read model represents one policy role and its currently observed
+instance/run footprint.
 
 ### Conversation Views
 
@@ -95,6 +164,19 @@ The stable conversation contract is centered on:
 The TUI contract is the processed conversation stream, not raw canonical
 provider events and not imported provider transcript artifacts.
 
+### Question And Attempt Views
+
+The public question and attempt inspection surface is intentionally narrower
+than the durable store or recovery layer:
+
+- `QuestionView` is the public question shape for facade, control-plane, MCP,
+  and TUI consumers.
+- `AttemptExecutionView` is the public active-attempt inspection shape.
+- Durable question audit fields and attempt recovery-only fields stay on
+  internal record/recovery types.
+- Provider resume cursors, provider thread paths, and workspace paths are not
+  part of the public attempt-inspection contract.
+
 ## Interface Control Plane Contract
 
 The layered orchestrator is built around `basic` capabilities, `policy` loops,
@@ -107,6 +189,7 @@ class GatekeeperSubmission:
     session: GatekeeperSessionSnapshot
     conversation_id: str
     agent_id: str | None
+    run_id: str | None
     accepted: bool
     active_turn_id: str | None
     error: str | None = None
@@ -124,13 +207,28 @@ class InterfaceControlPlane:
     def conversation(self, conversation_id: str) -> AgentConversationView | None: ...
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False): ...
     def workflow_snapshot(self) -> WorkflowSnapshot: ...
+    def workflow_session(self) -> WorkflowSessionSnapshot: ...
     def gatekeeper_state(self) -> GatekeeperLoopState: ...
     def task_loop_state(self) -> TaskLoopSnapshot: ...
+    def list_roles(self) -> list[RoleSnapshot]: ...
+    def get_role(self, role: str) -> RoleSnapshot | None: ...
+    def list_instances(self) -> list[AgentInstanceSnapshot]: ...
+    def get_instance(self, agent_id: str) -> AgentInstanceSnapshot | None: ...
+    def list_runs(self) -> list[AgentRunSnapshot]: ...
+    def list_active_runs(self) -> list[AgentRunSnapshot]: ...
+    def get_run(self, run_id: str) -> AgentRunSnapshot | None: ...
 ```
 
 The stable behavioral rule is that public consumers receive a **submission
 receipt plus explicit wait/query methods**, not raw lifecycle or runtime
 services as their primary integration surface.
+
+`RuntimeExecutionResult` is the narrow wait result for those flows. It does not
+double as a raw event transcript or provider-debug bundle.
+
+The control plane currently exposes the workflow-session projection as a stable
+read surface. The concurrency limit is therefore observable through the public
+API even though there is not yet a dedicated stable write method for changing it.
 
 ## Compatibility Facade
 
@@ -148,7 +246,7 @@ Allowed temporary compatibility examples:
 
 - convenience reads such as roadmap or consensus accessors
 - async user-message helpers that internally translate into control-plane submissions
-- stable task/agent projection helpers used by the current TUI
+- stable task/run projection helpers used by the current TUI
 
 Not allowed as compatibility behavior:
 
@@ -162,16 +260,22 @@ Not allowed as compatibility behavior:
 stable part is the **resource/tool contract**, not any specific internal
 handler layering.
 
+The active transport model is an orchestrator-owned loopback FastMCP HTTP host
+with per-run binding registration and server-side filtering. The compatibility
+import path under `vibrant.orchestrator.mcp` should re-export that active
+implementation rather than define a second authority path.
+
 ### Stable Read Resources
 
 The Gatekeeper-facing stable resource set is:
 
 - `get_consensus()`
 - `get_roadmap()`
+- `get_workflow_session()`
 - `get_task(task_id)`
 - `get_workflow_status()`
 - `list_pending_questions()`
-- `list_active_agents()`
+- `list_active_runs()`
 - `list_active_attempts()`
 - `get_review_ticket(ticket_id)`
 - `list_pending_review_tickets()`
@@ -197,6 +301,22 @@ The semantic write tool set is:
 The stable rule is that these tools express **semantic control-plane
 commands**, not file patches and not free-form text deltas.
 
+### MCP Transport Semantics
+
+The transport-level behavior that consumers may rely on is:
+
+- the MCP endpoint is loopback HTTP
+- per-run visibility is enforced server-side from a registered binding
+- the binding identity is carried via `X-Vibrant-Binding`
+- provider-specific launch arguments are compiled from a provider-neutral
+  access descriptor instead of being authored directly in policy code
+
+Consumers should not rely on:
+
+- a shared global MCP profile
+- provider-specific flag shapes as part of the orchestrator contract
+- transport auth schemes from older experimental docs
+
 ## Durable Store Contract
 
 The stable architecture assumes the following durable stores exist and remain
@@ -207,8 +327,10 @@ orchestrator-owned:
 - consensus store
 - question store
 - attempt store
+- workspace store
 - review ticket store
-- agent record store
+- agent instance store
+- agent run store
 - conversation store
 
 Store file layouts may evolve, but the authority boundaries must not.
@@ -228,6 +350,18 @@ Canonical events must include stable identity and replay ordering:
 
 - `event_id`
 - `sequence`
+- `role`
+- `agent_id`
+- `run_id`
+
+Optional routing fields may include:
+
+- `conversation_id`
+- `attempt_id`
+- `provider_thread_id`
+
+Task identity belongs to attempts, workspaces, and review tickets. Generic
+runtime events should not rely on `task_id` as a surrogate run identifier.
 
 The stable conversation contract requires:
 

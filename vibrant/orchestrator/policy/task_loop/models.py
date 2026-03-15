@@ -8,6 +8,10 @@ from typing import Literal, Sequence
 
 from vibrant.models.task import TaskInfo
 
+WORKER_INPUT_UNSUPPORTED_ERROR = (
+    "Worker agent requested interactive input; worker runs must auto-reject interactive requests."
+)
+
 
 @dataclass(slots=True)
 class DispatchLease:

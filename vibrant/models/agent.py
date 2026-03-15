@@ -92,49 +92,12 @@ class AgentProviderMetadata(BaseModel):
     native_event_log: str | None = None
     canonical_event_log: str | None = None
 
-    @model_validator(mode="before")
+    @field_validator("runtime_mode", mode="before")
     @classmethod
-    def migrate_legacy_fields(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-
-        data = dict(value)
-        _move_if_missing(data, "provider_name", "kind")
-        _move_if_missing(data, "transport_name", "transport")
-        _move_if_missing(data, "resume_token", "resume_cursor")
-        _move_if_missing(data, "native_event_log_path", "native_event_log")
-        _move_if_missing(data, "canonical_event_log_path", "canonical_event_log")
-
-        runtime_mode = data.get("runtime_mode")
-        if isinstance(runtime_mode, str):
-            data["runtime_mode"] = _normalize_runtime_mode(runtime_mode)
-
-        resume_cursor = data.get("resume_cursor")
-        if "provider_thread_id" not in data:
-            provider_thread_id = _resume_cursor_thread_id(resume_cursor)
-            if provider_thread_id is not None:
-                data["provider_thread_id"] = provider_thread_id
-        if "thread_path" not in data and isinstance(resume_cursor, dict):
-            thread_path = resume_cursor.get("threadPath") or resume_cursor.get("thread_path")
-            if isinstance(thread_path, str) and thread_path:
-                data["thread_path"] = thread_path
-
-        if "resume_handle" not in data:
-            provider_thread_id = data.get("provider_thread_id")
-            thread_path = data.get("thread_path")
-            if provider_thread_id is not None or thread_path is not None or isinstance(resume_cursor, dict):
-                data["resume_handle"] = {
-                    "kind": data.get("kind") or "codex",
-                    "thread_id": provider_thread_id,
-                    "thread_path": thread_path,
-                    "resume_cursor": resume_cursor,
-                }
-
-        data.pop("owner_agent_id", None)
-        data.pop("provider_session_id", None)
-        data.pop("runtime_state", None)
-        data.pop("last_error", None)
-        return data
+    def normalize_runtime_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _normalize_runtime_mode(value)
+        return value
 
     @model_validator(mode="after")
     def sync_resume_handle(self) -> "AgentProviderMetadata":
@@ -189,20 +152,6 @@ class AgentInstanceIdentity(BaseModel):
     agent_id: str
     role: str
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_identity(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        data = dict(value)
-        if "role" not in data:
-            legacy_type = data.get("type")
-            if isinstance(legacy_type, AgentType):
-                data["role"] = legacy_type.value
-            elif isinstance(legacy_type, str) and legacy_type.strip():
-                data["role"] = legacy_type
-        return data
-
     @field_validator("role", mode="before")
     @classmethod
     def normalize_role(cls, value: object) -> object:
@@ -251,7 +200,6 @@ class AgentExecutionContext(BaseModel):
     prompt_used: str | None = None
     skills_loaded: list[str] = Field(default_factory=list)
 
-
 class AgentOutcome(BaseModel):
     """Terminal outcome metadata for one agent run."""
 
@@ -284,13 +232,11 @@ class AgentInstanceRecord(BaseModel):
     latest_run_id: str | None = None
     active_run_id: str | None = None
 
-    def mark_run_updated(self, run: "AgentRunRecord") -> None:
-        if run.identity.agent_id != self.identity.agent_id:
+    def mark_run_updated(self, *, agent_id: str, run_id: str, status: AgentStatus) -> None:
+        if agent_id != self.identity.agent_id:
             raise ValueError("run does not belong to this agent instance")
-        self.latest_run_id = run.identity.run_id
-        self.active_run_id = (
-            run.identity.run_id if run.lifecycle.status not in AgentRunRecord.TERMINAL_STATUSES else None
-        )
+        self.latest_run_id = run_id
+        self.active_run_id = run_id if status not in AgentRunRecord.TERMINAL_STATUSES else None
         self.updated_at = datetime.now(timezone.utc)
 
 
@@ -301,27 +247,8 @@ class AgentRunIdentity(BaseModel):
 
     run_id: str
     agent_id: str
-    task_id: str
     role: str
     type: AgentType | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_identity(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-        data = dict(value)
-        run_id = data.get("run_id")
-        legacy_agent_id = data.get("agent_id")
-        if (not isinstance(run_id, str) or not run_id.strip()) and isinstance(legacy_agent_id, str) and legacy_agent_id:
-            data["run_id"] = legacy_agent_id
-        if "role" not in data:
-            legacy_type = data.get("type")
-            if isinstance(legacy_type, AgentType):
-                data["role"] = legacy_type.value
-            elif isinstance(legacy_type, str) and legacy_type.strip():
-                data["role"] = legacy_type
-        return data
 
     @field_validator("role", mode="before")
     @classmethod
@@ -407,23 +334,6 @@ class AgentRunRecord(BaseModel):
 
 # Temporary alias while the run/instance split propagates through lower layers.
 AgentRecord = AgentRunRecord
-
-
-def _move_if_missing(data: dict[str, Any], old_key: str, new_key: str) -> None:
-    if new_key not in data and old_key in data:
-        data[new_key] = data.pop(old_key)
-    else:
-        data.pop(old_key, None)
-
-
-def _resume_cursor_thread_id(value: object) -> str | None:
-    if not isinstance(value, dict):
-        return None
-    for key in ("threadId", "sessionId"):
-        thread_id = value.get(key)
-        if isinstance(thread_id, str) and thread_id:
-            return thread_id
-    return None
 
 
 def _normalize_role(value: str) -> str:

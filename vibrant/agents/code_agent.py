@@ -55,7 +55,6 @@ class CodeAgent(AgentBase):
             identity={
                 "run_id": resolved_run_id,
                 "agent_id": resolved_agent_id,
-                "task_id": task.id,
                 "role": resolved_role,
                 "type": AgentType.CODE,
             },

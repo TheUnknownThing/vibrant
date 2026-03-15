@@ -17,15 +17,14 @@ from vibrant.providers.claude.adapter import ClaudeProviderAdapter
 def _make_agent_record(
     *,
     agent_id: str,
-    run_id: str | None = None,
-    task_id: str,
     agent_type: AgentType,
+    run_id: str | None = None,
 ) -> AgentRecord:
     return AgentRecord(
         identity={
             "agent_id": agent_id,
             "run_id": run_id or agent_id,
-            "task_id": task_id,
+            "role": agent_type.value,
             "type": agent_type,
         }
     )
@@ -136,7 +135,6 @@ class TestClaudeProviderAdapter:
         agent = _make_agent_record(
             agent_id="agent-claude-1",
             run_id="run-claude-1",
-            task_id="task-claude-1",
             agent_type=AgentType.CODE,
         )
         events: list[dict[str, Any]] = []
@@ -202,7 +200,7 @@ class TestClaudeProviderAdapter:
 
         agent = _make_agent_record(
             agent_id="agent-claude-2",
-            task_id="task-claude-2",
+            run_id="run-claude-2",
             agent_type=AgentType.GATEKEEPER,
         )
         events: list[dict[str, Any]] = []

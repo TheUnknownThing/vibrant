@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.orchestrator import OrchestratorFacade as ExportedFacade, create_orchestrator
 from vibrant.orchestrator.facade import OrchestratorFacade
 from vibrant.project_init import initialize_project
@@ -46,3 +47,27 @@ async def test_facade_submit_gatekeeper_input_routes_through_control_plane(tmp_p
         ("submit", ("Plan the architecture rewrite.", None)),
         ("wait", "gatekeeper-agent"),
     ]
+
+
+def test_facade_run_projection_propagates_runtime_errors(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+    orchestrator.agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-broken",
+                "agent_id": "agent-broken",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": AgentStatus.RUNNING},
+        )
+    )
+
+    def broken_snapshot_handle(run_id: str):
+        raise RuntimeError(f"runtime snapshot failed for {run_id}")
+
+    monkeypatch.setattr(orchestrator.runtime_service, "snapshot_handle", broken_snapshot_handle)
+
+    with pytest.raises(RuntimeError, match="runtime snapshot failed for run-broken"):
+        facade.get_run("run-broken")

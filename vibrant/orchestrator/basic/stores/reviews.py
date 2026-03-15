@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from ..json_store import read_json, write_json
+from ..repository import JsonDataclassMappingRepository
 from ...types import ReviewResolutionRecord, ReviewTicket, ReviewTicketStatus, utc_now
 
 
@@ -15,6 +14,13 @@ class ReviewTicketStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self._repository = JsonDataclassMappingRepository(
+            self.path,
+            record_type=ReviewTicket,
+            key_for=lambda ticket: ticket.ticket_id,
+            key_field="ticket_id",
+            normalize_payload=_normalize_review_payload,
+        )
 
     def create(
         self,
@@ -27,6 +33,9 @@ class ReviewTicketStore:
         ticket_id: str | None = None,
         summary: str | None = None,
         diff_ref: str | None = None,
+        base_commit: str | None = None,
+        result_commit: str | None = None,
+        integration_commit: str | None = None,
     ) -> ReviewTicket:
         tickets = self._load_tickets()
         ticket = ReviewTicket(
@@ -38,13 +47,16 @@ class ReviewTicketStore:
             conversation_id=_optional_string(conversation_id),
             summary=_optional_string(summary),
             diff_ref=_optional_string(diff_ref),
+            base_commit=_optional_string(base_commit),
+            result_commit=_optional_string(result_commit),
+            integration_commit=_optional_string(integration_commit),
         )
         tickets[ticket.ticket_id] = ticket
         self._save_tickets(tickets)
         return ticket
 
     def get(self, ticket_id: str) -> ReviewTicket | None:
-        return self._load_tickets().get(ticket_id)
+        return self._repository.get(ticket_id)
 
     def list_pending(self) -> list[ReviewTicket]:
         return [ticket for ticket in self._load_tickets().values() if ticket.status is ReviewTicketStatus.PENDING]
@@ -83,42 +95,10 @@ class ReviewTicketStore:
         return ticket
 
     def _load_tickets(self) -> dict[str, ReviewTicket]:
-        raw = read_json(self.path, default={})
-        if not isinstance(raw, dict):
-            return {}
-
-        tickets: dict[str, ReviewTicket] = {}
-        for ticket_id, payload in raw.items():
-            if not isinstance(payload, dict):
-                continue
-            try:
-                tickets[ticket_id] = ReviewTicket(
-                    ticket_id=str(payload.get("ticket_id") or ticket_id),
-                    task_id=str(payload["task_id"]),
-                    attempt_id=str(payload["attempt_id"]),
-                    run_id=str(payload.get("run_id") or payload["agent_id"]),
-                    review_kind=_normalize_review_kind(payload.get("review_kind", "task_result")),
-                    conversation_id=_optional_string(payload.get("conversation_id")),
-                    status=ReviewTicketStatus(str(payload.get("status", ReviewTicketStatus.PENDING.value))),
-                    summary=_optional_string(payload.get("summary")),
-                    diff_ref=_optional_string(payload.get("diff_ref")),
-                    created_at=str(payload.get("created_at") or utc_now()),
-                    resolved_at=_optional_string(payload.get("resolved_at")),
-                    resolution_reason=_optional_string(payload.get("resolution_reason")),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-        return tickets
+        return self._repository.load_all()
 
     def _save_tickets(self, tickets: dict[str, ReviewTicket]) -> None:
-        write_json(
-            self.path,
-            {
-                ticket_id: asdict(ticket)
-                | {"status": ticket.status.value}
-                for ticket_id, ticket in tickets.items()
-            },
-        )
+        self._repository.save_all(tickets)
 
 
 def _normalize_review_kind(value: object) -> str:
@@ -134,3 +114,26 @@ def _optional_string(value: object) -> str | None:
         normalized = value.strip()
         return normalized or None
     return None
+
+
+def _normalize_review_payload(payload: dict[str, object]) -> dict[str, object] | None:
+    try:
+        return {
+            "ticket_id": str(payload["ticket_id"]),
+            "task_id": str(payload["task_id"]),
+            "attempt_id": str(payload["attempt_id"]),
+            "run_id": str(payload["run_id"]),
+            "review_kind": _normalize_review_kind(payload.get("review_kind", "task_result")),
+            "conversation_id": _optional_string(payload.get("conversation_id")),
+            "status": ReviewTicketStatus(str(payload.get("status", ReviewTicketStatus.PENDING.value))),
+            "summary": _optional_string(payload.get("summary")),
+            "diff_ref": _optional_string(payload.get("diff_ref")),
+            "base_commit": _optional_string(payload.get("base_commit")),
+            "result_commit": _optional_string(payload.get("result_commit")),
+            "integration_commit": _optional_string(payload.get("integration_commit")),
+            "created_at": str(payload.get("created_at") or utc_now()),
+            "resolved_at": _optional_string(payload.get("resolved_at")),
+            "resolution_reason": _optional_string(payload.get("resolution_reason")),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None

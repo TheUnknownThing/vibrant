@@ -15,7 +15,7 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from starlette.middleware import Middleware as ASGIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from vibrant.orchestrator.types import BoundAgentCapabilities
+from vibrant.orchestrator.types import AgentMCPBinding
 
 from .binding_registry import BINDING_HEADER_NAME, MCPBindingRegistry, RegisteredMCPBinding
 from .common import MCPResourceDefinition, MCPToolDefinition
@@ -28,9 +28,13 @@ _RESOURCE_URIS: dict[str, str] = {
     "vibrant.get_roadmap": "vibrant://roadmap",
     "vibrant.get_task": "vibrant://tasks/{task_id}",
     "vibrant.get_workflow_status": "vibrant://workflow-status",
+    "vibrant.get_workflow_session": "vibrant://workflow-session",
+    "vibrant.get_gatekeeper_session": "vibrant://gatekeeper-session",
     "vibrant.list_pending_questions": "vibrant://pending-questions",
-    "vibrant.list_active_agents": "vibrant://active-agents",
+    "vibrant.list_active_runs": "vibrant://active-runs",
     "vibrant.list_active_attempts": "vibrant://active-attempts",
+    "vibrant.get_attempt_execution": "vibrant://attempts/{attempt_id}",
+    "vibrant.get_conversation": "vibrant://conversations/{conversation_id}",
     "vibrant.get_review_ticket": "vibrant://review-tickets/{ticket_id}",
     "vibrant.list_pending_review_tickets": "vibrant://pending-review-tickets",
     "vibrant.list_recent_events": "vibrant://recent-events/{limit}",
@@ -159,14 +163,12 @@ class OrchestratorFastMCPHost:
         self.binding_registry.clear()
         await self.transport.stop()
 
-    def register_binding(self, capabilities: BoundAgentCapabilities) -> RegisteredMCPBinding:
+    def register_binding(self, binding: AgentMCPBinding) -> RegisteredMCPBinding:
         """Register a runtime binding so incoming requests can resolve it."""
 
-        if capabilities.access is None:
-            raise ValueError("BoundAgentCapabilities.access is required for MCP transport registration")
         return self.binding_registry.register(
-            principal=capabilities.principal,
-            access=capabilities.access,
+            principal=binding.principal,
+            access=binding.access,
         )
 
     def unregister_binding(self, binding_id: str | None) -> None:

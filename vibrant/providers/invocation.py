@@ -14,7 +14,7 @@ class MCPAccessDescriptor:
 
     binding_id: str
     role: str
-    session_id: str
+    run_id: str
     conversation_id: str | None = None
     visible_tools: list[str] = field(default_factory=list)
     visible_resources: list[str] = field(default_factory=list)
@@ -31,7 +31,7 @@ class MCPAccessDescriptor:
         return {
             "binding_id": self.binding_id,
             "role": self.role,
-            "session_id": self.session_id,
+            "run_id": self.run_id,
             "conversation_id": self.conversation_id,
             "visible_tools": list(self.visible_tools),
             "visible_resources": list(self.visible_resources),

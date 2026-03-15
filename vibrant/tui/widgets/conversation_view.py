@@ -113,8 +113,7 @@ class ConversationView(Static):
         if self._conversation is None or self._conversation.conversation_id != event.conversation_id:
             self._conversation = AgentConversationView(
                 conversation_id=event.conversation_id,
-                agent_ids=[],
-                task_ids=[],
+                run_ids=[],
                 active_turn_id=None,
                 entries=[],
                 updated_at=event.created_at,
@@ -237,8 +236,7 @@ def _clone_conversation(conversation: AgentConversationView | None) -> AgentConv
         return None
     return AgentConversationView(
         conversation_id=conversation.conversation_id,
-        agent_ids=list(conversation.agent_ids),
-        task_ids=list(conversation.task_ids),
+        run_ids=list(conversation.run_ids),
         active_turn_id=conversation.active_turn_id,
         entries=[
             AgentConversationEntry(
@@ -257,10 +255,8 @@ def _clone_conversation(conversation: AgentConversationView | None) -> AgentConv
 
 
 def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamEvent) -> None:
-    if event.agent_id and event.agent_id not in conversation.agent_ids:
-        conversation.agent_ids.append(event.agent_id)
-    if event.task_id and event.task_id not in conversation.task_ids:
-        conversation.task_ids.append(event.task_id)
+    if event.run_id and event.run_id not in conversation.run_ids:
+        conversation.run_ids.append(event.run_id)
     if event.type == "conversation.turn.started":
         conversation.active_turn_id = event.turn_id
     elif event.type == "conversation.turn.completed" and conversation.active_turn_id == event.turn_id:

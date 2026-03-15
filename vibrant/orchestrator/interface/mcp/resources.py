@@ -23,14 +23,26 @@ class OrchestratorMCPResources:
     def get_workflow_status(self) -> Any:
         return self.queries.get_workflow_status()
 
+    def get_workflow_session(self) -> Any:
+        return self.queries.workflow_session()
+
+    def get_gatekeeper_session(self) -> Any:
+        return self.queries.gatekeeper_session()
+
     def list_pending_questions(self) -> Any:
         return self.queries.list_pending_question_records()
 
-    def list_active_agents(self) -> Any:
-        return self.queries.list_active_agents()
+    def list_active_runs(self) -> Any:
+        return self.queries.list_active_runs()
 
     def list_active_attempts(self) -> Any:
         return self.queries.list_active_attempts()
+
+    def get_attempt_execution(self, attempt_id: str) -> Any:
+        return self.queries.get_attempt_execution(attempt_id)
+
+    def get_conversation(self, conversation_id: str) -> Any:
+        return self.queries.conversation_session(conversation_id)
 
     def get_review_ticket(self, ticket_id: str) -> Any:
         return self.queries.get_review_ticket(ticket_id)

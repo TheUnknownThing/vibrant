@@ -1,4 +1,4 @@
-"""Runtime event log capability."""
+"""Runtime event log service."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from vibrant.providers.base import CanonicalEvent
 
 
 @dataclass(slots=True)
-class EventLogCapability:
+class EventLogService:
     """Track recent canonical runtime events for interface consumers."""
 
     on_canonical_event: Any | None = None

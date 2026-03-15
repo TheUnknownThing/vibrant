@@ -137,7 +137,12 @@ def _coerce_descriptor(access: MCPAccessDescriptor | Mapping[str, Any] | None) -
         return None
     if isinstance(access, MCPAccessDescriptor):
         return access
-    return MCPAccessDescriptor(**dict(access))
+    payload = dict(access)
+    if "run_id" not in payload and "session_id" in payload:
+        payload["run_id"] = payload.pop("session_id")
+    else:
+        payload.pop("session_id", None)
+    return MCPAccessDescriptor(**payload)
 
 
 def _toml_literal(value: Any) -> str:

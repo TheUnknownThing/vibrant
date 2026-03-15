@@ -6,20 +6,20 @@ import asyncio
 import inspect
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from vibrant.agents.gatekeeper import (
     Gatekeeper,
     GatekeeperRequest,
 )
-from vibrant.models.agent import AgentInstanceProviderConfig
+from vibrant.models.agent import AgentInstanceProviderConfig, AgentRunRecord, ProviderResumeHandle
 from vibrant.agents.runtime import NormalizedRunResult
-from vibrant.models.agent import ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.invocation_compiler import compile_provider_invocation
 
 from ...basic.stores import AgentInstanceStore, AgentRunStore
+from ...basic.stores.gatekeeper_session import project_gatekeeper_session
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
 from ..shared.capabilities import gatekeeper_binding_preset
@@ -29,6 +29,10 @@ from ...types import (
     GatekeeperSessionSnapshot,
     utc_now,
 )
+
+if TYPE_CHECKING:
+    from ...basic.binding import AgentSessionBindingService
+    from ...interface.mcp import OrchestratorFastMCPHost
 
 
 class GatekeeperLifecycleService:
@@ -41,8 +45,8 @@ class GatekeeperLifecycleService:
         runtime_service: AgentRuntimeService,
         conversation_service: ConversationStreamService,
         gatekeeper: Gatekeeper | None = None,
-        binding_service: Any | None = None,
-        mcp_host: Any | None = None,
+        binding_service: AgentSessionBindingService | None = None,
+        mcp_host: OrchestratorFastMCPHost | None = None,
         instance_store: AgentInstanceStore,
         run_store: AgentRunStore,
         session_loader: Callable[[], GatekeeperSessionSnapshot] | None = None,
@@ -52,8 +56,8 @@ class GatekeeperLifecycleService:
         self.runtime_service = runtime_service
         self.conversation_service = conversation_service
         self.gatekeeper = gatekeeper or Gatekeeper(self.project_root)
-        self.binding_service = binding_service
-        self.mcp_host = mcp_host
+        self._binding_service = binding_service
+        self._mcp_host = mcp_host
         self.instance_store = instance_store
         self.run_store = run_store
         self._session_loader = session_loader
@@ -63,6 +67,15 @@ class GatekeeperLifecycleService:
         self._active_handle_run_id: str | None = None
         self._binding_ids_by_run_id: dict[str, str] = {}
         self._subscription = self.runtime_service.subscribe_canonical_events(self._on_runtime_event)
+
+    def attach_mcp_bridge(
+        self,
+        *,
+        binding_service: AgentSessionBindingService,
+        mcp_host: OrchestratorFastMCPHost,
+    ) -> None:
+        self._binding_service = binding_service
+        self._mcp_host = mcp_host
 
     @property
     def busy(self) -> bool:
@@ -113,19 +126,14 @@ class GatekeeperLifecycleService:
         self._persist_run(agent_record)
 
         conversation_id = session.conversation_id or f"gatekeeper-{uuid4().hex[:12]}"
-        self.conversation_service.bind_agent(
+        self.conversation_service.bind_run(
             conversation_id=conversation_id,
-            agent_id=instance.identity.agent_id,
-            task_id=agent_record.identity.task_id,
-            provider_thread_id=session.provider_thread_id,
+            run_id=agent_record.identity.run_id,
         )
 
         provider_thread = None
-        if resume and session.provider_thread_id:
-            provider_thread = self.run_store.provider_thread_handle(instance.identity.agent_id) or ProviderResumeHandle(
-                kind=agent_record.provider.kind,
-                thread_id=session.provider_thread_id,
-            )
+        if resume:
+            provider_thread = self._resolve_resume_handle(session=session)
 
         self._session.agent_id = instance.identity.agent_id
         self._session.run_id = agent_record.identity.run_id
@@ -135,16 +143,15 @@ class GatekeeperLifecycleService:
         self._session.updated_at = utc_now()
         self._persist()
 
-        if self.binding_service is None or self.mcp_host is None:
-            raise RuntimeError("GatekeeperLifecycleService requires binding_service and mcp_host before submit()")
+        binding_service, mcp_host = self._require_mcp_bridge()
 
-        await self.mcp_host.ensure_started()
-        bound_capabilities = self.binding_service.bind_preset(
-            preset=gatekeeper_binding_preset(self.binding_service.mcp_server, agent_record.identity.run_id),
-            session_id=agent_record.identity.run_id,
+        await mcp_host.ensure_started()
+        bound_capabilities = binding_service.bind_preset(
+            preset=gatekeeper_binding_preset(binding_service.mcp_server, agent_record.identity.run_id),
+            run_id=agent_record.identity.run_id,
             conversation_id=conversation_id,
         )
-        registered_binding = self.mcp_host.register_binding(bound_capabilities)
+        registered_binding = mcp_host.register_binding(bound_capabilities)
         self._binding_ids_by_run_id[agent_record.identity.run_id] = registered_binding.binding_id
         invocation_plan = compile_provider_invocation(
             agent_record.provider.kind,
@@ -220,16 +227,20 @@ class GatekeeperLifecycleService:
         return await self.resume_or_start()
 
     def snapshot(self) -> GatekeeperSessionSnapshot:
-        return GatekeeperSessionSnapshot(
-            agent_id=self._session.agent_id,
-            run_id=self._session.run_id,
-            conversation_id=self._session.conversation_id,
-            lifecycle_state=self._session.lifecycle_state,
-            provider_thread_id=self._session.provider_thread_id,
-            active_turn_id=self._session.active_turn_id,
-            resumable=self._session.resumable,
-            last_error=self._session.last_error,
-            updated_at=self._session.updated_at,
+        run_record = self._run_record_for_session(self._session)
+        return project_gatekeeper_session(
+            GatekeeperSessionSnapshot(
+                agent_id=self._session.agent_id,
+                run_id=self._session.run_id,
+                conversation_id=self._session.conversation_id,
+                lifecycle_state=self._session.lifecycle_state,
+                provider_thread_id=self._session.provider_thread_id,
+                active_turn_id=self._session.active_turn_id,
+                resumable=self._session.resumable,
+                last_error=self._session.last_error,
+                updated_at=self._session.updated_at,
+            ),
+            run_record=run_record,
         )
 
     async def _monitor_handle(self, run_id: str, handle) -> None:
@@ -245,7 +256,7 @@ class GatekeeperLifecycleService:
 
         self._session.provider_thread_id = result.provider_thread.thread_id
         self._session.resumable = result.provider_thread.resumable
-        self._session.run_id = result.agent_record.identity.run_id
+        self._session.run_id = result.run_id
         self._session.updated_at = utc_now()
         if result.awaiting_input:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.AWAITING_USER
@@ -293,24 +304,33 @@ class GatekeeperLifecycleService:
         if self._session_loader is None:
             return GatekeeperSessionSnapshot()
         loaded = self._session_loader()
+        projected = project_gatekeeper_session(
+            loaded,
+            run_record=self._run_record_for_session(loaded),
+        )
         return GatekeeperSessionSnapshot(
-            agent_id=loaded.agent_id,
-            run_id=loaded.run_id,
-            conversation_id=loaded.conversation_id,
-            lifecycle_state=loaded.lifecycle_state,
-            provider_thread_id=loaded.provider_thread_id,
-            active_turn_id=loaded.active_turn_id,
-            resumable=loaded.resumable,
-            last_error=loaded.last_error,
-            updated_at=loaded.updated_at,
+            agent_id=projected.agent_id,
+            run_id=projected.run_id,
+            conversation_id=projected.conversation_id,
+            lifecycle_state=projected.lifecycle_state,
+            provider_thread_id=projected.provider_thread_id,
+            active_turn_id=projected.active_turn_id,
+            resumable=projected.resumable,
+            last_error=projected.last_error,
+            updated_at=projected.updated_at,
         )
 
     def _release_binding(self, run_id: str | None) -> None:
         if run_id is None:
             return
         binding_id = self._binding_ids_by_run_id.pop(run_id, None)
-        if binding_id is not None and self.mcp_host is not None:
-            self.mcp_host.unregister_binding(binding_id)
+        if binding_id is not None and self._mcp_host is not None:
+            self._mcp_host.unregister_binding(binding_id)
+
+    def _require_mcp_bridge(self) -> tuple[AgentSessionBindingService, OrchestratorFastMCPHost]:
+        if self._binding_service is None or self._mcp_host is None:
+            raise RuntimeError("GatekeeperLifecycleService requires MCP binding services before submit()")
+        return self._binding_service, self._mcp_host
 
     def _ensure_no_active_submission(self) -> None:
         if self._active_handle_run_id is None:
@@ -328,7 +348,11 @@ class GatekeeperLifecycleService:
         instance = self.instance_store.get(run_record.identity.agent_id)
         if instance is None:
             return
-        instance.mark_run_updated(run_record)
+        instance.mark_run_updated(
+            agent_id=run_record.identity.agent_id,
+            run_id=run_record.identity.run_id,
+            status=run_record.lifecycle.status,
+        )
         self.instance_store.upsert(instance)
 
     def _persist(self) -> None:
@@ -337,3 +361,17 @@ class GatekeeperLifecycleService:
         result = self._session_saver(self.snapshot())
         if inspect.isawaitable(result):
             raise RuntimeError("Gatekeeper session persistence must be synchronous")
+
+    def _resolve_resume_handle(
+        self,
+        *,
+        session: GatekeeperSessionSnapshot,
+    ) -> ProviderResumeHandle | None:
+        if session.run_id is None:
+            return None
+        return self.run_store.resume_handle_for_run(session.run_id)
+
+    def _run_record_for_session(self, session: GatekeeperSessionSnapshot) -> AgentRunRecord | None:
+        if session.run_id is None:
+            return None
+        return self.run_store.get(session.run_id)

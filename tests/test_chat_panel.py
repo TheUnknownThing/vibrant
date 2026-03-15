@@ -8,8 +8,8 @@ from vibrant.orchestrator.types import (
     AgentConversationView,
     AgentStreamEvent,
     QuestionPriority,
-    QuestionRecord,
     QuestionStatus,
+    QuestionView,
 )
 from vibrant.tui.widgets.chat_panel import ChatPanel
 from vibrant.tui.widgets.conversation_renderer import ConversationRegion, MessageBlockWidget, ReasoningPart, ToolCallPart
@@ -31,7 +31,6 @@ def test_conversation_view_applies_streamed_gatekeeper_messages():
             sequence=1,
             agent_id=None,
             run_id=None,
-            task_id=None,
             turn_id=None,
             item_id=None,
             type="conversation.user.message",
@@ -48,7 +47,6 @@ def test_conversation_view_applies_streamed_gatekeeper_messages():
             sequence=2,
             agent_id="gatekeeper-agent",
             run_id="gatekeeper-run-1",
-            task_id=None,
             turn_id="turn-1",
             item_id=None,
             type="conversation.assistant.message.delta",
@@ -65,7 +63,6 @@ def test_conversation_view_applies_streamed_gatekeeper_messages():
             sequence=3,
             agent_id="gatekeeper-agent",
             run_id="gatekeeper-run-1",
-            task_id=None,
             turn_id="turn-1",
             item_id=None,
             type="conversation.assistant.message.completed",
@@ -93,7 +90,6 @@ def test_conversation_view_records_request_events_as_status_entries():
             sequence=1,
             agent_id="gatekeeper-agent",
             run_id="gatekeeper-run-1",
-            task_id=None,
             turn_id="turn-1",
             item_id=None,
             type="conversation.request.opened",
@@ -152,26 +148,18 @@ def test_chat_panel_uses_question_records_for_summary():
     panel.set_gatekeeper_state(
         status="planning",
         question_records=[
-            QuestionRecord(
+            QuestionView(
                 question_id="q-1",
                 text="What should happen after login?",
                 priority=QuestionPriority.BLOCKING,
-                source_role="gatekeeper",
-                source_agent_id="gatekeeper-agent",
-                source_conversation_id="gatekeeper-1",
-                source_turn_id="turn-1",
                 blocking_scope="planning",
                 status=QuestionStatus.RESOLVED,
                 answer="Take the user to the dashboard.",
             ),
-            QuestionRecord(
+            QuestionView(
                 question_id="q-2",
                 text="Should the roadmap include mobile support?",
                 priority=QuestionPriority.BLOCKING,
-                source_role="gatekeeper",
-                source_agent_id="gatekeeper-agent",
-                source_conversation_id="gatekeeper-1",
-                source_turn_id="turn-2",
                 blocking_scope="planning",
                 status=QuestionStatus.PENDING,
             ),
@@ -192,49 +180,33 @@ def test_chat_panel_summary_shows_recent_withdrawn_questions() -> None:
     panel.set_gatekeeper_state(
         status="executing",
         question_records=[
-            QuestionRecord(
+            QuestionView(
                 question_id="q-1",
                 text="Legacy question",
                 priority=QuestionPriority.BLOCKING,
-                source_role="gatekeeper",
-                source_agent_id="gatekeeper-agent",
-                source_conversation_id="gatekeeper-1",
-                source_turn_id="turn-1",
                 blocking_scope="planning",
                 status=QuestionStatus.RESOLVED,
                 answer="Ignore it.",
             ),
-            QuestionRecord(
+            QuestionView(
                 question_id="q-2",
                 text="Keep desktop only?",
                 priority=QuestionPriority.BLOCKING,
-                source_role="gatekeeper",
-                source_agent_id="gatekeeper-agent",
-                source_conversation_id="gatekeeper-1",
-                source_turn_id="turn-2",
                 blocking_scope="workflow",
                 status=QuestionStatus.RESOLVED,
                 answer="No, include mobile.",
             ),
-            QuestionRecord(
+            QuestionView(
                 question_id="q-3",
                 text="Do we need offline mode?",
                 priority=QuestionPriority.NORMAL,
-                source_role="gatekeeper",
-                source_agent_id="gatekeeper-agent",
-                source_conversation_id="gatekeeper-1",
-                source_turn_id="turn-3",
                 blocking_scope="workflow",
                 status=QuestionStatus.PENDING,
             ),
-            QuestionRecord(
+            QuestionView(
                 question_id="q-4",
                 text="Should we add import/export in v1?",
                 priority=QuestionPriority.NORMAL,
-                source_role="gatekeeper",
-                source_agent_id="gatekeeper-agent",
-                source_conversation_id="gatekeeper-1",
-                source_turn_id="turn-4",
                 blocking_scope="workflow",
                 status=QuestionStatus.WITHDRAWN,
             ),
@@ -255,8 +227,7 @@ def test_chat_panel_summary_shows_recent_withdrawn_questions() -> None:
 async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
     conversation = AgentConversationView(
         conversation_id="gatekeeper-1",
-        agent_ids=["gatekeeper-agent"],
-        task_ids=[],
+        run_ids=["gatekeeper-run-1"],
         active_turn_id="turn-1",
         entries=[
             AgentConversationEntry(

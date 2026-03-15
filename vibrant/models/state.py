@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
-from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -109,39 +108,13 @@ class OrchestratorState(BaseModel):
     failed_tasks: list[str] = Field(default_factory=list)
     total_agent_spawns: int = 0
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_fields(cls, value: object) -> object:
-        if not isinstance(value, dict):
-            return value
-
-        data = dict(value)
-
-        if "provider_runtime" not in data:
-            legacy_threads = data.pop("provider_threads", None)
-            if isinstance(legacy_threads, list):
-                data["provider_runtime"] = _legacy_provider_runtime(legacy_threads)
-        else:
-            data.pop("provider_threads", None)
-
-        if "questions" not in data:
-            legacy_pending_questions = data.get("pending_questions")
-            if isinstance(legacy_pending_questions, list):
-                data["questions"] = _legacy_question_records(legacy_pending_questions)
-
-        data.pop("pending_requests", None)
-        return data
-
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: object) -> object:
         if isinstance(value, OrchestratorStatus):
             return value
         if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized == "running":
-                return OrchestratorStatus.EXECUTING.value
-            return normalized
+            return value.strip().lower()
         return value
 
     @model_validator(mode="after")
@@ -164,51 +137,6 @@ class OrchestratorState(BaseModel):
     def replace_questions(self, questions: list[QuestionRecord]) -> None:
         self.questions = questions
         self.sync_pending_question_projection()
-
-
-def _legacy_provider_runtime(items: list[object]) -> dict[str, ProviderRuntimeState]:
-    runtime: dict[str, ProviderRuntimeState] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-
-        owner_agent_id = item.get("owner_agent_id")
-        if not isinstance(owner_agent_id, str) or not owner_agent_id:
-            continue
-
-        runtime[owner_agent_id] = ProviderRuntimeState(
-            status=_legacy_runtime_status(item),
-            provider_thread_id=_legacy_provider_thread_id(item),
-        )
-    return runtime
-
-
-def _legacy_runtime_status(item: dict[str, Any]) -> str:
-    value = item.get("runtime_state") or item.get("status") or "ready"
-    return value if isinstance(value, str) and value else "ready"
-
-
-def _legacy_provider_thread_id(item: dict[str, Any]) -> str | None:
-    value = item.get("provider_thread_id")
-    return value if isinstance(value, str) and value else None
-
-
-def _legacy_question_records(items: list[object]) -> list[QuestionRecord]:
-    records: list[QuestionRecord] = []
-    for index, item in enumerate(items, start=1):
-        if not isinstance(item, str):
-            continue
-        text = item.strip()
-        if not text:
-            continue
-        records.append(
-            QuestionRecord(
-                question_id=f"legacy-question-{index}",
-                text=text,
-            )
-        )
-    return records
-
 
 def reconcile_question_records(
     existing_records: list[QuestionRecord],

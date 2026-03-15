@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from collections import deque
 from dataclasses import dataclass, field
 import json
-from math import e
 from typing import Any, Iterable
 
 from textual.app import ComposeResult
@@ -15,7 +15,7 @@ from textual.widgets import Collapsible, ContentSwitcher, Static
 
 from vibrant.providers.base import CanonicalEvent, TaskProgressEvent
 
-from ...models.agent import AgentRecord, AgentStatus
+from ...models.agent import AgentStatus
 
 MAX_BUFFER_LINES = 10_000
 
@@ -32,10 +32,9 @@ _STATUS_ICONS: dict[str, str] = {
 
 @dataclass(slots=True)
 class AgentStreamState:
-    """Per-agent stream buffers derived from orchestrator records and events."""
+    """Per-run stream buffers derived from orchestrator records and events."""
 
-    agent_id: str
-    task_id: str | None = None
+    run_id: str
     status: str | None = None
     provider_thread_id: str | None = None
     entries: deque["AgentStreamEntry"] = field(default_factory=lambda: deque(maxlen=MAX_BUFFER_LINES))
@@ -141,8 +140,10 @@ class AgentOutput(Static):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._streams: dict[str, AgentStreamState] = {}
-        self._agent_order: list[str] = []
-        self._active_agent_id: str | None = None
+        self._agent_ids_by_run: dict[str, str] = {}
+        self._task_ids_by_run: dict[str, str] = {}
+        self._run_order: list[str] = []
+        self._active_run_id: str | None = None
         self._auto_follow = True
         self._debug_view_enabled = False
         self._empty_message = "No agent activity yet. Use /run to execute the next roadmap task."
@@ -165,9 +166,17 @@ class AgentOutput(Static):
 
     @property
     def active_agent_id(self) -> str | None:
-        """Return the currently selected agent id."""
+        """Return the stable agent id for the currently selected run."""
 
-        return self._active_agent_id
+        if self._active_run_id is None:
+            return None
+        return self._agent_ids_by_run.get(self._active_run_id)
+
+    @property
+    def active_run_id(self) -> str | None:
+        """Return the currently selected run id."""
+
+        return self._active_run_id
 
     @property
     def auto_follow_enabled(self) -> bool:
@@ -181,35 +190,47 @@ class AgentOutput(Static):
 
         return self._debug_view_enabled
 
-    def sync_agents(self, agents: Iterable[AgentRecord]) -> None:
+    def sync_agents(
+        self,
+        agents: Iterable[object],
+        *,
+        task_ids_by_run: Mapping[str, str] | None = None,
+    ) -> None:
         """Refresh known agents from orchestrator-owned runtime records."""
 
         ordered_agents = sorted(
-            [agent for agent in agents if self._agent_id(agent) is not None],
-            key=self._agent_sort_key,
+            [agent for agent in agents if self._run_id(agent) is not None],
+            key=self._run_sort_key,
         )
 
         for agent in ordered_agents:
+            run_id = self._run_id(agent)
             agent_id = self._agent_id(agent)
-            if agent_id is None:
+            if run_id is None or agent_id is None:
                 continue
-            stream = self._ensure_stream(agent_id)
-            stream.task_id = self._task_id(agent)
+            stream = self._ensure_stream(run_id)
+            self._agent_ids_by_run[run_id] = agent_id
+            if task_ids_by_run is not None:
+                task_id = self._task_id_for_agent(agent, task_ids_by_run)
+                if task_id is not None:
+                    self._task_ids_by_run[run_id] = task_id
             stream.status = self._status(agent)
             stream.provider_thread_id = self._provider_thread_id(agent)
             if stream.status != AgentStatus.RUNNING.value:
                 self._close_active_reasoning(stream)
 
-        self._agent_order = [self._agent_id(agent) for agent in ordered_agents]
-        self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
+        self._run_order = [run_id for run_id in (self._run_id(agent) for agent in ordered_agents) if run_id]
+        self._active_run_id = self._resolve_active_run(self._active_run_id)
         self._refresh_view()
 
     def clear_agents(self, message: str | None = None) -> None:
         """Clear the panel when no project lifecycle is available."""
 
         self._streams.clear()
-        self._agent_order.clear()
-        self._active_agent_id = None
+        self._agent_ids_by_run.clear()
+        self._task_ids_by_run.clear()
+        self._run_order.clear()
+        self._active_run_id = None
         if message:
             self._empty_message = message
         self._refresh_view()
@@ -217,14 +238,17 @@ class AgentOutput(Static):
     def ingest_canonical_event(self, event: CanonicalEvent) -> None:
         """Append one canonical event to the relevant agent buffer."""
 
+        run_id = event.get("run_id")
         agent_id = event.get("agent_id")
-        if not isinstance(agent_id, str) or not agent_id:
+        if not isinstance(run_id, str) or not run_id:
             return
 
-        stream = self._ensure_stream(agent_id)
+        stream = self._ensure_stream(run_id)
+        if isinstance(agent_id, str) and agent_id:
+            self._agent_ids_by_run[run_id] = agent_id
         task_id = event.get("task_id")
         if isinstance(task_id, str) and task_id:
-            stream.task_id = task_id
+            self._task_ids_by_run[run_id] = task_id
 
         event_type = str(event.get("type") or "event")
         debug_line = _render_debug_event_line(event)
@@ -262,21 +286,21 @@ class AgentOutput(Static):
             for line in _render_canonical_event_lines(event):
                 self._append_canonical_line(stream, line)
 
-        if agent_id not in self._agent_order:
-            self._agent_order.append(agent_id)
-        self._active_agent_id = self._resolve_active_agent(self._active_agent_id)
-        self._refresh_view(active_agent_changed=agent_id == self._active_agent_id)
+        if run_id not in self._run_order:
+            self._run_order.append(run_id)
+        self._active_run_id = self._resolve_active_run(self._active_run_id)
+        self._refresh_view(active_agent_changed=run_id == self._active_run_id)
 
     def action_cycle_agent(self) -> None:
         """Cycle to the next known agent stream."""
 
-        if not self._agent_order:
+        if not self._run_order:
             return
-        if self._active_agent_id not in self._agent_order:
-            self._active_agent_id = self._agent_order[0]
+        if self._active_run_id not in self._run_order:
+            self._active_run_id = self._run_order[0]
         else:
-            index = self._agent_order.index(self._active_agent_id)
-            self._active_agent_id = self._agent_order[(index + 1) % len(self._agent_order)]
+            index = self._run_order.index(self._active_run_id)
+            self._active_run_id = self._run_order[(index + 1) % len(self._run_order)]
         self._refresh_view(active_agent_changed=True)
 
     def action_toggle_scroll_lock(self) -> None:
@@ -294,88 +318,116 @@ class AgentOutput(Static):
     def poll_native_logs_now(self) -> None:
         """Compatibility no-op now that the widget is event-driven only."""
 
-    def get_rendered_text(self, agent_id: str | None = None, *, debug: bool | None = None) -> str:
+    def get_rendered_text(self, run_id: str | None = None, *, debug: bool | None = None) -> str:
         """Return the rendered text for tests and diagnostics."""
 
-        target_id = agent_id or self._active_agent_id
-        if target_id is None:
+        target_run_id = run_id if run_id is not None else self._active_run_id
+        if target_run_id is None:
             return self._empty_message
-        stream = self._streams.get(target_id)
+        stream = self._streams.get(target_run_id)
         if stream is None:
             return self._empty_message
         use_debug = self._debug_view_enabled if debug is None else debug
         return self._build_debug_text(stream) if use_debug else self._build_canonical_text(stream)
 
-    def get_buffer_line_count(self, agent_id: str, *, debug: bool = False) -> int:
-        """Return the current buffer size for one agent."""
+    def get_buffer_line_count(self, run_id: str, *, debug: bool = False) -> int:
+        """Return the current buffer size for one run."""
 
-        stream = self._streams[agent_id]
+        stream = self._streams[run_id]
         if debug:
             return len(stream.debug_lines)
         return len(stream.entries)
 
-    def get_thoughts_text(self, agent_id: str | None = None) -> str:
+    def get_thoughts_text(self, run_id: str | None = None) -> str:
         """Return the latest visible thought text for tests and diagnostics."""
 
-        target_id = agent_id or self._active_agent_id
-        if target_id is None:
+        target_run_id = run_id if run_id is not None else self._active_run_id
+        if target_run_id is None:
             return ""
-        stream = self._streams.get(target_id)
+        stream = self._streams.get(target_run_id)
         if stream is None:
             return ""
         return stream.thought_text
 
-    def thoughts_running(self, agent_id: str | None = None) -> bool:
-        """Return whether the current agent is actively streaming thoughts."""
+    def thoughts_running(self, run_id: str | None = None) -> bool:
+        """Return whether the current run is actively streaming thoughts."""
 
-        target_id = agent_id or self._active_agent_id
-        if target_id is None:
+        target_run_id = run_id if run_id is not None else self._active_run_id
+        if target_run_id is None:
             return False
-        stream = self._streams.get(target_id)
+        stream = self._streams.get(target_run_id)
         if stream is None:
             return False
         return bool(stream.active_thought_item_id and stream.status == AgentStatus.RUNNING.value)
 
-    def _agent_sort_key(self, agent: AgentRecord) -> tuple[float, str]:
-        agent_id = self._agent_id(agent)
+    def _run_sort_key(self, agent: object) -> tuple[float, str]:
+        run_id = self._run_id(agent) or ""
         started_at = self._started_at(agent)
-        return (started_at.timestamp() if started_at is not None else 0.0, agent_id)
+        return (started_at.timestamp() if started_at is not None else 0.0, run_id)
 
-    def _agent_id(self, agent: AgentRecord) -> str:
-        return agent.identity.agent_id
+    def _agent_id(self, agent: object) -> str | None:
+        identity = getattr(agent, "identity", None)
+        agent_id = getattr(identity, "agent_id", None)
+        return agent_id if isinstance(agent_id, str) and agent_id else None
 
-    def _task_id(self, agent: AgentRecord) -> str:
-        return agent.identity.task_id
+    def _run_id(self, agent: object) -> str | None:
+        identity = getattr(agent, "identity", None)
+        run_id = getattr(identity, "run_id", None)
+        return run_id if isinstance(run_id, str) and run_id else None
 
-    def _status(self, agent: AgentRecord) -> str:
-        return agent.lifecycle.status.value
+    def _task_id_for_agent(self, agent: object, task_ids_by_run: Mapping[str, str]) -> str | None:
+        run_id = self._run_id(agent)
+        if run_id is not None:
+            task_id = task_ids_by_run.get(run_id)
+            if isinstance(task_id, str) and task_id:
+                return task_id
+        identity = getattr(agent, "identity", None)
+        task_id = getattr(identity, "task_id", None)
+        return task_id if isinstance(task_id, str) and task_id else None
 
-    def _provider_thread_id(self, agent: AgentRecord) -> str | None:
-        return agent.provider.provider_thread_id
+    def _status(self, agent: object) -> str:
+        lifecycle = getattr(agent, "lifecycle", None)
+        runtime = getattr(agent, "runtime", None)
+        status = getattr(lifecycle, "status", None)
+        if status is None:
+            status = getattr(runtime, "status", None)
+        value = getattr(status, "value", status)
+        return str(value)
 
-    def _started_at(self, agent: AgentRecord):
-        return agent.lifecycle.started_at
+    def _provider_thread_id(self, agent: object) -> str | None:
+        provider = getattr(agent, "provider", None)
+        provider_thread_id = getattr(provider, "provider_thread_id", None)
+        if isinstance(provider_thread_id, str) and provider_thread_id:
+            return provider_thread_id
+        thread_id = getattr(provider, "thread_id", None)
+        return thread_id if isinstance(thread_id, str) and thread_id else None
 
-    def _ensure_stream(self, agent_id: str) -> AgentStreamState:
-        stream = self._streams.get(agent_id)
+    def _started_at(self, agent: object):
+        lifecycle = getattr(agent, "lifecycle", None)
+        runtime = getattr(agent, "runtime", None)
+        started_at = getattr(lifecycle, "started_at", None)
+        return started_at if started_at is not None else getattr(runtime, "started_at", None)
+
+    def _ensure_stream(self, run_id: str) -> AgentStreamState:
+        stream = self._streams.get(run_id)
         if stream is None:
-            stream = AgentStreamState(agent_id=agent_id)
-            self._streams[agent_id] = stream
+            stream = AgentStreamState(run_id=run_id)
+            self._streams[run_id] = stream
         return stream
 
-    def _resolve_active_agent(self, current_agent_id: str | None) -> str | None:
-        if current_agent_id in self._agent_order:
-            return current_agent_id
-        if not self._agent_order:
+    def _resolve_active_run(self, current_run_id: str | None) -> str | None:
+        if current_run_id in self._run_order:
+            return current_run_id
+        if not self._run_order:
             return None
         running_agents = [
-            agent_id
-            for agent_id in self._agent_order
-            if self._streams.get(agent_id) is not None and self._streams[agent_id].status == AgentStatus.RUNNING.value
+            run_id
+            for run_id in self._run_order
+            if self._streams.get(run_id) is not None and self._streams[run_id].status == AgentStatus.RUNNING.value
         ]
         if running_agents:
             return running_agents[-1]
-        return self._agent_order[-1]
+        return self._run_order[-1]
 
     def _refresh_view(self, *, active_agent_changed: bool = False) -> None:
         try:
@@ -388,32 +440,35 @@ class AgentOutput(Static):
 
     def _update_meta(self) -> None:
         meta = self.query_one("#agent-output-meta", Static)
-        if self._active_agent_id is None:
+        if self._active_run_id is None:
             meta.update(self._empty_message)
             return
 
-        stream = self._streams[self._active_agent_id]
+        stream = self._streams[self._active_run_id]
         mode = "raw" if self._debug_view_enabled else "logs"
         follow = "follow" if self._auto_follow else "locked"
         status = stream.status or "unknown"
-        task = stream.task_id or "n/a"
+        agent_id = self._agent_ids_by_run.get(stream.run_id, stream.run_id)
+        task = self._task_ids_by_run.get(stream.run_id, "n/a")
         meta.update(
-            f"Active: {stream.agent_id} · Task: {task} · Status: {status} · View: {mode} · {follow} · Tab next · S lock · D debug"
+            f"Active: {agent_id} ({stream.run_id}) · Task: {task} · Status: {status} · View: {mode} · {follow} · Tab next · S lock · D debug"
         )
 
     def _update_tabs(self) -> None:
         tabs = self.query_one("#agent-output-tabs", Static)
-        if not self._agent_order:
+        if not self._run_order:
             tabs.update("No agents yet")
             return
 
         parts: list[str] = []
-        for agent_id in self._agent_order:
-            stream = self._streams[agent_id]
-            prefix = "▶" if agent_id == self._active_agent_id else "•"
+        for run_id in self._run_order:
+            stream = self._streams[run_id]
+            prefix = "▶" if run_id == self._active_run_id else "•"
             icon = _STATUS_ICONS.get(stream.status or "", "•")
-            task_fragment = f"/{stream.task_id}" if stream.task_id else ""
-            parts.append(f"{prefix} {icon} {agent_id}{task_fragment}")
+            agent_id = self._agent_ids_by_run.get(run_id, run_id)
+            task_id = self._task_ids_by_run.get(run_id)
+            task_fragment = f"/{task_id}" if task_id else ""
+            parts.append(f"{prefix} {icon} {agent_id}@{run_id}{task_fragment}")
         tabs.update("  |  ".join(parts))
 
     def _update_switcher(self) -> None:
@@ -424,12 +479,12 @@ class AgentOutput(Static):
         stream_body = self.query_one("#agent-output-stream", Vertical)
         debug_body = self.query_one("#agent-output-debug", Static)
 
-        if self._active_agent_id is None:
+        if self._active_run_id is None:
             self._rebuild_stream(stream_body, None)
             debug_body.update("No event debug output yet.")
             return
 
-        stream = self._streams[self._active_agent_id]
+        stream = self._streams[self._active_run_id]
         self._rebuild_stream(stream_body, stream)
         debug_body.update(self._build_debug_text(stream))
 

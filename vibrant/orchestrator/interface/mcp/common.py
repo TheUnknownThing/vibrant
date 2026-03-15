@@ -109,10 +109,10 @@ def serialize_value(value: Any) -> Any:
         return serialize_value(value.model_dump(mode="json"))
     if hasattr(value, "model_dump_json"):
         return serialize_value(json.loads(value.model_dump_json()))
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
     if isinstance(value, Enum):
         return value.value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, Path):

@@ -20,18 +20,7 @@ class OrchestratorMCPTools:
         *,
         context: str | None = None,
         status: str | None = None,
-        decision_title: str | None = None,
-        decision_context: str | None = None,
-        resolution: str | None = None,
-        impact: str | None = None,
     ) -> Any:
-        if decision_title:
-            return self.commands.append_decision(
-                title=decision_title,
-                context=decision_context or "",
-                resolution=resolution or "",
-                impact=impact or "",
-            )
         return self.commands.update_consensus(context=context, status=status)
 
     def add_task(

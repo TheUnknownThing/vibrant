@@ -59,7 +59,8 @@ class CanonicalEventEnvelope(TypedDict, total=False):
     origin: NotRequired[CanonicalEventOrigin]
     provider: NotRequired[str]
     agent_id: NotRequired[str]
-    task_id: NotRequired[str]
+    run_id: NotRequired[str]
+    role: NotRequired[str]
     provider_thread_id: NotRequired[str]
     provider_payload: NotRequired[CanonicalPayload]
 

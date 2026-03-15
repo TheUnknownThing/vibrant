@@ -27,7 +27,6 @@ from .utils import (
     extract_exit_code,
     extract_pid,
     extract_summary_from_turn_result,
-    extract_text_from_progress_item,
     maybe_forward_event,
     parse_runtime_mode,
     stop_adapter_safely,
@@ -129,7 +128,7 @@ class AgentBase(ABC):
         """Add agent-specific metadata to a canonical event before forwarding."""
         event.setdefault("agent_id", agent_record.identity.agent_id)
         event.setdefault("run_id", agent_record.identity.run_id)
-        event.setdefault("task_id", agent_record.identity.task_id)
+        event.setdefault("role", agent_record.identity.role)
         return event
 
     def extract_summary(
@@ -188,10 +187,6 @@ class AgentBase(ABC):
 
             if event_type == "content.delta":
                 transcript_chunks.append(str(event_copy.get("delta", "")))
-            elif event_type == "task.progress":
-                text = extract_text_from_progress_item(event_copy.get("item"))
-                if text:
-                    transcript_chunks.append(text)
             elif event_type == "runtime.error":
                 runtime_error = extract_error_message(event_copy)
                 turn_finished.set()
