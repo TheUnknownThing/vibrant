@@ -16,6 +16,17 @@ from vibrant.orchestrator.policy.shared.capabilities import gatekeeper_binding_p
 from vibrant.project_init import initialize_project
 
 
+def _schema_contains_local_ref(value: object) -> bool:
+    if isinstance(value, dict):
+        ref = value.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/"):
+            return True
+        return any(_schema_contains_local_ref(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_schema_contains_local_ref(item) for item in value)
+    return False
+
+
 def _prepare_orchestrator(tmp_path: Path):
     initialize_project(tmp_path)
     return create_orchestrator(tmp_path)
@@ -55,6 +66,7 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
                         assert "vibrant.update_consensus" in {tool.name for tool in tools.tools}
                         assert "vibrant.get_consensus" in {resource.name for resource in resources.resources}
                         assert "vibrant.get_task" in {template.name for template in templates.resourceTemplates}
+                        assert all(not _schema_contains_local_ref(tool.inputSchema) for tool in tools.tools)
 
                         add_task_result = await session.call_tool(
                             "vibrant.add_task",

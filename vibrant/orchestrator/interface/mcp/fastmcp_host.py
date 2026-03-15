@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from copy import deepcopy
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -12,6 +13,7 @@ from fastmcp.exceptions import AuthorizationError
 from fastmcp.resources import ResourceContent, ResourceResult
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.server.transforms import Transform
 from starlette.middleware import Middleware as ASGIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -37,6 +39,50 @@ _RESOURCE_URIS: dict[str, str] = {
 }
 
 _WILDCARD_HOSTS = {"0.0.0.0", "::"}
+
+
+def _resolve_local_schema_ref(ref: str, definitions: dict[str, Any]) -> dict[str, Any] | None:
+    if not ref.startswith("#/$defs/"):
+        return None
+    key = ref.removeprefix("#/$defs/")
+    target = definitions.get(key)
+    if not isinstance(target, dict):
+        return None
+    return deepcopy(target)
+
+
+def _inline_local_schema_refs(node: Any, definitions: dict[str, Any], *, stack: set[str]) -> Any:
+    if isinstance(node, list):
+        return [_inline_local_schema_refs(item, definitions, stack=stack) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        if ref in stack:
+            return {key: _inline_local_schema_refs(value, definitions, stack=stack) for key, value in node.items()}
+        target = _resolve_local_schema_ref(ref, definitions)
+        if target is not None:
+            resolved_target = _inline_local_schema_refs(target, definitions, stack={*stack, ref})
+            sibling_items = {
+                key: _inline_local_schema_refs(value, definitions, stack=stack)
+                for key, value in node.items()
+                if key != "$ref"
+            }
+            if isinstance(resolved_target, dict):
+                return {**resolved_target, **sibling_items}
+            return sibling_items
+
+    return {key: _inline_local_schema_refs(value, definitions, stack=stack) for key, value in node.items()}
+
+
+def _flatten_local_ref_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    definitions_raw = schema.get("$defs")
+    definitions = definitions_raw if isinstance(definitions_raw, dict) else {}
+    flattened = _inline_local_schema_refs(deepcopy(schema), definitions, stack=set())
+    if isinstance(flattened, dict):
+        flattened.pop("$defs", None)
+    return flattened
 
 
 def _copy_callable_metadata(wrapper: Callable[..., Any], original: Callable[..., Any]) -> None:
@@ -86,6 +132,29 @@ class _BindingMiddleware(Middleware):
         return await call_next(context)
 
 
+class _InlineLocalRefToolSchemaTransform(Transform):
+    """Inline local ``$defs``/``$ref`` in tool parameter schemas for LLM consumers."""
+
+    @staticmethod
+    def _transform_tool(tool: Any) -> Any:
+        parameters = getattr(tool, "parameters", None)
+        if not isinstance(parameters, dict):
+            return tool
+        flattened = _flatten_local_ref_schema(parameters)
+        if flattened == parameters:
+            return tool
+        return tool.model_copy(update={"parameters": flattened})
+
+    async def list_tools(self, tools: list[Any]) -> list[Any]:
+        return [self._transform_tool(tool) for tool in tools]
+
+    async def get_tool(self, name: str, call_next: Callable[..., Any], *, version: Any = None) -> Any:
+        tool = await call_next(name, version=version)
+        if tool is None:
+            return None
+        return self._transform_tool(tool)
+
+
 class OrchestratorFastMCPHost:
     """Real loopback MCP host backed by the semantic orchestrator registry."""
 
@@ -106,6 +175,7 @@ class OrchestratorFastMCPHost:
             instructions="Loopback MCP surface for the Vibrant orchestrator.",
             middleware=[_BindingMiddleware(self.binding_registry)],
         )
+        self.fastmcp.add_transform(_InlineLocalRefToolSchemaTransform())
         self._register_tools()
         self._register_resources()
 
