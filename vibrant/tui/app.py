@@ -21,7 +21,7 @@ from vibrant.providers.base import CanonicalEvent
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..models import AppSettings, ConsensusStatus, OrchestratorStatus
-from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT
+from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT, ConsensusDocument
 from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, create_orchestrator
 from ..project_init import ensure_project_files, initialize_project
 from .screens import HelpScreen, InitializationScreen, PlanningScreen, VibingScreen
@@ -126,7 +126,7 @@ class VibrantApp(App):
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
         self._gatekeeper_conversation_id: str | None = None
-        self._pending_runtime_bootstrap_events: list[dict[str, Any]] = []
+        self._pending_runtime_bootstrap_events: list[CanonicalEvent] = []
         self._workspace_screen: WorkspaceScreen | None = None
         self._task_execution_in_progress = False
         self._task_refresh_loop: asyncio.Task[None] | None = None
@@ -771,8 +771,6 @@ class VibrantApp(App):
             self._update_consensus_view(
                 consensus_view,
                 consensus_document,
-                tasks=roadmap_tasks,
-                source_path=consensus_path,
             )
 
         planning_screen = self._planning_screen()
@@ -1125,7 +1123,7 @@ def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
     return None
 
 
-def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
+def _is_gatekeeper_event(event: CanonicalEvent) -> bool:
     agent_id = event.get("agent_id")
     if isinstance(agent_id, str) and (agent_id == "gatekeeper" or agent_id.startswith("gatekeeper-")):
         return True
@@ -1134,7 +1132,7 @@ def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
     return isinstance(task_id, str) and task_id.startswith("gatekeeper-")
 
 
-def _error_text_from_event(event: dict[str, Any]) -> str:
+def _error_text_from_event(event: CanonicalEvent) -> str:
     error_message = event.get("error_message")
     if isinstance(error_message, str) and error_message.strip():
         return error_message.strip()
