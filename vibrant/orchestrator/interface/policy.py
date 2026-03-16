@@ -11,7 +11,7 @@ from vibrant.models.task import TaskInfo
 
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop import TaskLoop
-from ..types import QuestionPriority, QuestionView, ReviewResolutionRecord, WorkflowSnapshot, WorkflowStatus
+from ..types import QuestionPriority, QuestionView, ReviewResolutionRecord, RuntimeHandleSnapshot, WorkflowSnapshot, WorkflowStatus
 
 
 @dataclass(slots=True)
@@ -26,6 +26,21 @@ class PolicyCommandAdapter:
 
     async def wait_for_gatekeeper_submission(self, submission):
         return await self.gatekeeper_loop.wait_for_submission(submission)
+
+    async def respond_to_gatekeeper_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ) -> RuntimeHandleSnapshot:
+        return await self.gatekeeper_loop.respond_to_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
 
     async def restart_gatekeeper(self, reason: str | None = None):
         return await self.gatekeeper_loop.restart(reason)

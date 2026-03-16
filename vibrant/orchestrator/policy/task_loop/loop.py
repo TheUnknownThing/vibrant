@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from ...basic.artifacts import build_workflow_snapshot
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, ReviewTicketStore, RoadmapStore, WorkflowStateStore
 from ...basic.workspace import WorkspaceService
-from ...types import ReviewResolutionRecord, ReviewTicket, TaskResult, WorkflowSnapshot
+from ...types import ReviewResolutionRecord, ReviewTicket, ReviewTicketStatus, TaskResult, WorkflowSnapshot
 from . import attempts, dispatch, reviews, task_projection
 from .execution import ExecutionCoordinator
 from .models import DispatchLease, TaskLoopSnapshot, TaskLoopStage
@@ -71,6 +71,14 @@ class TaskLoop:
 
     def list_pending_review_tickets(self) -> list[ReviewTicket]:
         return reviews.list_pending_review_tickets(self)
+
+    def list_review_tickets(
+        self,
+        *,
+        task_id: str | None = None,
+        status: ReviewTicketStatus | None = None,
+    ) -> list[ReviewTicket]:
+        return reviews.list_review_tickets(self, task_id=task_id, status=status)
 
     def accept_review_ticket(self, ticket_id: str) -> ReviewResolutionRecord:
         return reviews.accept_review_ticket(self, ticket_id)

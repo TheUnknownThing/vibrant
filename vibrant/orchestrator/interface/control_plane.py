@@ -19,6 +19,21 @@ class InterfaceControlPlane:
     async def wait_for_gatekeeper_submission(self, submission):
         return await self.backend.commands.wait_for_gatekeeper_submission(submission)
 
+    async def respond_to_gatekeeper_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ):
+        return await self.backend.commands.respond_to_gatekeeper_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
+
     def end_planning_phase(self):
         return self.backend.commands.end_planning_phase()
 
@@ -126,17 +141,26 @@ class InterfaceControlPlane:
     def list_question_records(self):
         return self.backend.queries.list_question_records()
 
+    def get_question(self, question_id: str):
+        return self.backend.queries.get_question(question_id)
+
     def list_pending_question_records(self):
         return self.backend.queries.list_pending_question_records()
 
     def list_active_attempts(self):
         return self.backend.queries.list_active_attempts()
 
+    def list_attempt_executions(self, *, task_id: str | None = None, status=None):
+        return self.backend.queries.list_attempt_executions(task_id=task_id, status=status)
+
     def get_attempt_execution(self, attempt_id: str):
         return self.backend.queries.get_attempt_execution(attempt_id)
 
     def get_review_ticket(self, ticket_id: str):
         return self.backend.queries.get_review_ticket(ticket_id)
+
+    def list_review_tickets(self, *, task_id: str | None = None, status=None):
+        return self.backend.queries.list_review_tickets(task_id=task_id, status=status)
 
     def list_pending_review_tickets(self):
         return self.backend.queries.list_pending_review_tickets()

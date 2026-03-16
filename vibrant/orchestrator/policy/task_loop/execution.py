@@ -136,6 +136,27 @@ class ExecutionCoordinator:
     def list_active_attempt_executions(self) -> list[AttemptExecutionView]:
         return self.execution_session.list_active_views()
 
+    def list_attempt_executions(
+        self,
+        *,
+        task_id: str | None = None,
+        status: AttemptStatus | None = None,
+    ) -> list[AttemptExecutionView]:
+        records = (
+            self.attempt_store.list_by_task(task_id)
+            if task_id is not None
+            else self.attempt_store.list_all()
+        )
+        views: list[AttemptExecutionView] = []
+        for record in records:
+            view = self.execution_session.get_view(record.attempt_id)
+            if view is None:
+                continue
+            if status is not None and view.status is not status:
+                continue
+            views.append(view)
+        return views
+
     def attempt_recovery_state(self, attempt_id: str) -> AttemptRecoveryState | None:
         return self.execution_session.get_recovery_state(attempt_id)
 

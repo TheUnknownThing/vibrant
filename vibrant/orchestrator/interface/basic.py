@@ -34,7 +34,11 @@ from ..types import (
     AgentRunRuntimeSnapshot,
     AgentRunSnapshot,
     AgentRunWorkspaceSnapshot,
+    AttemptExecutionView,
+    AttemptStatus,
     QuestionView,
+    ReviewTicket,
+    ReviewTicketStatus,
     RoleSnapshot,
 )
 
@@ -212,17 +216,39 @@ class BasicQueryAdapter:
     def list_question_records(self) -> list[QuestionView]:
         return [QuestionView.from_record(record) for record in self.question_store.list()]
 
+    def get_question(self, question_id: str) -> QuestionView | None:
+        record = self.question_store.get(question_id)
+        if record is None:
+            return None
+        return QuestionView.from_record(record)
+
     def list_pending_question_records(self) -> list[QuestionView]:
         return [QuestionView.from_record(record) for record in self.question_store.list_pending()]
 
     def list_active_attempts(self):
         return self.attempt_store.list_active()
 
+    def list_attempt_executions(
+        self,
+        *,
+        task_id: str | None = None,
+        status: AttemptStatus | None = None,
+    ) -> list[AttemptExecutionView]:
+        return self.task_loop.execution.list_attempt_executions(task_id=task_id, status=status)
+
     def get_attempt_execution(self, attempt_id: str):
         return self.task_loop.execution.attempt_execution(attempt_id)
 
     def get_review_ticket(self, ticket_id: str):
         return self.task_loop.get_review_ticket(ticket_id)
+
+    def list_review_tickets(
+        self,
+        *,
+        task_id: str | None = None,
+        status: ReviewTicketStatus | None = None,
+    ) -> list[ReviewTicket]:
+        return self.task_loop.list_review_tickets(task_id=task_id, status=status)
 
     def list_pending_review_tickets(self):
         return self.task_loop.list_pending_review_tickets()

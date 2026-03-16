@@ -27,6 +27,7 @@ from .roles import GATEKEEPER_ROLE, ensure_gatekeeper_instance
 from ...types import (
     GatekeeperLifecycleStatus,
     GatekeeperSessionSnapshot,
+    RuntimeHandleSnapshot,
     utc_now,
 )
 
@@ -213,6 +214,35 @@ class GatekeeperLifecycleService:
         self._session.updated_at = utc_now()
         self._persist()
         return self.snapshot()
+
+    async def respond_to_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: Any | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> RuntimeHandleSnapshot:
+        handle = self._active_handle
+        if handle is None or self._active_handle_run_id != run_id:
+            raise KeyError(f"Gatekeeper active handle not available for run {run_id}")
+
+        await handle.respond_to_request(request_id, result=result, error=error)
+        self._session.lifecycle_state = (
+            GatekeeperLifecycleStatus.AWAITING_USER
+            if handle.awaiting_input
+            else GatekeeperLifecycleStatus.RUNNING
+        )
+        self._session.updated_at = utc_now()
+        self._persist()
+        return RuntimeHandleSnapshot(
+            agent_id=self._session.agent_id or run_id,
+            run_id=run_id,
+            state=handle.state.value,
+            provider_thread_id=handle.provider_thread.thread_id,
+            awaiting_input=handle.awaiting_input,
+            input_requests=handle.input_requests,
+        )
 
     async def restart_session(self, *, reason: str | None = None) -> GatekeeperSessionSnapshot:
         await self.stop_session()

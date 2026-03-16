@@ -192,7 +192,8 @@ than the durable store or recovery layer:
 
 - `QuestionView` is the public question shape for facade, control-plane, MCP,
   and TUI consumers.
-- `AttemptExecutionView` is the public active-attempt inspection shape.
+- `AttemptExecutionView` is the public attempt-execution summary shape for
+  both active and completed attempts.
 - Durable question audit fields and attempt recovery-only fields stay on
   internal record/recovery types.
 - Provider resume cursors, provider thread paths, and workspace paths are not
@@ -218,6 +219,14 @@ class GatekeeperSubmission:
 class InterfaceControlPlane:
     async def submit_user_input(self, text: str, question_id: str | None = None) -> GatekeeperSubmission: ...
     async def wait_for_gatekeeper_submission(self, submission: GatekeeperSubmission) -> RuntimeExecutionResult: ...
+    async def respond_to_gatekeeper_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ) -> RuntimeHandleSnapshot: ...
     def start_execution(self) -> WorkflowSnapshot: ...
     def pause_workflow(self) -> WorkflowSnapshot: ...
     def resume_workflow(self) -> WorkflowSnapshot: ...
@@ -238,6 +247,19 @@ class InterfaceControlPlane:
     def list_runs(self) -> list[AgentRunSnapshot]: ...
     def list_active_runs(self) -> list[AgentRunSnapshot]: ...
     def get_run(self, run_id: str) -> AgentRunSnapshot | None: ...
+    def get_question(self, question_id: str) -> QuestionView | None: ...
+    def list_attempt_executions(
+        self,
+        *,
+        task_id: str | None = None,
+        status: AttemptStatus | None = None,
+    ) -> list[AttemptExecutionView]: ...
+    def list_review_tickets(
+        self,
+        *,
+        task_id: str | None = None,
+        status: ReviewTicketStatus | None = None,
+    ) -> list[ReviewTicket]: ...
 ```
 
 The stable behavioral rule is that public consumers receive a **submission
@@ -295,10 +317,13 @@ The Gatekeeper-facing stable resource set is:
 - `get_workflow_session()`
 - `get_task(task_id)`
 - `get_workflow_status()`
+- `get_question(question_id)`
 - `list_pending_questions()`
 - `list_active_runs()`
 - `list_active_attempts()`
+- `list_attempt_executions(task_id=None, status=None)`
 - `get_review_ticket(ticket_id)`
+- `list_review_tickets(task_id=None, status=None)`
 - `list_pending_review_tickets()`
 - `list_recent_events(limit=20)`
 
@@ -312,6 +337,7 @@ The semantic write tool set is:
 - `reorder_tasks(task_ids)`
 - `request_user_decision(...)`
 - `withdraw_question(question_id, reason=None)`
+- `respond_to_gatekeeper_request(run_id, request_id, result=None, error=None)`
 - `end_planning_phase()`
 - `pause_workflow()`
 - `resume_workflow()`

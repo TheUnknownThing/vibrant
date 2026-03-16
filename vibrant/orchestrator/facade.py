@@ -272,6 +272,9 @@ class OrchestratorFacade:
     def list_question_records(self) -> list[QuestionView]:
         return self.control_plane.list_question_records()
 
+    def get_question(self, question_id: str) -> QuestionView | None:
+        return self.control_plane.get_question(question_id)
+
     def list_pending_question_records(self) -> list[QuestionView]:
         return self.control_plane.list_pending_question_records()
 
@@ -393,6 +396,21 @@ class OrchestratorFacade:
     async def wait_for_gatekeeper_submission(self, submission):
         return await self.control_plane.wait_for_gatekeeper_submission(submission)
 
+    async def respond_to_gatekeeper_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ):
+        return await self.control_plane.respond_to_gatekeeper_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
+
     async def submit_gatekeeper_input(self, text: str, *, question_id: str | None = None):
         submission = await self.control_plane.submit_user_input(text, question_id=question_id)
         return submission, await self.control_plane.wait_for_gatekeeper_submission(submission)
@@ -500,8 +518,14 @@ class OrchestratorFacade:
     def list_active_attempts(self):
         return self.control_plane.list_active_attempts()
 
+    def list_attempt_executions(self, *, task_id: str | None = None, status=None):
+        return self.control_plane.list_attempt_executions(task_id=task_id, status=status)
+
     def get_review_ticket(self, ticket_id: str):
         return self.control_plane.get_review_ticket(ticket_id)
+
+    def list_review_tickets(self, *, task_id: str | None = None, status=None):
+        return self.control_plane.list_review_tickets(task_id=task_id, status=status)
 
     def list_pending_review_tickets(self):
         return self.control_plane.list_pending_review_tickets()

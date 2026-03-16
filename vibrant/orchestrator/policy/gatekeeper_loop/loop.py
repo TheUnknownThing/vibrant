@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, RoadmapStore, WorkflowStateStore
-from ...types import QuestionPriority, ReviewTicket, ValidationOutcome, WorkflowSnapshot, WorkflowStatus
+from ...types import QuestionPriority, ReviewTicket, RuntimeHandleSnapshot, ValidationOutcome, WorkflowSnapshot, WorkflowStatus
 from . import commands, submission as submission_flow
 from .lifecycle import GatekeeperLifecycleService
 from .models import GatekeeperLoopState, GatekeeperSubmission
@@ -48,6 +48,21 @@ class GatekeeperUserLoop:
 
     async def wait_for_submission(self, submission: GatekeeperSubmission) -> object:
         return await submission_flow.wait_for_submission(self, submission)
+
+    async def respond_to_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ) -> RuntimeHandleSnapshot:
+        return await self.lifecycle.respond_to_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
 
     async def restart(self, reason: str | None = None) -> GatekeeperLoopState:
         await self.lifecycle.restart_session(reason=reason)
