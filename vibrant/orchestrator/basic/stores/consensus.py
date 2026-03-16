@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 
 from vibrant.consensus.parser import ConsensusParser
 from vibrant.consensus.writer import ConsensusWriter
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus, DEFAULT_CONSENSUS_CONTEXT
-
-
-_DECISIONS_BLOCK = re.compile(r"(<!-- DECISIONS:START -->\n)(.*?)(\n<!-- DECISIONS:END -->)", re.DOTALL)
 
 
 class ConsensusStore:
@@ -39,31 +35,6 @@ class ConsensusStore:
         document.context = context.strip() or DEFAULT_CONSENSUS_CONTEXT
         return self.write(document)
 
-    def append_decision(
-        self,
-        *,
-        title: str,
-        resolution: str,
-        context: str,
-        made_by: str = "gatekeeper",
-        impact: str = "",
-        when: str | None = None,
-    ) -> ConsensusDocument:
-        document = self.load() or self._default_document()
-        decision_number = self._next_decision_number(document.context)
-        decision_block = "\n".join(
-            [
-                f"### Decision {decision_number}: {title.strip()}",
-                f"- **Date**: {when or self._current_date()}",
-                f"- **Made By**: `{made_by.strip() or 'gatekeeper'}`",
-                f"- **Context**: {context.strip()}",
-                f"- **Resolution**: {resolution.strip()}",
-                f"- **Impact**: {impact.strip() or 'None recorded.'}",
-            ]
-        )
-        document.context = self._append_to_decisions(document.context, decision_block)
-        return self.write(document)
-
     def set_status_projection(self, status: ConsensusStatus) -> ConsensusDocument:
         document = self.load() or self._default_document()
         document.status = status
@@ -71,23 +42,3 @@ class ConsensusStore:
 
     def _default_document(self) -> ConsensusDocument:
         return ConsensusDocument(project=self.project_name, context=DEFAULT_CONSENSUS_CONTEXT)
-
-    def _append_to_decisions(self, context: str, block: str) -> str:
-        source = context.strip() or DEFAULT_CONSENSUS_CONTEXT
-        match = _DECISIONS_BLOCK.search(source)
-        if match is None:
-            return f"{source.rstrip()}\n\n## Design Choices\n<!-- DECISIONS:START -->\n{block}\n<!-- DECISIONS:END -->"
-        middle = match.group(2).strip()
-        updated_middle = f"{middle}\n\n{block}".strip()
-        return f"{source[:match.start()]}{match.group(1)}{updated_middle}{match.group(3)}{source[match.end():]}"
-
-    def _next_decision_number(self, context: str) -> int:
-        matches = re.findall(r"### Decision (\d+):", context)
-        if not matches:
-            return 1
-        return max(int(item) for item in matches) + 1
-
-    def _current_date(self) -> str:
-        from datetime import UTC, datetime
-
-        return datetime.now(UTC).date().isoformat()

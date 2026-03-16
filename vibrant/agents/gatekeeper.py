@@ -125,7 +125,6 @@ class GatekeeperAgent(ReadOnlyAgentBase):
     ) -> AgentRunRecord:
         resolved_agent_id = agent_id or AgentType.GATEKEEPER.value
         resolved_run_id = run_id or f"gatekeeper-{request.trigger.value}-{uuid4().hex[:8]}"
-        task_id = f"gatekeeper-{request.trigger.value}"
         native_log = self.vibrant_dir / "logs" / "providers" / "native" / f"{resolved_run_id}.ndjson"
         canonical_log = self.vibrant_dir / "logs" / "providers" / "canonical" / f"{resolved_run_id}.ndjson"
 
@@ -133,7 +132,6 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             identity={
                 "run_id": resolved_run_id,
                 "agent_id": resolved_agent_id,
-                "task_id": task_id,
                 "role": role,
                 "type": AgentType.GATEKEEPER,
             },
@@ -193,7 +191,6 @@ class Gatekeeper:
         self.project_root = find_project_root(project_root)
         self.vibrant_dir = self.project_root / DEFAULT_CONFIG_DIR
         self.agent_runs_dir = self.vibrant_dir / "agent-runs"
-        self.legacy_agents_dir = self.vibrant_dir / "agents"
         self.config = config or load_config(start_path=self.project_root)
 
         self.agent = GatekeeperAgent(
@@ -314,8 +311,6 @@ class Gatekeeper:
         candidate_paths: list[Path] = []
         if self.agent_runs_dir.exists():
             candidate_paths.extend(sorted(self.agent_runs_dir.glob("*.json")))
-        if self.legacy_agents_dir.exists():
-            candidate_paths.extend(sorted(self.legacy_agents_dir.glob("gatekeeper-*.json")))
         if not candidate_paths:
             return None
 
@@ -329,7 +324,7 @@ class Gatekeeper:
             if record.identity.role != AgentType.GATEKEEPER.value:
                 continue
 
-            thread_id = record.provider.provider_thread_id or _extract_provider_thread_id(record.provider.resume_cursor)
+            thread_id = record.provider.provider_thread_id
             if not thread_id:
                 continue
 
@@ -343,9 +338,7 @@ class Gatekeeper:
         if latest_record is None:
             return None
 
-        return latest_record.provider.provider_thread_id or _extract_provider_thread_id(
-            latest_record.provider.resume_cursor
-        )
+        return latest_record.provider.provider_thread_id
 
     def _persist_agent_record(self, agent_record: AgentRunRecord) -> None:
         self.agent_runs_dir.mkdir(parents=True, exist_ok=True)
@@ -366,13 +359,6 @@ def _extract_skill_description(path: Path) -> str:
             continue
         return line
     return "No description provided."
-
-
-def _extract_provider_thread_id(resume_cursor: object) -> str | None:
-    if not isinstance(resume_cursor, dict):
-        return None
-    thread_id = resume_cursor.get("threadId")
-    return thread_id if isinstance(thread_id, str) and thread_id else None
 
 
 def _atomic_write_text(path: Path, content: str) -> None:

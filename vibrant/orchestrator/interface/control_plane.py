@@ -19,9 +19,6 @@ class InterfaceControlPlane:
     async def wait_for_gatekeeper_submission(self, submission):
         return await self.backend.commands.wait_for_gatekeeper_submission(submission)
 
-    def start_execution(self):
-        return self.backend.commands.start_execution()
-
     def end_planning_phase(self):
         return self.backend.commands.end_planning_phase()
 
@@ -49,8 +46,14 @@ class InterfaceControlPlane:
     def workflow_snapshot(self):
         return self.backend.queries.workflow_snapshot()
 
+    def workflow_session(self):
+        return self.backend.queries.workflow_session()
+
     def gatekeeper_state(self):
         return self.backend.queries.gatekeeper_state()
+
+    def gatekeeper_session(self):
+        return self.backend.queries.gatekeeper_session()
 
     def task_loop_state(self):
         return self.backend.queries.task_loop_state()
@@ -66,6 +69,9 @@ class InterfaceControlPlane:
 
     def conversation_frames(self, conversation_id: str):
         return self.backend.queries.conversation_frames(conversation_id)
+
+    def conversation_session(self, conversation_id: str):
+        return self.backend.queries.conversation_session(conversation_id)
 
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
         return self.backend.queries.subscribe_conversation(conversation_id, callback, replay=replay)
@@ -102,29 +108,26 @@ class InterfaceControlPlane:
     def get_task(self, task_id: str):
         return self.backend.queries.get_task(task_id)
 
-    def list_agent_instances(self):
-        return self.backend.queries.list_agent_instances()
+    def list_roles(self):
+        return self.backend.queries.list_roles()
 
-    def list_agent_runs(self):
-        return self.backend.queries.list_agent_runs()
+    def get_role(self, role: str):
+        return self.backend.queries.get_role(role)
 
-    def list_active_agent_runs(self):
-        return self.backend.queries.list_active_agent_runs()
+    def list_instances(self):
+        return self.backend.queries.list_instances()
 
-    def get_agent_instance(self, agent_id: str):
-        return self.backend.queries.get_agent_instance(agent_id)
+    def get_instance(self, agent_id: str):
+        return self.backend.queries.get_instance(agent_id)
 
-    def get_agent_run(self, run_id: str):
-        return self.backend.queries.get_agent_run(run_id)
+    def list_runs(self):
+        return self.backend.queries.list_runs()
 
-    def list_agent_records(self):
-        return self.list_agent_runs()
+    def list_active_runs(self):
+        return self.backend.queries.list_active_runs()
 
-    def list_active_agents(self):
-        return self.list_active_agent_runs()
-
-    def get_agent_record(self, run_id: str):
-        return self.get_agent_run(run_id)
+    def get_run(self, run_id: str):
+        return self.backend.queries.get_run(run_id)
 
     def list_question_records(self):
         return self.backend.queries.list_question_records()
@@ -135,6 +138,9 @@ class InterfaceControlPlane:
     def list_active_attempts(self):
         return self.backend.queries.list_active_attempts()
 
+    def get_attempt_execution(self, attempt_id: str):
+        return self.backend.queries.get_attempt_execution(attempt_id)
+
     def get_review_ticket(self, ticket_id: str):
         return self.backend.queries.get_review_ticket(ticket_id)
 
@@ -143,9 +149,6 @@ class InterfaceControlPlane:
 
     def gatekeeper_busy(self) -> bool:
         return self.backend.queries.gatekeeper_busy()
-
-    def runtime_handle(self, run_id: str):
-        return self.backend.queries.runtime_handle(run_id)
 
     def add_task(self, task, *, index: int | None = None):
         return self.backend.commands.add_task(task, index=index)
@@ -161,9 +164,6 @@ class InterfaceControlPlane:
 
     def update_consensus(self, *, status=None, context: str | None = None):
         return self.backend.commands.update_consensus(status=status, context=context)
-
-    def append_decision(self, **kwargs):
-        return self.backend.commands.append_decision(**kwargs)
 
     def write_consensus_document(self, document):
         return self.backend.commands.write_consensus_document(document)

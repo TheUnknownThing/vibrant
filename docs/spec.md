@@ -1,6 +1,6 @@
 # Project Vibrant — Specification Document
-> **Version**: 1.2.0
-> **Date**: 2026-03-13
+> **Version**: 1.3.0
+> **Date**: 2026-03-15
 > **Author**: Spec-Driven Development Architect
 > **Status**: APPROVED
 
@@ -29,6 +29,8 @@
 
 ## 0. Changelog
 
+- **1.3.0** (2026-03-15): Folded the stable identity contract and git-worktree execution model into the main spec. Canonical runtime events are run-scoped (`role`, `agent_id`, `run_id`, optional `conversation_id`) rather than task-scoped, and task execution/review now rely on persisted git worktree metadata plus git-native diff and merge flow.
+- **1.2.1** (2026-03-15): Clarified interactive-request policy. Runtime may surface provider-side input requests generically, but worker-style agents must auto-reject them in v1. `awaiting_input` is reserved for Gatekeeper and other explicitly interactive roles.
 - **1.2.0** (2026-03-13): Replaced the legacy result-parsing orchestrator model with the command-driven redesign. The orchestrator now owns all durable state under `.vibrant/`, the Gatekeeper mutates state only through typed MCP tools, execution is attempt-centric, processed conversation history is orchestrator-owned, and workflow state is authoritative over consensus metadata.
 - **1.1.1** (2026-03-08): Corrected the Codex app-server protocol details.
 - **1.1.0** (2026-03-07): Updated the Codex integration design.
@@ -188,6 +190,7 @@ All orchestrator-owned state lives under `.vibrant/` at the project root.
 │   ├── questions.json
 │   ├── reviews.json
 │   ├── state.json
+│   ├── workspaces.json
 │   ├── skills/
 │   ├── agents/
 │   │   └── *.json
@@ -237,7 +240,7 @@ Task lifecycle authority lives in workflow policy, not in arbitrary callers patc
 
 ### 4.4 Consensus Store
 
-`consensus.md` remains human-readable and versioned. The orchestrator writes it in response to typed MCP commands such as consensus updates or appended decisions. The Gatekeeper never writes the file directly.
+`consensus.md` remains human-readable and versioned. The orchestrator writes it in response to typed MCP commands such as whole-document writes or context/status updates. The Gatekeeper never writes the file directly.
 
 ### 4.5 Question Store (`questions.json`)
 
@@ -265,6 +268,20 @@ Execution is **attempt-centric**. Each worker attempt persists:
 - timestamps
 
 Attempt state is separate from roadmap task state.
+
+Workspace metadata is persisted separately in `workspaces.json`. Each record
+tracks the isolated git worktree used by an attempt, including:
+
+- `workspace_id`
+- `task_id`
+- `attempt_id`
+- `path`
+- `branch_name`
+- `target_ref`
+- `base_commit`
+- `result_commit`
+- status
+- timestamps
 
 ### 4.7 Review Ticket Store (`reviews.json`)
 
@@ -427,6 +444,15 @@ Runtime is the generic agent mechanism shared by Gatekeeper and workers. It must
 
 Runtime publishes canonical events only. It does not shape TUI conversation history.
 
+Runtime may surface provider-side interactive requests generically through canonical `request opened` and `request resolved` events plus runtime handle metadata. However, that capability is not permission for every role to pause for input.
+
+Policy rules:
+
+- Gatekeeper may remain interactive and may enter `awaiting_input`.
+- Worker-style agents such as code, validation, and merge agents must auto-reject provider or host requests in v1.
+- A worker attempt must not rely on human input to make forward progress.
+- If a worker reaches `awaiting_input`, that is an orchestration-policy violation and must be treated as an error path, not as a normal resumable workflow.
+
 ### 6.9 Conversation Stream
 
 Conversation stream owns:
@@ -476,14 +502,21 @@ Every canonical event must carry:
 - `sequence`
 - `type`
 - `timestamp`
+- `role`
+- `agent_id`
+- `run_id`
 
 Routing fields may include:
 
 - `origin`
 - `provider`
-- `agent_id`
-- `task_id`
+- `conversation_id`
+- `attempt_id`
 - `provider_thread_id`
+
+Task identity is owned by attempts, reviews, and workspace metadata. Generic
+runtime events must not rely on `task_id` as a surrogate run identifier.
+Task-aware UI surfaces should project task context from attempt state.
 
 Required lifecycle coverage:
 
@@ -524,6 +557,8 @@ The Gatekeeper may not:
 - mutate workflow state by prose output
 - resolve user answers itself
 - control worker lifecycle directly
+
+In v1, the Gatekeeper is also the only first-party role that is expected to participate in interactive request/response flows. Worker-style agents remain autonomous and must auto-reject such requests.
 
 ### 9.3 Prompt Expectations
 
@@ -577,6 +612,8 @@ Pipeline:
 
 Retry is review-driven and attempt-scoped. A retry creates a new attempt against a versioned task definition. Escalation blocks the task until user or Gatekeeper action resolves it.
 
+Interactive provider requests from worker attempts are not a supported escalation path in v1. User-facing escalation flows are Gatekeeper-owned.
+
 ---
 
 ## 12. Git Workflow & Isolation
@@ -585,17 +622,25 @@ Retry is review-driven and attempt-scoped. A retry creates a new attempt against
 
 The workspace service owns:
 
-- prepare task workspace
-- collect review diff
-- reset workspace
-- merge task result
-- discard workspace
+- create isolated git worktrees under a workspace root
+- persist workspace metadata, base commit, and result commit
+- collect review diffs from `git diff --binary <base_commit>..<result_commit>`
+- create isolated integration worktrees for acceptance-time merge handling
+- reset or discard worktrees safely
+
+For the first implementation, task execution requires a clean target repo. The
+orchestrator must reject starting a task if the target branch has uncommitted
+changes that would make the worktree base ambiguous.
 
 ### 12.2 Merge Process
 
-1. Accepted work is merged by the orchestrator.
-2. Merge conflicts create merge follow-up handling through review control and merge agents.
-3. Merge failure is modeled as a review/control-plane event, not as an implicit text verdict.
+1. Task execution creates a dedicated branch and git worktree from the current target ref.
+2. If the attempt produces changes without a commit, the orchestrator creates a bot-authored result commit before review.
+3. Review artifacts are grounded in the git result: base commit, result commit, and binary diff.
+4. Accepted work is merged in a fresh integration worktree created from the latest target ref.
+5. If the merge succeeds, validation runs in the integration worktree before the target branch is advanced.
+6. If the merge conflicts, review control hands the integration workspace to a merge-resolution path instead of copying files into the project root.
+7. Merge failure is modeled as a review/control-plane event, not as an implicit text verdict.
 
 ---
 

@@ -632,8 +632,9 @@ class AgentOutput(Static):
         state.summary.latest_run_id = run.identity.run_id
         state.latest_agent_id = run.identity.agent_id
         state.latest_status = run.lifecycle.status.value
-        if run.identity.task_id and run.identity.task_id not in state.summary.task_ids:
-            state.summary.task_ids.append(run.identity.task_id)
+        task_id = getattr(run.identity, "task_id", None)
+        if isinstance(task_id, str) and task_id and task_id not in state.summary.task_ids:
+            state.summary.task_ids.append(task_id)
         if run.identity.agent_id not in state.summary.agent_ids:
             state.summary.agent_ids.append(run.identity.agent_id)
         if not state.summary.provider_thread_id and run.provider.provider_thread_id:

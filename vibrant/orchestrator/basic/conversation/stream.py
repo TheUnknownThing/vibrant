@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Mapping
 from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
 
 from vibrant.providers.base import CanonicalEvent
 
-from ...types import (
-    AgentConversationEntry,
-    AgentConversationView,
-    AgentStreamCallback,
-    AgentStreamEvent,
-    StreamSubscription,
-    utc_now,
-)
+from ...types import AgentConversationEntry, AgentConversationView, AgentStreamCallback, AgentStreamEvent, StreamSubscription, utc_now
 from .store import ConversationStore
 
 
@@ -37,26 +30,23 @@ class ConversationStreamService:
     def __init__(self, store: ConversationStore) -> None:
         self.store = store
         self._subscribers: dict[str, list[AgentStreamCallback]] = {}
-        self._agent_conversations: dict[str, str] = {}
+        self._run_conversations: dict[str, str] = {}
         for manifest in self.store.list_manifests():
-            for agent_id in manifest.agent_ids:
-                self._agent_conversations[agent_id] = manifest.conversation_id
+            for run_id in manifest.run_ids:
+                self._run_conversations[run_id] = manifest.conversation_id
 
-    def bind_agent(
+    def bind_run(
         self,
         *,
         conversation_id: str,
-        agent_id: str,
-        task_id: str | None,
-        provider_thread_id: str | None = None,
+        run_id: str,
     ) -> None:
-        self.store.bind_agent(
+        manifest = self.store.bind_run(
             conversation_id=conversation_id,
-            agent_id=agent_id,
-            task_id=task_id,
-            provider_thread_id=provider_thread_id,
+            run_id=run_id,
         )
-        self._agent_conversations[agent_id] = conversation_id
+        for manifest_run_id in manifest.run_ids:
+            self._run_conversations[manifest_run_id] = conversation_id
 
     def record_host_message(
         self,
@@ -105,8 +95,7 @@ class ConversationStreamService:
             self._apply_frame(entries, frame)
         return AgentConversationView(
             conversation_id=conversation_id,
-            agent_ids=list(manifest.agent_ids),
-            task_ids=list(manifest.task_ids),
+            run_ids=list(manifest.run_ids),
             active_turn_id=manifest.active_turn_id,
             entries=entries,
             updated_at=manifest.updated_at,
@@ -151,9 +140,9 @@ class ConversationStreamService:
         return stored
 
     def _resolve_conversation_id(self, event: CanonicalEvent) -> str | None:
-        agent_id = event.get("agent_id")
-        if isinstance(agent_id, str) and agent_id:
-            return self._agent_conversations.get(agent_id)
+        run_id = event.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            return self._run_conversations.get(run_id)
         return None
 
     def _project_event_types(self, event: CanonicalEvent) -> list[tuple[str, str | None, Mapping[str, Any] | None]]:
@@ -201,13 +190,14 @@ class ConversationStreamService:
                 progress_item_id = progress_item.get("id")
                 if isinstance(progress_item_id, str) and progress_item_id:
                     item_id = progress_item_id
+        run_id = _coerce_text(event, "run_id")
         return AgentStreamEvent(
             conversation_id=conversation_id,
             entry_id=str(uuid4()),
             source_event_id=_coerce_text(event, "event_id"),
             sequence=self.store.allocate_sequence(conversation_id),
             agent_id=_coerce_text(event, "agent_id"),
-            run_id=_coerce_text(event, "run_id"),
+            run_id=run_id,
             task_id=_coerce_text(event, "task_id"),
             turn_id=turn_id if isinstance(turn_id, str) else None,
             item_id=item_id if isinstance(item_id, str) else None,
@@ -318,7 +308,7 @@ def _coerce_text(event: Mapping[str, Any], key: str) -> str | None:
 
 
 def _payload(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "agent_id", "task_id"}}
+    payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "agent_id"}}
     return payload or None
 
 

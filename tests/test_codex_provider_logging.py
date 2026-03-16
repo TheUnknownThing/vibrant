@@ -20,14 +20,13 @@ def _make_agent_record(
     *,
     agent_id: str,
     run_id: str | None = None,
-    task_id: str,
     provider: dict[str, Any] | None = None,
 ) -> AgentRecord:
     return AgentRecord(
         identity={
-            "agent_id": agent_id,
             "run_id": run_id or agent_id,
-            "task_id": task_id,
+            "agent_id": agent_id,
+            "role": AgentType.CODE.value,
             "type": AgentType.CODE,
         },
         provider=provider or {},
@@ -82,7 +81,6 @@ class TestCodexProviderLogging:
         agent = _make_agent_record(
             agent_id="agent-task-001",
             run_id="run-task-001",
-            task_id="task-001",
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),
                 "canonical_event_log": str(tmp_path / "canonical.ndjson"),
@@ -121,7 +119,6 @@ class TestCodexProviderLogging:
         agent = _make_agent_record(
             agent_id="agent-task-002",
             run_id="run-task-002",
-            task_id="task-002",
         )
         adapter = CodexProviderAdapter(client=client, cwd=str(tmp_path), agent_record=agent)
 
@@ -139,7 +136,6 @@ class TestCodexProviderLogging:
         agent = _make_agent_record(
             agent_id="agent-auth-redact",
             run_id="run-auth-redact",
-            task_id="task-auth-redact",
             provider={
                 "native_event_log": str(tmp_path / "native.ndjson"),
                 "canonical_event_log": str(tmp_path / "canonical.ndjson"),
@@ -167,7 +163,7 @@ async def test_real_agent_run_populates_both_logs(tmp_path: Path):
     if not codex_binary:
         pytest.skip("codex CLI is not available")
 
-    agent = _make_agent_record(agent_id="agent-task-real-log", task_id="task-real-log")
+    agent = _make_agent_record(agent_id="agent-task-real-log", run_id="run-task-real-log")
     adapter = CodexProviderAdapter(cwd=str(tmp_path), codex_binary=codex_binary, agent_record=agent)
 
     await adapter.start_session(cwd=str(tmp_path))

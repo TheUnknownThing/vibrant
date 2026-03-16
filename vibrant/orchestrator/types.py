@@ -8,9 +8,8 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from vibrant.agents.runtime import InputRequest, NormalizedRunResult, RunState
-from vibrant.models.agent import AgentRunRecord
-from vibrant.models.task import TaskStatus
+from vibrant.agents.runtime import InputRequest
+from vibrant.models.agent import AgentStatus, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent
 
 if TYPE_CHECKING:
@@ -80,6 +79,21 @@ class ReviewTicketStatus(str, Enum):
     ESCALATED = "escalated"
 
 
+class WorkspaceKind(str, Enum):
+    TASK = "task"
+    INTEGRATION = "integration"
+
+
+class WorkspaceStatus(str, Enum):
+    ACTIVE = "active"
+    NO_CHANGES = "no_changes"
+    RESULT_CAPTURED = "result_captured"
+    INTEGRATING = "integrating"
+    MERGED = "merged"
+    CONFLICTED = "conflicted"
+    FAILED = "failed"
+
+
 @dataclass(slots=True)
 class GatekeeperSessionSnapshot:
     agent_id: str | None = None
@@ -94,13 +108,9 @@ class GatekeeperSessionSnapshot:
 
 
 @dataclass(slots=True)
-class BoundAgentCapabilities:
+class AgentMCPBinding:
     principal: MCPPrincipal
-    tool_names: list[str]
-    resource_names: list[str]
-    provider_binding: Mapping[str, Any]
-    access: MCPAccessDescriptor | None = None
-    mcp_server: Any | None = None
+    access: MCPAccessDescriptor
 
 
 @dataclass(slots=True)
@@ -127,6 +137,53 @@ class AttemptRecord:
 
 
 @dataclass(slots=True)
+class AttemptRecoveryState:
+    attempt_id: str
+    task_id: str
+    status: AttemptStatus
+    run_id: str | None
+    run_status: str | None
+    workspace_path: str | None
+    live: bool = False
+
+
+@dataclass(slots=True)
+class AttemptExecutionView:
+    attempt_id: str
+    task_id: str
+    status: AttemptStatus
+    workspace_id: str
+    conversation_id: str | None
+    run_id: str | None
+    run_status: str | None
+    provider_thread_id: str | None = None
+    resumable: bool = False
+    live: bool = False
+    awaiting_input: bool = False
+    input_requests: list[InputRequest] = field(default_factory=list)
+    updated_at: str | None = None
+
+
+@dataclass(slots=True)
+class AttemptExecutionSnapshot:
+    attempt_id: str
+    task_id: str
+    status: AttemptStatus
+    workspace_id: str
+    workspace_path: str | None
+    conversation_id: str | None
+    run_id: str | None
+    run_status: str | None
+    provider_resume_handle: ProviderResumeHandle | None = None
+    provider_thread_id: str | None = None
+    resumable: bool = False
+    live: bool = False
+    awaiting_input: bool = False
+    input_requests: list[InputRequest] = field(default_factory=list)
+    updated_at: str | None = None
+
+
+@dataclass(slots=True)
 class AttemptCompletion:
     attempt_id: str
     task_id: str
@@ -145,14 +202,17 @@ class AttemptCompletion:
 class DiffArtifact:
     workspace_id: str
     path: str
+    base_commit: str | None = None
+    result_commit: str | None = None
     summary: str | None = None
 
 
 @dataclass(slots=True)
 class MergeOutcome:
-    status: Literal["merged", "conflicted", "failed"]
+    status: Literal["merged", "conflicted", "failed", "validation_failed", "dirty_target", "stale_target"]
     message: str | None = None
     follow_up_required: bool = False
+    integration_commit: str | None = None
 
 
 @dataclass(slots=True)
@@ -162,6 +222,15 @@ class WorkspaceHandle:
     path: str
     branch: str
     base_branch: str
+    attempt_id: str | None = None
+    kind: WorkspaceKind = WorkspaceKind.TASK
+    target_ref: str = ""
+    base_commit: str | None = None
+    result_commit: str | None = None
+    integration_commit: str | None = None
+    status: WorkspaceStatus = WorkspaceStatus.ACTIVE
+    created_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)
@@ -175,6 +244,9 @@ class ReviewTicket:
     status: ReviewTicketStatus = ReviewTicketStatus.PENDING
     summary: str | None = None
     diff_ref: str | None = None
+    base_commit: str | None = None
+    result_commit: str | None = None
+    integration_commit: str | None = None
     created_at: str = field(default_factory=utc_now)
     resolved_at: str | None = None
     resolution_reason: str | None = None
@@ -221,6 +293,31 @@ class ConversationSummary:
 
 
 @dataclass(slots=True)
+class QuestionView:
+    question_id: str
+    text: str
+    priority: QuestionPriority
+    status: QuestionStatus
+    blocking_scope: str
+    task_id: str | None = None
+    answer: str | None = None
+    withdrawn_reason: str | None = None
+
+    @classmethod
+    def from_record(cls, record: QuestionRecord) -> "QuestionView":
+        return cls(
+            question_id=record.question_id,
+            text=record.text,
+            priority=record.priority,
+            status=record.status,
+            blocking_scope=record.blocking_scope,
+            task_id=record.task_id,
+            answer=record.answer,
+            withdrawn_reason=record.withdrawn_reason,
+        )
+
+
+@dataclass(slots=True)
 class AgentStreamEvent:
     conversation_id: str
     entry_id: str
@@ -228,7 +325,6 @@ class AgentStreamEvent:
     sequence: int
     agent_id: str | None
     run_id: str | None
-    task_id: str | None
     turn_id: str | None
     item_id: str | None
     type: Literal[
@@ -250,6 +346,7 @@ class AgentStreamEvent:
     text: str | None
     payload: Mapping[str, Any] | None
     created_at: str
+    task_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -266,8 +363,7 @@ class AgentConversationEntry:
 @dataclass(slots=True)
 class AgentConversationView:
     conversation_id: str
-    agent_ids: list[str]
-    task_ids: list[str]
+    run_ids: list[str]
     active_turn_id: str | None
     entries: list[AgentConversationEntry]
     updated_at: str | None
@@ -275,6 +371,7 @@ class AgentConversationView:
 
 AgentStreamCallback = Callable[[AgentStreamEvent], Any]
 CanonicalEventHandler = Callable[[CanonicalEvent], Any]
+ProviderAdapterFactory = Callable[..., Any]
 
 
 class StreamSubscription(Protocol):
@@ -293,13 +390,25 @@ class WorkflowState:
 
 
 @dataclass(slots=True)
+class WorkflowSessionSnapshot:
+    session_id: str
+    started_at: str
+    status: WorkflowStatus
+    resume_status: WorkflowStatus | None
+    concurrency_limit: int
+    gatekeeper: GatekeeperSessionSnapshot
+    total_agent_spawns: int = 0
+    pending_question_ids: tuple[str, ...] = ()
+    active_attempt_ids: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
 class WorkflowSnapshot:
     status: WorkflowStatus
     concurrency_limit: int
     gatekeeper: GatekeeperSessionSnapshot
     pending_question_ids: tuple[str, ...]
     active_attempt_ids: tuple[str, ...]
-    active_agent_ids: tuple[str, ...]
 
 
 @dataclass(slots=True)
@@ -314,18 +423,16 @@ class RuntimeHandleSnapshot:
 
 @dataclass(slots=True)
 class RuntimeExecutionResult:
-    agent_record: AgentRunRecord
-    events: list[CanonicalEvent] = field(default_factory=list)
+    run_id: str
+    agent_id: str
+    role: str
+    status: AgentStatus
     summary: str | None = None
     error: str | None = None
-    turn_result: Any | None = None
-    state: RunState | None = None
     awaiting_input: bool = False
+    provider_events_ref: str | None = None
     provider_thread_id: str | None = None
-    provider_thread_path: str | None = None
-    provider_resume_cursor: dict[str, Any] | None = None
     input_requests: list[InputRequest] = field(default_factory=list)
-    normalized_result: NormalizedRunResult | None = None
 
 
 @dataclass(slots=True)
@@ -375,16 +482,52 @@ class AgentOutput:
 
 
 @dataclass(slots=True)
-class AgentSnapshotIdentity:
-    agent_id: str
-    run_id: str
-    task_id: str
+class RoleSnapshot:
     role: str
-    agent_type: str | None = None
+    scope_types: tuple[str, ...] = ()
+    instance_count: int = 0
+    active_run_count: int = 0
 
 
 @dataclass(slots=True)
-class AgentSnapshotRuntime:
+class AgentInstanceIdentitySnapshot:
+    agent_id: str
+    role: str
+
+
+@dataclass(slots=True)
+class AgentInstanceScopeSnapshot:
+    scope_type: str
+    scope_id: str | None = None
+
+
+@dataclass(slots=True)
+class AgentInstanceProviderSnapshot:
+    kind: str
+    transport: str
+    runtime_mode: str
+
+
+@dataclass(slots=True)
+class AgentInstanceSnapshot:
+    identity: AgentInstanceIdentitySnapshot
+    scope: AgentInstanceScopeSnapshot
+    provider: AgentInstanceProviderSnapshot
+    latest_run_id: str | None = None
+    active_run_id: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class AgentRunIdentitySnapshot:
+    agent_id: str
+    run_id: str
+    role: str
+
+
+@dataclass(slots=True)
+class AgentRunRuntimeSnapshot:
     status: str
     state: str
     has_handle: bool
@@ -398,20 +541,20 @@ class AgentSnapshotRuntime:
 
 
 @dataclass(slots=True)
-class AgentSnapshotWorkspace:
+class AgentRunWorkspaceSnapshot:
     branch: str | None = None
     worktree_path: str | None = None
 
 
 @dataclass(slots=True)
-class AgentSnapshotOutcome:
+class AgentRunOutcomeSnapshot:
     summary: str | None = None
     error: str | None = None
     output: AgentOutput | None = None
 
 
 @dataclass(slots=True)
-class AgentSnapshotProvider:
+class AgentRunProviderSnapshot:
     thread_id: str | None = None
     thread_path: str | None = None
     resume_cursor: dict[str, Any] | None = None
@@ -420,23 +563,18 @@ class AgentSnapshotProvider:
 
 
 @dataclass(slots=True)
-class OrchestratorAgentSnapshot:
-    identity: AgentSnapshotIdentity
-    runtime: AgentSnapshotRuntime
-    workspace: AgentSnapshotWorkspace = field(default_factory=AgentSnapshotWorkspace)
-    outcome: AgentSnapshotOutcome = field(default_factory=AgentSnapshotOutcome)
-    provider: AgentSnapshotProvider = field(default_factory=AgentSnapshotProvider)
+class AgentRunSnapshot:
+    identity: AgentRunIdentitySnapshot
+    runtime: AgentRunRuntimeSnapshot
+    workspace: AgentRunWorkspaceSnapshot = field(default_factory=AgentRunWorkspaceSnapshot)
+    outcome: AgentRunOutcomeSnapshot = field(default_factory=AgentRunOutcomeSnapshot)
+    provider: AgentRunProviderSnapshot = field(default_factory=AgentRunProviderSnapshot)
 
 
 @dataclass(slots=True)
 class TaskResult:
     task_id: str | None
     outcome: str
-    task_status: TaskStatus | None = None
-    agent_record: AgentRunRecord | None = None
-    gatekeeper_result: NormalizedRunResult | None = None
-    merge_result: MergeOutcome | None = None
-    events: list[CanonicalEvent] = field(default_factory=list)
     summary: str | None = None
     error: str | None = None
     worktree_path: str | None = None

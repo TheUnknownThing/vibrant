@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from ..json_store import read_json, write_json
+from ..repository import JsonDataclassMappingRepository
 from ...types import QuestionPriority, QuestionRecord, QuestionStatus, utc_now
 
 
@@ -15,6 +14,13 @@ class QuestionStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self._repository = JsonDataclassMappingRepository(
+            self.path,
+            record_type=QuestionRecord,
+            key_for=lambda record: record.question_id,
+            key_field="question_id",
+            normalize_payload=_normalize_question_payload,
+        )
 
     def list(self, *, status: QuestionStatus | None = None) -> list[QuestionRecord]:
         records = list(self._load_records().values())
@@ -33,7 +39,7 @@ class QuestionStore:
         ]
 
     def get(self, question_id: str) -> QuestionRecord | None:
-        return self._load_records().get(question_id)
+        return self._repository.get(question_id)
 
     def create(
         self,
@@ -61,7 +67,7 @@ class QuestionStore:
             source_agent_id=_optional_string(source_agent_id),
             source_conversation_id=_optional_string(source_conversation_id),
             source_turn_id=_optional_string(source_turn_id),
-            blocking_scope=blocking_scope,
+            blocking_scope=_parse_scope(blocking_scope),
             task_id=_optional_string(task_id),
         )
         records[record.question_id] = record
@@ -97,44 +103,10 @@ class QuestionStore:
         return record
 
     def _load_records(self) -> dict[str, QuestionRecord]:
-        raw = read_json(self.path, default={})
-        if not isinstance(raw, dict):
-            return {}
-
-        records: dict[str, QuestionRecord] = {}
-        for question_id, payload in raw.items():
-            if not isinstance(payload, dict):
-                continue
-            try:
-                records[question_id] = QuestionRecord(
-                    question_id=str(payload.get("question_id") or question_id),
-                    text=str(payload["text"]).strip(),
-                    priority=QuestionPriority(str(payload.get("priority", QuestionPriority.BLOCKING.value))),
-                    source_role=str(payload.get("source_role") or "gatekeeper"),
-                    source_agent_id=_optional_string(payload.get("source_agent_id")),
-                    source_conversation_id=_optional_string(payload.get("source_conversation_id")),
-                    source_turn_id=_optional_string(payload.get("source_turn_id")),
-                    blocking_scope=_parse_scope(payload.get("blocking_scope")),
-                    task_id=_optional_string(payload.get("task_id")),
-                    status=QuestionStatus(str(payload.get("status", QuestionStatus.PENDING.value))),
-                    answer=_optional_string(payload.get("answer")),
-                    created_at=str(payload.get("created_at") or utc_now()),
-                    updated_at=str(payload.get("updated_at") or payload.get("created_at") or utc_now()),
-                    withdrawn_reason=_optional_string(payload.get("withdrawn_reason")),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-        return records
+        return self._repository.load_all()
 
     def _save_records(self, records: dict[str, QuestionRecord]) -> None:
-        write_json(
-            self.path,
-            {
-                question_id: asdict(record)
-                | {"priority": record.priority.value, "status": record.status.value}
-                for question_id, record in records.items()
-            },
-        )
+        self._repository.save_all(records)
 
 
 def _optional_string(value: object) -> str | None:
@@ -151,3 +123,25 @@ def _parse_scope(value: object) -> str:
     if not normalized:
         raise ValueError("Question blocking scope must not be empty")
     return normalized
+
+
+def _normalize_question_payload(payload: dict[str, object]) -> dict[str, object] | None:
+    try:
+        return {
+            "question_id": str(payload["question_id"]),
+            "text": str(payload["text"]).strip(),
+            "priority": QuestionPriority(str(payload.get("priority", QuestionPriority.BLOCKING.value))),
+            "source_role": str(payload.get("source_role") or "gatekeeper"),
+            "source_agent_id": _optional_string(payload.get("source_agent_id")),
+            "source_conversation_id": _optional_string(payload.get("source_conversation_id")),
+            "source_turn_id": _optional_string(payload.get("source_turn_id")),
+            "blocking_scope": _parse_scope(payload.get("blocking_scope")),
+            "task_id": _optional_string(payload.get("task_id")),
+            "status": QuestionStatus(str(payload.get("status", QuestionStatus.PENDING.value))),
+            "answer": _optional_string(payload.get("answer")),
+            "created_at": str(payload.get("created_at") or utc_now()),
+            "updated_at": str(payload.get("updated_at") or payload.get("created_at") or utc_now()),
+            "withdrawn_reason": _optional_string(payload.get("withdrawn_reason")),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None

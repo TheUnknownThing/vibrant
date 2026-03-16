@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static, TabbedContent, TabPane
@@ -16,6 +17,8 @@ from ..widgets.consensus_view import ConsensusView
 from ..widgets.input_bar import InputBar
 from ..widgets.plan_tree import PlanTree
 from ..widgets.task_status import TaskStatusView
+
+_MOBILE_BREAKPOINT = 110
 
 
 class VibingScreen(Static):
@@ -34,6 +37,18 @@ class VibingScreen(Static):
         width: 34;
         min-width: 24;
         margin-right: 1;
+    }
+
+    VibingScreen.-mobile #vibing-shell {
+        layout: vertical;
+    }
+
+    VibingScreen.-mobile #plan-panel {
+        width: 1fr;
+        min-width: 0;
+        height: 12;
+        margin-right: 0;
+        margin-bottom: 1;
     }
 
     VibingScreen #vibing-main {
@@ -115,6 +130,15 @@ class VibingScreen(Static):
 
     def on_mount(self) -> None:
         self.set_active_tab(self._initial_tab)
+        self._apply_responsive_layout()
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self) -> None:
+        is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        self.set_class(is_mobile, "-mobile")
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.control.id != "workspace-tabs":

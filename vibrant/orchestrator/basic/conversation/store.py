@@ -35,21 +35,18 @@ class ConversationStore:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.frames_dir.mkdir(parents=True, exist_ok=True)
 
-    def bind_agent(
+    def bind_run(
         self,
         *,
         conversation_id: str,
-        agent_id: str,
-        task_id: str | None,
-        provider_thread_id: str | None = None,
+        run_id: str,
     ) -> ConversationManifest:
+        normalized_run_id = run_id.strip()
+        if not normalized_run_id:
+            raise ValueError("bind_run() requires a non-empty run_id")
         manifest = self._ensure_manifest(conversation_id)
-        if agent_id not in manifest.agent_ids:
-            manifest.agent_ids.append(agent_id)
-        if task_id and task_id not in manifest.task_ids:
-            manifest.task_ids.append(task_id)
-        if provider_thread_id:
-            manifest.provider_thread_id = provider_thread_id
+        if normalized_run_id not in manifest.run_ids:
+            manifest.run_ids.append(normalized_run_id)
         manifest.updated_at = utc_now()
         self._save_manifest(manifest)
         return manifest
@@ -73,8 +70,10 @@ class ConversationStore:
             manifest.run_ids.append(event.run_id)
         if event.run_id:
             manifest.latest_run_id = event.run_id
-        if event.turn_id is not None:
+        if event.type == "conversation.turn.started":
             manifest.active_turn_id = event.turn_id
+        elif event.type == "conversation.turn.completed" and manifest.active_turn_id == event.turn_id:
+            manifest.active_turn_id = None
         self._save_manifest(manifest)
 
         payload = asdict(event)
@@ -93,7 +92,8 @@ class ConversationStore:
             if not raw:
                 continue
             payload = json.loads(raw)
-            payload.setdefault("run_id", None)
+            if not isinstance(payload, dict):
+                continue
             frames.append(AgentStreamEvent(**payload))
         return frames
 
@@ -101,10 +101,16 @@ class ConversationStore:
         raw = self._index().get(conversation_id)
         if raw is None:
             return None
-        return ConversationManifest(**raw)
+        return _manifest_from_raw(raw)
 
     def list_manifests(self) -> list[ConversationManifest]:
-        return [ConversationManifest(**payload) for payload in self._index().values()]
+        manifests: list[ConversationManifest] = []
+        for payload in self._index().values():
+            try:
+                manifests.append(_manifest_from_raw(payload))
+            except ValueError:
+                continue
+        return manifests
 
     def update_active_turn(self, conversation_id: str, turn_id: str | None) -> ConversationManifest:
         manifest = self._ensure_manifest(conversation_id)
@@ -134,3 +140,7 @@ class ConversationStore:
 
     def _frames_path(self, conversation_id: str) -> Path:
         return self.frames_dir / f"{conversation_id}.jsonl"
+
+
+def _manifest_from_raw(raw: dict[str, Any]) -> ConversationManifest:
+    return ConversationManifest(**raw)

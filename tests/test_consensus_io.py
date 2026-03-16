@@ -14,27 +14,14 @@ from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
 
 
 SAMPLE_CONTEXT = """## Objectives
-<!-- OBJECTIVES:START -->
 Ship the orchestrator core.
 
 Keep the consensus concise.
-<!-- OBJECTIVES:END -->
-## Design Choices
-<!-- DECISIONS:START -->
-### Decision 1: Use Markdown sections
-- **Date**: 2026-03-07T22:30:00Z
-- **Made By**: `gatekeeper`
-- **Context**: Agents need shared context.
-- **Resolution**: Keep consensus structured.
-- **Impact**: Parser and writer depend on delimiters.
 
-### Decision 2: Pause support in state machine
-- **Date**: 2026-03-08T00:00:00Z
-- **Made By**: `user`
-- **Context**: Operator needs control.
-- **Resolution**: Add PAUSED state.
-- **Impact**: TUI and engine both surface pause.
-<!-- DECISIONS:END -->
+## Notes
+- Decisions are recorded directly in markdown prose.
+- The consensus body is treated as raw text plus metadata.
+
 ## Getting Started
 Read `docs/spec.md` first, then `.vibrant/roadmap.md`."""
 
@@ -137,18 +124,11 @@ with lock_path.open('a+', encoding='utf-8') as handle:
             version=0,
             status=ConsensusStatus.PLANNING,
             context="""## Objectives
-<!-- OBJECTIVES:START -->
 Build the control plane.
-<!-- OBJECTIVES:END -->
-## Design Choices
-<!-- DECISIONS:START -->
-### Decision 1: Use atomic writes
-- **Date**: 2026-03-07T22:15:00Z
-- **Made By**: `gatekeeper`
-- **Context**: Consensus is durable state.
-- **Resolution**: Always write via temp file + rename.
-- **Impact**: Prevents partial writes after crashes.
-<!-- DECISIONS:END -->
+
+## Notes
+Use atomic writes for durable state files.
+
 ## Getting Started
 Read the roadmap, then inspect the current task.""",
         )
@@ -166,5 +146,5 @@ Read the roadmap, then inspect the current task.""",
         assert reparsed.version == 1
         assert reparsed.project == "Vibrant"
         assert reparsed.status is ConsensusStatus.PLANNING
-        assert "### Decision 1: Use atomic writes" in reparsed.context
+        assert "Use atomic writes for durable state files." in reparsed.context
         assert reparsed.context.endswith("Should snapshots stay enabled?")

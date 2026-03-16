@@ -1,16 +1,17 @@
-auth is involved.
 # Testing the MCP Server
 
 > **Status**: developer guide
 > **Date**: 2026-03-15
 
-This guide explains how to run Vibrant's current MCP development server and
-verify connectivity from CLI tools and MCP Inspector.
+This guide covers the current orchestrator-owned MCP surface: a loopback
+FastMCP HTTP host with per-run access enforced by registered bindings.
 
 ## Prerequisites
 
-- Python dependencies installed with uv
+- Python dependencies installed with `uv`
 - Optional MCP dependencies installed:
+- If your shell sets `HTTP_PROXY` or `HTTPS_PROXY`, ensure `NO_PROXY` includes
+  `127.0.0.1,localhost` so loopback MCP traffic stays local
 
 ```bash
 uv sync --extra mcp --dev
@@ -18,7 +19,7 @@ uv sync --extra mcp --dev
 
 ## Current transport model
 
-- The dev launcher is scripts/mcp_dev_server.py
+- The dev launcher is `scripts/mcp_dev_server.py`
 - HTTP is the supported transport for this launcher
 - The server uses a binding header, not bearer-token auth
 - By default, it runs in stateless Streamable HTTP mode
@@ -45,8 +46,8 @@ uv run python scripts/mcp_dev_server.py \
 
 Expected startup output includes:
 
-- Endpoint URL (for example http://127.0.0.1:9000/mcp)
-- Required X-Vibrant-Binding header value
+- Endpoint URL (for example `http://127.0.0.1:9000/mcp`)
+- Required `X-Vibrant-Binding` header value
 - Stateless HTTP mode status
 
 ## Start the server (LAN access)
@@ -74,13 +75,13 @@ npx @modelcontextprotocol/inspector
 In Inspector, use:
 
 - Transport: Streamable HTTP
-- URL: http://<server-host>:<server-port>/mcp
-- Header key: X-Vibrant-Binding
+- URL: `http://<server-host>:<server-port>/mcp`
+- Header key: `X-Vibrant-Binding`
 - Header value: the binding id printed by server startup
 
 Notes:
 
-- For host 0.0.0.0, clients should still connect using a concrete IP or DNS name
+- For host `0.0.0.0`, clients should still connect using a concrete IP or DNS name
 - Binding ids are generated per server start; refresh the header value after restart
 
 ## Optional server modes and flags
@@ -95,7 +96,7 @@ uv run python scripts/mcp_dev_server.py \
   --stateful-http
 ```
 
-In stateful mode, the client must preserve and resend Mcp-Session-Id.
+In stateful mode, the client must preserve and resend `Mcp-Session-Id`.
 
 - Worker-scoped binding:
 
@@ -129,7 +130,7 @@ curl -i -X OPTIONS 'http://127.0.0.1:9000/mcp' \
   -H 'Access-Control-Request-Headers: content-type,x-vibrant-binding'
 ```
 
-Expected result: 200 OK with access-control-allow-* headers.
+Expected result: `200 OK` with `access-control-allow-*` headers.
 
 Protocol-level request example with required headers:
 
@@ -143,29 +144,35 @@ curl -i 'http://127.0.0.1:9000/mcp' \
 
 ## What to test manually
 
-With a gatekeeper binding, verify that expected tools/resources are visible and callable.
+With a gatekeeper binding, verify that expected tools and resources are visible
+and callable.
 
 With a worker binding, verify that the server-side surface is filtered.
 
 Example checks:
 
 - list tools and confirm only expected entries are exposed
-- list resources and read known resources such as vibrant://consensus
-- call vibrant.add_task and read back via vibrant://tasks/<task-id>
+- list resources and read known resources such as `vibrant://consensus`
+- call `vibrant.add_task` and read back via `vibrant://tasks/<task-id>`
 
 ## Automated tests
 
 Relevant tests:
 
-- tests/test_orchestrator_mcp_transport.py
-- tests/test_orchestrator_mcp_surface.py
+- `tests/test_orchestrator_mcp_transport.py`
+- `tests/test_provider_invocation_compiler.py`
+- `tests/test_orchestrator_mcp_surface.py`
 
 Example targeted runs:
 
 ```bash
 uv run pytest -q tests/test_orchestrator_mcp_transport.py
+uv run pytest -q tests/test_provider_invocation_compiler.py
 uv run pytest -q tests/test_orchestrator_mcp_surface.py
 ```
+
+These cover the loopback FastMCP host, binding-based filtering, and provider
+invocation plans that inject the MCP endpoint plus `X-Vibrant-Binding`.
 
 ## Troubleshooting
 
@@ -184,17 +191,17 @@ A preflight request reached an app path without CORS handling.
 
 Fix:
 
-- use the current scripts/mcp_dev_server.py (it installs CORS middleware)
+- use the current `scripts/mcp_dev_server.py` (it installs CORS middleware)
 - restart any old server process still running an older script version
 
 ### -32600 Bad Request: Missing session ID
 
-The server is in stateful mode, but the client is not sending Mcp-Session-Id.
+The server is in stateful mode, but the client is not sending `Mcp-Session-Id`.
 
 Fix:
 
-- prefer default stateless mode (no --stateful-http)
-- or update the client to preserve and resend Mcp-Session-Id
+- prefer default stateless mode (no `--stateful-http`)
+- or update the client to preserve and resend `Mcp-Session-Id`
 
 ### address already in use
 
@@ -209,5 +216,5 @@ uv run python scripts/mcp_dev_server.py \
 
 ## Related docs
 
-- docs/mcp_testing.md
-- scripts/mcp_dev_server.py
+- `docs/mcp_testing.md`
+- `scripts/mcp_dev_server.py`

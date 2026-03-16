@@ -59,7 +59,3 @@ def build_user_submission_request(text: str, pending_question: QuestionRecord | 
         ),
         related_question_id=pending_question.question_id,
     )
-
-
-def build_user_input_plan(text: str, pending_question: QuestionRecord | None) -> GatekeeperSubmissionRequest:
-    return build_user_submission_request(text, pending_question)

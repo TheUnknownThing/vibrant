@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -21,7 +21,6 @@ class _RuntimeSubscription:
     callback: CanonicalEventHandler
     agent_id: str | None = None
     run_id: str | None = None
-    task_id: str | None = None
     event_types: frozenset[str] | None = None
 
 
@@ -31,7 +30,6 @@ class _LiveRun:
     runtime: AgentRuntime
     handle: AgentHandle
     sequence: int = 0
-    events: list[CanonicalEvent] = field(default_factory=list)
 
 
 class _EventSubscriptionHandle:
@@ -137,18 +135,16 @@ class AgentRuntimeService:
         result = await live_run.handle.wait()
         provider_thread = result.provider_thread
         execution_result = RuntimeExecutionResult(
-            agent_record=result.agent_record,
-            events=list(live_run.events),
+            run_id=result.run_id,
+            agent_id=result.agent_id,
+            role=result.role,
+            status=result.status,
             summary=result.summary,
             error=result.error,
-            turn_result=result.turn_result,
-            state=result.state,
             awaiting_input=result.awaiting_input,
+            provider_events_ref=result.provider_events_ref,
             provider_thread_id=provider_thread.thread_id,
-            provider_thread_path=provider_thread.thread_path,
-            provider_resume_cursor=provider_thread.resume_cursor,
             input_requests=list(result.input_requests),
-            normalized_result=result,
         )
         if live_run.handle.done:
             self._forget_live_run(run_id, live_run.agent_record.identity.agent_id)
@@ -176,13 +172,19 @@ class AgentRuntimeService:
             input_requests=live_run.handle.input_requests,
         )
 
+    def live_run_ids(self) -> set[str]:
+        return {
+            run_id
+            for run_id, live_run in self._runs.items()
+            if not live_run.handle.done
+        }
+
     def subscribe_canonical_events(
         self,
         callback: CanonicalEventHandler,
         *,
         agent_id: str | None = None,
         run_id: str | None = None,
-        task_id: str | None = None,
         event_types: Sequence[str] | None = None,
     ) -> _EventSubscriptionHandle:
         normalized_types = (
@@ -194,7 +196,6 @@ class AgentRuntimeService:
             callback=callback,
             agent_id=agent_id,
             run_id=run_id,
-            task_id=task_id,
             event_types=normalized_types,
         )
         self._subscriptions.append(subscription)
@@ -227,9 +228,6 @@ class AgentRuntimeService:
 
         async def _bridge(event: CanonicalEvent) -> None:
             normalized = self._normalize_event(agent_record, event)
-            live_run = self._runs.get(agent_record.identity.run_id)
-            if live_run is not None:
-                live_run.events.append(normalized)
             await self._publish(normalized)
             if original_callback is not None:
                 result = original_callback(event)
@@ -249,7 +247,7 @@ class AgentRuntimeService:
         normalized: dict[str, Any] = dict(event)
         normalized.setdefault("agent_id", agent_record.identity.agent_id)
         normalized.setdefault("run_id", agent_record.identity.run_id)
-        normalized.setdefault("task_id", agent_record.identity.task_id)
+        normalized.setdefault("role", agent_record.identity.role)
         normalized.setdefault("provider", agent_record.provider.kind)
         normalized.setdefault("origin", "provider")
         normalized.setdefault("timestamp", normalized.get("timestamp"))
@@ -270,8 +268,6 @@ class AgentRuntimeService:
         if subscription.agent_id is not None and event.get("agent_id") != subscription.agent_id:
             return False
         if subscription.run_id is not None and event.get("run_id") != subscription.run_id:
-            return False
-        if subscription.task_id is not None and event.get("task_id") != subscription.task_id:
             return False
         if subscription.event_types is not None and str(event.get("type") or "") not in subscription.event_types:
             return False

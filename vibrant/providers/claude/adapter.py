@@ -614,7 +614,6 @@ class ClaudeProviderAdapter(ProviderAdapter):
         if self.agent_record is not None:
             event["agent_id"] = self.agent_record.identity.agent_id
             event["run_id"] = self.agent_record.identity.run_id
-            event["task_id"] = self.agent_record.identity.task_id
         if self.provider_thread_id is not None:
             event["provider_thread_id"] = self.provider_thread_id
         event.update(payload)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from ...types import GatekeeperSessionSnapshot, QuestionRecord
+from ...types import GatekeeperSessionSnapshot, QuestionView
 
 
 class GatekeeperMessageKind(str, Enum):
@@ -33,8 +33,8 @@ class GatekeeperSubmission:
 class GatekeeperLoopState:
     session: GatekeeperSessionSnapshot
     conversation_id: str | None
-    pending_question: QuestionRecord | None
-    pending_questions: tuple[QuestionRecord, ...] = ()
+    pending_question: QuestionView | None
+    pending_questions: tuple[QuestionView, ...] = ()
     last_submission_id: str | None = None
     last_error: str | None = None
     busy: bool = False

@@ -34,11 +34,14 @@ def build_task_execution_prompt(
             "## Rules",
             f"1. You are working in a git worktree on branch `{branch}`.",
             "2. Do NOT modify files outside your task scope.",
-            "3. When you are done, provide a summary (~500 words) of:",
+            "3. Do NOT modify orchestrator-owned `.vibrant` state such as roadmap, consensus, workflow, or review files.",
+            "4. If those orchestrator-owned files should change, describe the proposed change in your summary instead of editing them.",
+            "5. When you are done, provide a summary (~500 words) of:",
             "   - What you changed and why",
             "   - What tests you wrote or ran",
             "   - How your implementation satisfies each acceptance criterion",
+            "   - Any proposed roadmap, consensus, workflow, or review-state changes",
             "   - Any issues or concerns for the next agent",
-            f"4. Commit your changes with a descriptive message prefixed with `[vibrant:{task_id}]`.",
+            f"6. Commit your changes with a descriptive message prefixed with `[vibrant:{task_id}]`.",
         ]
     )

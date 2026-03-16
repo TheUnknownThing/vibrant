@@ -1,6 +1,5 @@
-"""Workspace capability."""
+"""Workspace service exports."""
 
-from .capability import WorkspaceCapability
 from .service import WorkspaceService
 
-__all__ = ["WorkspaceCapability", "WorkspaceService"]
+__all__ = ["WorkspaceService"]

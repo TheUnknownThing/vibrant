@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from .types import OrchestratorAgentSnapshot, TaskResult
+from .types import AgentRunSnapshot, TaskResult
 
 if TYPE_CHECKING:
     from .bootstrap import Orchestrator, create_orchestrator
@@ -10,8 +10,8 @@ if TYPE_CHECKING:
     from .mcp import OrchestratorMCPServer
 
 __all__ = [
+    "AgentRunSnapshot",
     "Orchestrator",
-    "OrchestratorAgentSnapshot",
     "OrchestratorFacade",
     "OrchestratorMCPServer",
     "OrchestratorSnapshot",

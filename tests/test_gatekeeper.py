@@ -174,8 +174,9 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
 
     prior_record = AgentRecord(
         identity={
+            "run_id": "gatekeeper-project_start-old",
             "agent_id": "gatekeeper-project_start-old",
-            "task_id": "gatekeeper-project_start",
+            "role": AgentType.GATEKEEPER.value,
             "type": AgentType.GATEKEEPER,
         },
         lifecycle={"status": AgentStatus.COMPLETED},
@@ -184,9 +185,9 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
             resume_cursor={"threadId": "thread-existing"},
         ),
     )
-    agents_dir = tmp_path / ".vibrant" / "agents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / f"{prior_record.identity.agent_id}.json").write_text(
+    runs_dir = tmp_path / ".vibrant" / "agent-runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / f"{prior_record.identity.run_id}.json").write_text(
         prior_record.model_dump_json(indent=2) + "\n",
         encoding="utf-8",
     )
@@ -210,9 +211,9 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     assert result.succeeded is True
     assert result.state is RunState.COMPLETED
     assert result.provider_thread.thread_id == "thread-existing"
-    assert result.agent_record.identity.type is AgentType.GATEKEEPER
-    assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
-    assert result.agent_record.context.prompt_used is not None
+    assert result.role == AgentType.GATEKEEPER.value
+    assert result.status is AgentStatus.COMPLETED
+    assert result.run_id.startswith("gatekeeper-user_conversation-")
 
 
 @pytest.mark.asyncio
@@ -249,7 +250,7 @@ async def test_gatekeeper_start_run_surfaces_provider_requests_through_agent_han
     assert adapter.respond_calls[0]["request_id"] == "req-1"
     assert adapter.respond_calls[0]["result"] == {"answer": "Use OAuth first."}
     assert result.succeeded is True
-    assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
+    assert result.status is AgentStatus.COMPLETED
     assert "Recorded the user decision." in result.transcript
     assert any(event["type"] == "request.opened" for event in result.events)
     assert any(event["type"] == "request.resolved" for event in result.events)
@@ -278,7 +279,7 @@ async def test_gatekeeper_forwards_canonical_events_to_external_callback(tmp_pat
 
     assert forwarded
     assert forwarded[0]["agent_id"] == "gatekeeper"
-    assert forwarded[0]["task_id"] == "gatekeeper-project_start"
+    assert forwarded[0]["role"] == "gatekeeper"
+    assert forwarded[0].get("task_id") is None
     assert any(event["type"] == "content.delta" for event in forwarded)
-    assert result.agent_record is not None
-    assert result.agent_record.lifecycle.status is AgentStatus.COMPLETED
+    assert result.status is AgentStatus.COMPLETED

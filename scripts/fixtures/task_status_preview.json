@@ -28,7 +28,7 @@
         "Roadmap progress is visible",
         "Current execution details update live"
       ],
-      "prompt": "Read docs/tui.md and docs/tui-todo.md. Replace the stub task-status panel with a real one.",
+      "prompt": "Read docs/tui.md. Replace the stub task-status panel with a real one.",
       "skills": [
         "textual"
       ]

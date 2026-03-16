@@ -30,7 +30,7 @@ def _agent_record(
         identity={
             "run_id": run_id,
             "agent_id": agent_id,
-            "task_id": task_id,
+            "role": AgentType.CODE.value,
             "type": AgentType.CODE,
         },
         lifecycle={"status": status, "started_at": started_at},
