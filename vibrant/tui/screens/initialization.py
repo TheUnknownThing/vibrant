@@ -11,6 +11,7 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Label, Static
 
+from ..utility import initialize_git_repository, is_git_repository, is_under_git_repository
 from ..widgets.multiselect import Multiselect
 from ..widgets.path_autocomplete import PathAutocomplete
 
@@ -119,6 +120,101 @@ class DirectorySelectionScreen(ModalScreen[Path | None]):
         self.dismiss(selected_path.resolve())
 
 
+class GitInitializationScreen(ModalScreen[bool]):
+    """Prompt for Git repository initialization."""
+
+    CSS = """
+    GitInitializationScreen {
+        align: center middle;
+        background: $surface 92%;
+    }
+
+    #git-initialization-modal {
+        width: 72;
+        height: auto;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #git-initialization-title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #git-initialization-body {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+
+    #git-initialization-path {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #git-initialization-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+
+    .git-initialization-button {
+        width: 1fr;
+        margin-right: 2;
+    }
+
+    #git-initialization-cancel {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Initialize Git", show=False),
+    ]
+
+    def __init__(self, target_path: str | Path) -> None:
+        super().__init__(id="git-initialization-screen")
+        self._target_path = Path(target_path).expanduser().resolve()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="git-initialization-modal"):
+            yield Static("Initialize Git Repository", id="git-initialization-title")
+            yield Static(
+                "Vibrant uses Git worktrees for task execution. Initialize a repository in this directory first.",
+                id="git-initialization-body",
+            )
+            yield Static(str(self._target_path), id="git-initialization-path")
+            with Horizontal(id="git-initialization-buttons"):
+                yield Button(
+                    "Initialize Git",
+                    variant="primary",
+                    id="git-initialization-confirm",
+                    classes="git-initialization-button",
+                )
+                yield Button("Cancel", id="git-initialization-cancel", classes="git-initialization-button")
+
+    def on_mount(self) -> None:
+        under_git = is_under_git_repository(self._target_path)
+        if under_git:
+            self.query_one("#git-initialization-body", Static).update(
+                "This directory is under another Git repository. Proceeding will lead to Git in Git! It is recommended to initialize the project in another directory. Do you want to proceed anyway?"
+            )
+        self.query_one("#git-initialization-confirm", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "git-initialization-confirm":
+            self.action_confirm()
+        elif event.button.id == "git-initialization-cancel":
+            self.action_cancel()
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class InitializationScreen(ModalScreen[None]):
     """Full-screen entry flow for uninitialized workspaces."""
 
@@ -196,6 +292,7 @@ class InitializationScreen(ModalScreen[None]):
     def __init__(self, current_directory: str | Path) -> None:
         super().__init__(id="initialization-screen")
         self._current_directory = Path(current_directory).expanduser().resolve()
+        self._pending_initialization_path: Path | None = None
 
     def compose(self) -> ComposeResult:
         accent_color = self.app.theme_variables.get("accent", "yellow")
@@ -243,7 +340,7 @@ class InitializationScreen(ModalScreen[None]):
         self.query_one("#initialization-options", Multiselect).action_select()
 
     async def action_initialize_here(self) -> None:
-        self.post_message(self.InitializeRequested(self._current_directory))
+        self._request_initialization(self._current_directory)
 
     async def action_select_directory(self) -> None:
         self.app.push_screen(
@@ -254,7 +351,32 @@ class InitializationScreen(ModalScreen[None]):
     def _on_directory_selected(self, selected_path: Path | None) -> None:
         if selected_path is None:
             return
-        self.post_message(self.InitializeRequested(selected_path))
+        self._request_initialization(selected_path)
+
+    def _request_initialization(self, target_path: Path) -> None:
+        if is_git_repository(target_path):
+            self.post_message(self.InitializeRequested(target_path))
+            return
+
+        self._pending_initialization_path = target_path
+        self.app.push_screen(
+            GitInitializationScreen(target_path),
+            callback=self._on_git_initialization_selected,
+        )
+
+    def _on_git_initialization_selected(self, confirmed: bool) -> None:
+        target_path = self._pending_initialization_path
+        self._pending_initialization_path = None
+        if not confirmed or target_path is None:
+            return
+
+        try:
+            initialize_git_repository(target_path)
+        except Exception as exc:
+            self.notify(f"Failed to initialize Git repository: {exc}", severity="error")
+            return
+
+        self.post_message(self.InitializeRequested(target_path))
 
     def action_exit_app(self) -> None:
         self.post_message(self.ExitRequested())

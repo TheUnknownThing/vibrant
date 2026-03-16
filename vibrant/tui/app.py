@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -81,6 +82,27 @@ class VibrantApp(App):
         Binding("ctrl+s", "open_settings", "Settings", show=False),
         Binding("ctrl+c", "quit_app", "Quit", show=True),
     ]
+
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: str = "information",
+        timeout: float | None = None,
+        markup: bool = True,
+    ) -> None:
+        """Send notifications without letting arbitrary text break Textual markup parsing."""
+
+        safe_message = escape(message) if markup else message
+        safe_title = escape(title) if markup else title
+        super().notify(
+            safe_message,
+            title=safe_title,
+            severity=severity,
+            timeout=timeout,
+            markup=markup,
+        )
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         current_screen = self.screen

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -202,19 +203,15 @@ class VibrantConfig(BaseModel):
 def find_project_root(start_path: str | Path | None = None) -> Path:
     """Best-effort project-root discovery.
 
-    Walk upward from ``start_path`` until a directory containing either
-    ``.git`` or ``.vibrant`` is found. If neither marker exists, return the
-    starting directory.
+    Walk upward from ``start_path`` until a directory containing `.vibrant` is found.
     """
-
-    candidate = Path(start_path or Path.cwd()).expanduser().resolve()
-    if candidate.is_file():
-        candidate = candidate.parent
-
-    for directory in (candidate, *candidate.parents):
-        if (directory / ".git").exists() or (directory / DEFAULT_CONFIG_DIR).exists():
-            return directory
-    return candidate
+    
+    import os
+    start = Path(start_path or os.getcwd()).expanduser().resolve()
+    for parent in [start] + list(start.parents):
+        if (parent / DEFAULT_CONFIG_DIR).is_dir():
+            return parent
+    return start
 
 
 def resolve_config_path(path: str | Path | None = None, start_path: str | Path | None = None) -> Path:
