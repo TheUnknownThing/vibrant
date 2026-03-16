@@ -8,6 +8,7 @@ from .review import (
     build_task_escalation_trigger_description,
     build_task_failure_trigger_description,
 )
+from .validation_agent import build_validation_prompt
 
 __all__ = [
     "build_gatekeeper_prompt",
@@ -16,5 +17,6 @@ __all__ = [
     "build_task_escalation_trigger_description",
     "build_task_execution_prompt",
     "build_task_failure_trigger_description",
+    "build_validation_prompt",
     "build_user_answer_trigger_description",
 ]
