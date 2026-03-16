@@ -61,6 +61,12 @@ class InterfaceControlPlane:
     def conversation(self, conversation_id: str):
         return self.backend.queries.conversation(conversation_id)
 
+    def list_conversation_summaries(self):
+        return self.backend.queries.list_conversation_summaries()
+
+    def conversation_frames(self, conversation_id: str):
+        return self.backend.queries.conversation_frames(conversation_id)
+
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
         return self.backend.queries.subscribe_conversation(conversation_id, callback, replay=replay)
 

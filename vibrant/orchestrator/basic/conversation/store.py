@@ -16,8 +16,10 @@ class ConversationManifest:
     conversation_id: str
     agent_ids: list[str] = field(default_factory=list)
     task_ids: list[str] = field(default_factory=list)
+    run_ids: list[str] = field(default_factory=list)
     provider_thread_id: str | None = None
     active_turn_id: str | None = None
+    latest_run_id: str | None = None
     updated_at: str = field(default_factory=utc_now)
     next_sequence: int = 1
 
@@ -67,6 +69,10 @@ class ConversationStore:
             manifest.agent_ids.append(event.agent_id)
         if event.task_id and event.task_id not in manifest.task_ids:
             manifest.task_ids.append(event.task_id)
+        if event.run_id and event.run_id not in manifest.run_ids:
+            manifest.run_ids.append(event.run_id)
+        if event.run_id:
+            manifest.latest_run_id = event.run_id
         if event.turn_id is not None:
             manifest.active_turn_id = event.turn_id
         self._save_manifest(manifest)

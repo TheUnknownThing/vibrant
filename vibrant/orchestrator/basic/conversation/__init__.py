@@ -53,6 +53,12 @@ class ConversationCapability:
     def rebuild(self, conversation_id: str) -> AgentConversationView | None:
         return self.stream.rebuild(conversation_id)
 
+    def list_manifests(self) -> list[ConversationManifest]:
+        return self.store.list_manifests()
+
+    def load_frames(self, conversation_id: str) -> list[AgentStreamEvent]:
+        return self.store.load_frames(conversation_id)
+
     def subscribe(
         self,
         conversation_id: str,

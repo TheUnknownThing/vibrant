@@ -38,7 +38,7 @@ class OrchestratorSnapshot:
     status: OrchestratorStatus
     pending_questions: tuple[str, ...]
     question_records: tuple[QuestionRecord, ...]
-    roadmap: RoadmapDocument | None
+    roadmap: RoadmapDocument
     consensus: ConsensusDocument | None
     consensus_path: Path | None
     agent_records: tuple[AgentRunRecord, ...]

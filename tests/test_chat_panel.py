@@ -17,6 +17,7 @@ from vibrant.tui.widgets.conversation_view import (
     ConversationView,
     MessageBlockWidget,
     ReasoningPart,
+    TextPart,
     ToolCallPart,
     _render_blocks,
 )
@@ -292,8 +293,17 @@ async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
                 started_at="2026-03-13T00:00:02Z",
                 finished_at="2026-03-13T00:00:03Z",
             ),
+            AgentConversationEntry(
+                role="assistant",
+                kind="message",
+                turn_id="turn-1",
+                text="I found the **risky** changes.",
+                payload=None,
+                started_at="2026-03-13T00:00:04Z",
+                finished_at="2026-03-13T00:00:04Z",
+            ),
         ],
-        updated_at="2026-03-13T00:00:03Z",
+        updated_at="2026-03-13T00:00:04Z",
     )
 
     app = ChatPanelHarness()
@@ -312,6 +322,7 @@ async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
         assert blocks[1].has_class("assistant-msg") is True
         assert blocks[1].query_one(ReasoningPart).plain_text().startswith("Reasoning...")
         assert blocks[1].query_one(ToolCallPart).plain_text() == "Tool · git diff · done"
+        assert list(blocks[1].query(TextPart))[-1].source == "I found the **risky** changes."
 
 
 def test_render_blocks_groups_assistant_turn_parts_and_omits_turn_status() -> None:

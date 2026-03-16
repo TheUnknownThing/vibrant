@@ -9,6 +9,7 @@ from ..basic import ArtifactsCapability, ConversationCapability, EventLogCapabil
 from ..basic.runtime import AgentRuntimeService
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop import TaskLoop
+from ..types import ConversationSummary
 
 
 @dataclass(slots=True)
@@ -39,6 +40,23 @@ class BasicQueryAdapter:
 
     def conversation(self, conversation_id: str):
         return self.gatekeeper_loop.conversation(conversation_id)
+
+    def list_conversation_summaries(self) -> list[ConversationSummary]:
+        return [
+            ConversationSummary(
+                conversation_id=manifest.conversation_id,
+                agent_ids=list(manifest.agent_ids),
+                task_ids=list(manifest.task_ids),
+                provider_thread_id=manifest.provider_thread_id,
+                active_turn_id=manifest.active_turn_id,
+                latest_run_id=manifest.latest_run_id,
+                updated_at=manifest.updated_at,
+            )
+            for manifest in self.conversations.list_manifests()
+        ]
+
+    def conversation_frames(self, conversation_id: str):
+        return self.conversations.load_frames(conversation_id)
 
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
         return self.gatekeeper_loop.subscribe_conversation(conversation_id, callback, replay=replay)

@@ -26,5 +26,6 @@ vibrant = "vibrant.__main__:main"
 
 [dependency-groups]
 dev = [
+    "py-spy>=0.4.1",
     "textual-dev>=1.8.0",
 ]

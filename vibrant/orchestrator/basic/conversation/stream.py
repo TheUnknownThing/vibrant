@@ -171,11 +171,13 @@ class ConversationStreamService:
         if event_type == "assistant.thinking.completed":
             return [("conversation.assistant.thinking.completed", _coerce_text(event, "text"), None)]
         if event_type == "tool.call.started":
-            return [("conversation.tool_call.started", _coerce_text(event, "name"), _payload(event))]
+            return [("conversation.tool_call.started", _coerce_text(event, "tool_name"), _payload(event))]
         if event_type == "tool.call.delta":
             return [("conversation.tool_call.delta", _coerce_text(event, "delta"), _payload(event))]
         if event_type == "tool.call.completed":
             return [("conversation.tool_call.completed", _coerce_text(event, "result"), _payload(event))]
+        if event_type == "task.progress":
+            return [("conversation.progress", _coerce_text(event, "text"), _payload(event))]
         if event_type in {"request.opened", "user-input.requested"}:
             return [("conversation.request.opened", _request_text(event), _payload(event))]
         if event_type in {"request.resolved", "user-input.resolved"}:
@@ -193,6 +195,12 @@ class ConversationStreamService:
         event_type, text, payload = spec
         turn_id = event.get("turn_id")
         item_id = event.get("item_id")
+        if not isinstance(item_id, str):
+            progress_item = event.get("item")
+            if isinstance(progress_item, Mapping):
+                progress_item_id = progress_item.get("id")
+                if isinstance(progress_item_id, str) and progress_item_id:
+                    item_id = progress_item_id
         return AgentStreamEvent(
             conversation_id=conversation_id,
             entry_id=str(uuid4()),
