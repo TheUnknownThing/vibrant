@@ -141,6 +141,7 @@ class VibrantApp(App):
         if cwd:
             self._settings.default_cwd = cwd
 
+        self.sub_title = _display_path(self._active_directory())
         self.orchestrator: Orchestrator | None = None
         self.orchestrator_facade: OrchestratorFacade | None = None
         self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
@@ -201,6 +202,7 @@ class VibrantApp(App):
             return
 
         self._settings = result
+        self._refresh_app_bar()
         self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
         self._initialize_project_setup()
         self._sync_workspace_screen()
@@ -225,6 +227,7 @@ class VibrantApp(App):
 
         project_root = vibrant_dir.parent
         self._settings.default_cwd = str(project_root)
+        self._refresh_app_bar()
         self._project_root = project_root
         self._initialize_project_setup()
         self._sync_workspace_screen()
@@ -740,6 +743,12 @@ class VibrantApp(App):
             self.orchestrator = None
             self.orchestrator_facade = None
             self.notify(f"Failed to load project state: {exc}", severity="error")
+
+    def _active_directory(self) -> Path:
+        return Path(self._settings.default_cwd or os.getcwd()).expanduser().resolve(strict=False)
+
+    def _refresh_app_bar(self) -> None:
+        self.sub_title = _display_path(self._active_directory())
 
     def _project_has_vibrant_state(self) -> bool:
         return (self._project_root / DEFAULT_CONFIG_DIR).exists()
@@ -1348,6 +1357,23 @@ def _normalize_orchestrator_status(status: object) -> OrchestratorStatus | None:
         except ValueError:
             return None
     return None
+
+
+def _display_path(path: Path) -> str:
+    try:
+        home = Path.home().resolve()
+    except Exception:
+        home = None
+
+    if home is not None:
+        try:
+            relative_to_home = path.relative_to(home)
+        except ValueError:
+            pass
+        else:
+            return "~" if not relative_to_home.parts else f"~/{relative_to_home.as_posix()}"
+
+    return path.as_posix()
 
 
 def _is_gatekeeper_event(event: dict[str, Any]) -> bool:

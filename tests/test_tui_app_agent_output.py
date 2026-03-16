@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary
@@ -116,3 +117,18 @@ def test_refresh_agent_output_registry_hydrates_and_subscribes_when_logs_are_vis
     assert control_plane.frame_calls == []
     assert control_plane.subscribe_calls == [("conv-1", True)]
     assert agent_output.ingested_events == []
+
+
+def test_app_bar_uses_explicit_active_directory_as_subtitle() -> None:
+    app = VibrantApp(cwd="/tmp/vibrant-active-dir")
+
+    assert app.sub_title == "/tmp/vibrant-active-dir"
+
+
+def test_app_bar_falls_back_to_current_directory_as_subtitle(monkeypatch) -> None:
+    monkeypatch.setattr("vibrant.tui.app.os.getcwd", lambda: "/tmp/vibrant-cwd")
+    monkeypatch.setattr("vibrant.tui.app.Path.home", lambda: Path("/home/tester"))
+
+    app = VibrantApp()
+
+    assert app.sub_title == "/tmp/vibrant-cwd"
