@@ -79,6 +79,7 @@ class ChatPanel(Static):
         self._status: OrchestratorStatus | str | None = None
         self._notification_token = 0
         self._conversation: ConversationView | None = None
+        self._bound_conversation: AgentConversationView | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-panel-layout"):
@@ -87,6 +88,11 @@ class ChatPanel(Static):
             yield Static(self._question_summary_text, id="chat-panel-notice", markup=False)
             self._conversation = ConversationView(id="chat-panel-conversation")
             yield self._conversation
+
+    def on_mount(self) -> None:
+        self._refresh_widgets()
+        if self._conversation is not None:
+            self._conversation.show_conversation(self._bound_conversation)
 
     @property
     def current_conversation_id(self) -> str | None:
@@ -99,6 +105,7 @@ class ChatPanel(Static):
     def bind_conversation(self, conversation: AgentConversationView | None) -> None:
         """Render a conversation view from the orchestrator."""
 
+        self._bound_conversation = conversation
         if self._conversation is not None:
             self._conversation.show_conversation(conversation)
 
@@ -111,6 +118,7 @@ class ChatPanel(Static):
     def clear_conversation(self) -> None:
         """Clear the active conversation view."""
 
+        self._bound_conversation = None
         if self._conversation is not None:
             self._conversation.clear()
 

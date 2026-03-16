@@ -170,6 +170,9 @@ class PlanTree(Static):
         self._task_order: tuple[str, ...] = ()
         self._visual_signatures_by_task_id: dict[str, tuple[tuple[TaskStatus, int | None, str], TaskNodeRelation]] = {}
         self._focused_task_id: str | None = None
+        self._pending_tasks: tuple[TaskInfo, ...] = ()
+        self._pending_selected_task_id: str | None = None
+        self._pending_agent_summaries: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Static("[b]Plan / Tasks[/b]", id="plan-tree-header", markup=True)
@@ -178,6 +181,16 @@ class PlanTree(Static):
         self._tree.guide_depth = 1
         self._tree.root.expand()
         yield self._tree
+
+    def on_mount(self) -> None:
+        if self._pending_tasks:
+            self.update_tasks(
+                list(self._pending_tasks),
+                agent_summaries=self._pending_agent_summaries,
+                selected_task_id=self._pending_selected_task_id,
+            )
+        else:
+            self.clear_tasks()
 
     def update_tasks(
         self,
@@ -190,14 +203,18 @@ class PlanTree(Static):
 
         self._tasks_by_id = {task.id: task for task in tasks}
         self._summaries_by_task_id = dict(agent_summaries or {})
+        self._pending_tasks = tuple(tasks)
+        self._pending_selected_task_id = selected_task_id
+        self._pending_agent_summaries = dict(agent_summaries or {})
         if not tasks:
             self.clear_tasks()
             return
 
         task_order = tuple(task.id for task in tasks)
         structure_changed = task_order != self._task_order
+        needs_rebuild = structure_changed or not self._node_ids_by_task_id
 
-        if structure_changed:
+        if needs_rebuild:
             self._rebuild_tree(tasks)
         else:
             for task in tasks:
@@ -206,7 +223,7 @@ class PlanTree(Static):
         self._task_order = task_order
         self._refresh_dependency_labels(selected_task_id)
         if selected_task_id:
-            if structure_changed:
+            if needs_rebuild:
                 self.call_after_refresh(self.select_task, selected_task_id)
             else:
                 self.select_task(selected_task_id)
@@ -216,6 +233,9 @@ class PlanTree(Static):
 
         self._tasks_by_id = {}
         self._summaries_by_task_id = {}
+        self._pending_tasks = ()
+        self._pending_selected_task_id = None
+        self._pending_agent_summaries = {}
         self._task_order = ()
         self._visual_signatures_by_task_id = {}
         self._focused_task_id = None

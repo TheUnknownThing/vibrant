@@ -229,6 +229,43 @@ def test_chat_panel_summary_shows_recent_withdrawn_questions() -> None:
     assert "Status: no longer needed" in summary
 
 
+
+
+@pytest.mark.asyncio
+async def test_chat_panel_replays_bound_conversation_after_mount() -> None:
+    panel = ChatPanel()
+    conversation = AgentConversationView(
+        conversation_id="gatekeeper-pre-mount",
+        agent_ids=["gatekeeper-agent"],
+        task_ids=[],
+        active_turn_id=None,
+        entries=[
+            AgentConversationEntry(
+                role="user",
+                kind="message",
+                turn_id=None,
+                text="Hello before mount",
+                payload={"role": "user"},
+                started_at="2026-03-13T00:00:00Z",
+                finished_at="2026-03-13T00:00:00Z",
+            )
+        ],
+        updated_at="2026-03-13T00:00:00Z",
+    )
+    panel.bind_conversation(conversation)
+
+    class _Harness(App[None]):
+        def compose(self) -> ComposeResult:
+            yield panel
+
+    app = _Harness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        mounted_panel = app.query_one(ChatPanel)
+        assert mounted_panel.current_conversation_id == "gatekeeper-pre-mount"
+        assert mounted_panel.query_one(ConversationView).entry_count == 1
+
+
 @pytest.mark.asyncio
 async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
     conversation = AgentConversationView(

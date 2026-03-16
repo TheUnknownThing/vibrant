@@ -26,6 +26,26 @@ def _tasks_for_dependency_view() -> list[TaskInfo]:
     ]
 
 
+
+
+@pytest.mark.asyncio
+async def test_plan_tree_replays_pre_mount_task_snapshot() -> None:
+    widget = PlanTree()
+    tasks = _tasks_for_dependency_view()
+    widget.update_tasks(tasks, selected_task_id="task-c")
+
+    class _Harness(App[None]):
+        def compose(self) -> ComposeResult:
+            yield widget
+
+    app = _Harness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        mounted_widget = app.query_one(PlanTree)
+        assert mounted_widget.get_task_label("task-c") is not None
+        assert "[selected]" in (mounted_widget.get_task_label("task-c") or "")
+
+
 @pytest.mark.asyncio
 async def test_plan_tree_flattens_dag_tasks_and_marks_dependencies() -> None:
     app = PlanTreeHarness()
