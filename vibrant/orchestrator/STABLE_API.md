@@ -3,7 +3,7 @@
 This document records the stable first-party Python API for the orchestrator.
 
 As of **March 16, 2026**, the stable integration surface is
-[`vibrant.orchestrator.OrchestratorFacade`](/home/rogerw/project/vibrant/vibrant/orchestrator/facade.py)
+[`vibrant.orchestrator.OrchestratorFacade`](./facade.py)
 plus the documented companion read models and helper views it exposes.
 
 This document is intentionally narrow. It does not define the internal control
