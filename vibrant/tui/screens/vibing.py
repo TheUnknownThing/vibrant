@@ -122,6 +122,8 @@ class VibingScreen(Static):
         tab_id = event.pane.id or ""
         if tab_id in self._VALID_TABS:
             self._active_tab = tab_id
+            if tab_id == "agent-logs":
+                self._request_agent_output_history()
 
     @property
     def active_tab(self) -> str:
@@ -139,6 +141,13 @@ class VibingScreen(Static):
 
         self._active_tab = tab_id
         self.query_one("#workspace-tabs", TabbedContent).active = tab_id
+        if tab_id == "agent-logs":
+            self._request_agent_output_history()
+
+    def _request_agent_output_history(self) -> None:
+        ensure_agent_output_loaded = getattr(self.app, "ensure_agent_output_loaded", None)
+        if callable(ensure_agent_output_loaded):
+            self.call_after_refresh(ensure_agent_output_loaded)
 
     def sync_task_views(
         self,

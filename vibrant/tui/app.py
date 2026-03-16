@@ -126,6 +126,7 @@ class VibrantApp(App):
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
         self._agent_output_conversation_subscriptions: dict[str, Any] = {}
+        self._agent_output_loaded_conversation_ids: set[str] = set()
         self._gatekeeper_conversation_id: str | None = None
         self._workspace_screen: WorkspaceScreen | None = None
         self._task_execution_in_progress = False
@@ -634,6 +635,7 @@ class VibrantApp(App):
                 with suppress(Exception):
                     subscription.close()
             self._agent_output_conversation_subscriptions = {}
+            self._agent_output_loaded_conversation_ids.clear()
             return
 
         desired_ids = {summary.conversation_id for summary in summaries}
@@ -644,15 +646,37 @@ class VibrantApp(App):
                 subscription.close()
             self._agent_output_conversation_subscriptions.pop(conversation_id, None)
 
+        self._agent_output_loaded_conversation_ids.intersection_update(desired_ids)
+
+    def ensure_agent_output_loaded(self) -> None:
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            return
+        self._refresh_agent_output_registry(snapshot, hydrate=True)
+
+    def _hydrate_agent_output_conversations(self, summaries: list[ConversationSummary]) -> None:
+        if self.orchestrator is None:
+            return
+
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is None:
+            return
+
+        agent_output = vibing_screen.agent_output
         for summary in summaries:
             conversation_id = summary.conversation_id
+            if conversation_id not in self._agent_output_loaded_conversation_ids:
+                frames = self.orchestrator.control_plane.conversation_frames(conversation_id)
+                for event in frames:
+                    agent_output.ingest_stream_event(event)
+                self._agent_output_loaded_conversation_ids.add(conversation_id)
             if conversation_id in self._agent_output_conversation_subscriptions:
                 continue
             self._agent_output_conversation_subscriptions[conversation_id] = (
                 self.orchestrator.control_plane.subscribe_conversation(
                     conversation_id,
                     self._on_agent_output_conversation_event,
-                    replay=True,
+                    replay=False,
                 )
             )
 
@@ -668,6 +692,7 @@ class VibrantApp(App):
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
         self._agent_output_conversation_subscriptions = {}
+        self._agent_output_loaded_conversation_ids.clear()
         self._gatekeeper_conversation_id = None
 
     def _attach_orchestrator_subscriptions(self) -> None:
@@ -874,7 +899,12 @@ class VibrantApp(App):
             agent_summaries=task_summaries,
         )
 
-    def _refresh_agent_output_registry(self, snapshot: OrchestratorSnapshot | None) -> None:
+    def _refresh_agent_output_registry(
+        self,
+        snapshot: OrchestratorSnapshot | None,
+        *,
+        hydrate: bool | None = None,
+    ) -> None:
         if snapshot is None or self.orchestrator is None:
             self._sync_agent_output_conversation_bindings([])
             vibing_screen = self.vibing_screen()
@@ -891,6 +921,9 @@ class VibrantApp(App):
             conversation_summaries = self.orchestrator.control_plane.list_conversation_summaries()
             vibing_screen.agent_output.sync_conversations(conversation_summaries, snapshot.agent_records)
             self._sync_agent_output_conversation_bindings(conversation_summaries)
+            should_hydrate = hydrate if hydrate is not None else vibing_screen.active_tab == "agent-logs"
+            if should_hydrate:
+                self._hydrate_agent_output_conversations(conversation_summaries)
 
     def _refresh_consensus_views(self, snapshot: OrchestratorSnapshot | None) -> None:
         consensus_document = snapshot.consensus if snapshot is not None else None
