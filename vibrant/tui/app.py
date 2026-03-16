@@ -773,7 +773,6 @@ class VibrantApp(App):
             return False
 
         self._todo_exit_message = None
-        self._refresh_project_views()
         self.call_after_refresh(self._refresh_project_views)
         self._set_status("Entered vibing phase")
         self._start_automatic_workflow_if_needed()
@@ -819,8 +818,6 @@ class VibrantApp(App):
                 vibing_screen.agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
             with suppress(Exception):
                 self._clear_consensus_view(vibing_screen.consensus_view)
-            with suppress(Exception):
-                vibing_screen.set_roadmap_loading(True)
 
         planning_screen = self._planning_screen()
         if planning_screen is not None:
@@ -850,28 +847,16 @@ class VibrantApp(App):
                 vibing_screen.plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
             with suppress(Exception):
                 vibing_screen.task_status.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
-            with suppress(Exception):
-                vibing_screen.set_roadmap_loading(True)
             return
 
         roadmap = snapshot.roadmap
-        roadmap_tasks = roadmap.tasks if roadmap is not None else []
+        roadmap_tasks = roadmap.tasks
         task_summaries = self._collect_task_summaries()
-        sync_task_views = getattr(vibing_screen, "sync_task_views", None)
-        if callable(sync_task_views):
-            sync_task_views(
-                roadmap_tasks,
-                facade=self.orchestrator_facade,
-                agent_summaries=task_summaries,
-            )
-        else:
-            with suppress(Exception):
-                vibing_screen.plan_tree.update_tasks(
-                    roadmap_tasks,
-                    agent_summaries=task_summaries,
-                )
-        with suppress(Exception):
-            vibing_screen.set_roadmap_loading(not bool(roadmap_tasks))
+        vibing_screen.sync_task_views(
+            roadmap_tasks,
+            facade=self.orchestrator_facade,
+            agent_summaries=task_summaries,
+        )
 
     def _refresh_agent_output_registry(self, snapshot: OrchestratorSnapshot | None) -> None:
         if snapshot is None or self.orchestrator is None:

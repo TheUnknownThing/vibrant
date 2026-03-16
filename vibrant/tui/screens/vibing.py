@@ -115,7 +115,6 @@ class VibingScreen(Static):
 
     def on_mount(self) -> None:
         self.set_active_tab(self._initial_tab)
-        self.set_roadmap_loading(True)
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.control.id != "workspace-tabs":
@@ -140,13 +139,6 @@ class VibingScreen(Static):
 
         self._active_tab = tab_id
         self.query_one("#workspace-tabs", TabbedContent).active = tab_id
-
-    def set_roadmap_loading(self, is_loading: bool) -> None:
-        self.query_one(TaskStatusView).set_generating_roadmap(is_loading)
-        chat_notice = self.query_one("#chat-roadmap-status", Static)
-        chat_panel = self.query_one(ChatPanel)
-        chat_notice.display = is_loading
-        chat_panel.display = not is_loading
 
     def sync_task_views(
         self,
