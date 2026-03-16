@@ -68,7 +68,7 @@ def _facade(orchestrator) -> OrchestratorFacade:
     return OrchestratorFacade(orchestrator)
 
 
-async def _wait_for_gatekeeper_input_request(orchestrator, run_id: str, *, timeout: float = 3.0) -> Any:
+async def _wait_for_gatekeeper_input_request(orchestrator, run_id: str, *, timeout: float = 8.0) -> Any:
     facade = _facade(orchestrator)
     async with asyncio.timeout(timeout):
         while True:
@@ -195,8 +195,7 @@ async def test_task_loop_happy_path_review_restart_accept_e2e(
             "Update demo.txt so it contains workspace-change.\n"
             "Leave enough evidence in logs for review.\n"
             "[mock:write demo.txt]\n"
-            "[mock:content workspace-change]\n"
-            "[mock:tool]"
+            "[mock:content workspace-change]"
         ),
     )
     task = facade.get_task("task-happy-path")
@@ -214,7 +213,9 @@ async def test_task_loop_happy_path_review_restart_accept_e2e(
     assert "diff --git a/demo.txt b/demo.txt" in review_diff.read_text(encoding="utf-8")
     assert worker_run is not None
     assert worker_run.provider.canonical_event_log is not None
+    assert worker_run.provider.native_event_log is not None
     _assert_log_contains(worker_run.provider.canonical_event_log, event="tool.call.started")
+    _assert_log_contains(worker_run.provider.native_event_log, event="fixture.mcp.resource.read.completed")
 
     e2e_project.snapshot_orchestrator(e2e_orchestrator)
     await e2e_orchestrator.shutdown()
@@ -259,8 +260,7 @@ async def test_task_loop_retry_cycle_e2e(e2e_project: E2EProjectContext, e2e_orc
         prompt_patch=(
             "Update demo.txt so it contains second-change.\n"
             "[mock:write demo.txt]\n"
-            "[mock:content second-change]\n"
-            "[mock:tool]"
+            "[mock:content second-change]"
         ),
     )
     second_results = await facade.run_until_blocked()

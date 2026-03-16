@@ -32,12 +32,37 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
+import httpx
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
 from vibrant.config import DEFAULT_CONFIG_DIR
 from vibrant.models.agent import AgentRecord
+from vibrant.orchestrator.mcp import BINDING_HEADER_NAME
 from vibrant.providers.base import CanonicalEvent, ProviderAdapter, RuntimeMode
+from vibrant.providers.invocation import ProviderInvocationPlan
 from vibrant.runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 
 _MARKER_PATTERN = re.compile(r"\[mock:(.+?)\]", re.IGNORECASE)
+_READ_ONLY_RESOURCE_URIS: dict[str, str] = {
+    "vibrant.get_consensus": "vibrant://consensus",
+    "vibrant.get_roadmap": "vibrant://roadmap",
+    "vibrant.get_workflow_status": "vibrant://workflow-status",
+    "vibrant.get_workflow_session": "vibrant://workflow-session",
+    "vibrant.get_gatekeeper_session": "vibrant://gatekeeper-session",
+    "vibrant.list_pending_questions": "vibrant://pending-questions",
+    "vibrant.list_active_runs": "vibrant://active-runs",
+    "vibrant.list_active_attempts": "vibrant://active-attempts",
+    "vibrant.list_pending_review_tickets": "vibrant://pending-review-tickets",
+}
+_PREFERRED_MCP_RESOURCES: tuple[str, ...] = (
+    "vibrant.get_workflow_session",
+    "vibrant.get_workflow_status",
+    "vibrant.list_active_attempts",
+    "vibrant.get_gatekeeper_session",
+    "vibrant.get_consensus",
+    "vibrant.get_roadmap",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +79,6 @@ class FixtureScenario:
 
     file_mutations: tuple[FileMutation, ...] = ()
     content: str | None = None
-    use_tool: bool = False
     ask_question: bool = False
     fail: bool = False
     long_response: bool = False
@@ -83,14 +107,28 @@ class RequestResolution:
         return message if isinstance(message, str) and message else None
 
 
+@dataclass(frozen=True, slots=True)
+class MCPResourceInteraction:
+    """One real MCP resource read driven by fixture markers."""
+
+    endpoint_url: str
+    binding_id: str
+    resource_name: str
+    resource_uri: str
+
+
 class FixtureProviderAdapter(ProviderAdapter):
     """Prompt-driven deterministic provider for backend E2E tests."""
+
+    supports_inprocess_mcp = True
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(kwargs.get("on_canonical_event"))
         self.cwd = Path(kwargs.get("cwd") or ".").expanduser().resolve()
         self.agent_record = _coerce_agent_record(kwargs.get("agent_record"))
         self.provider_thread_id = _coerce_optional_str(kwargs.get("resume_thread_id"))
+        invocation_plan = kwargs.get("invocation_plan")
+        self._invocation_plan = invocation_plan if isinstance(invocation_plan, ProviderInvocationPlan) else None
         self.thread_path: str | None = None
         self._thread_state: ThreadState | None = None
         self._request_resolution: RequestResolution | None = None
@@ -272,11 +310,10 @@ class FixtureProviderAdapter(ProviderAdapter):
                     "turn": {"id": turn_id, "status": "inProgress"},
                 }
             )
-            await self._emit_reasoning(turn_id, scenario)
+            await self._emit_reasoning(turn_id, scenario, prompt=prompt)
+            if self._should_use_mcp(prompt=prompt, scenario=scenario):
+                await self._emit_mcp_interaction(turn_id, prompt=prompt)
             self._apply_file_mutations(scenario, runtime_mode=runtime_mode)
-
-            if scenario.use_tool:
-                await self._emit_tool_call(turn_id)
 
             if scenario.ask_question:
                 request_id = self._next_request_id()
@@ -343,6 +380,7 @@ class FixtureProviderAdapter(ProviderAdapter):
                 resolved_payload=None if self._request_resolution is None else self._request_resolution.result,
                 runtime_mode=runtime_mode,
                 approval_policy=approval_policy,
+                mcp_used=self._should_use_mcp(prompt=prompt, scenario=scenario),
             )
             item_id = f"fixture-assistant-{uuid4().hex[:6]}"
             chunk_size = 18 if scenario.long_response else 28
@@ -392,13 +430,13 @@ class FixtureProviderAdapter(ProviderAdapter):
                 }
             )
 
-    async def _emit_reasoning(self, turn_id: str, scenario: FixtureScenario) -> None:
+    async def _emit_reasoning(self, turn_id: str, scenario: FixtureScenario, *, prompt: str) -> None:
         item_id = f"fixture-reasoning-{uuid4().hex[:6]}"
         reasoning = "Planning the deterministic fixture-provider response."
         if scenario.file_mutations:
             reasoning = "Preparing deterministic workspace edits requested by the prompt."
-        if scenario.use_tool:
-            reasoning = "Preparing a deterministic tool event sequence."
+        if self._should_use_mcp(prompt=prompt, scenario=scenario):
+            reasoning = "Preparing a deterministic MCP resource read through the bound orchestrator session."
         if scenario.ask_question:
             reasoning = "Waiting for one user-input request to be resolved before completing."
         if scenario.fail:
@@ -423,10 +461,24 @@ class FixtureProviderAdapter(ProviderAdapter):
             }
         )
 
-    async def _emit_tool_call(self, turn_id: str) -> None:
+    async def _emit_mcp_interaction(self, turn_id: str, *, prompt: str) -> None:
+        interaction = self._require_mcp_resource_interaction(prompt=prompt)
         item_id = f"fixture-tool-{uuid4().hex[:6]}"
-        tool_name = "functions.exec_command"
-        arguments = {"cmd": "echo fixture-provider-check"}
+        tool_name = interaction.resource_name
+        arguments = {
+            "kind": "mcp.resource.read",
+            "binding_id": interaction.binding_id,
+            "uri": interaction.resource_uri,
+        }
+        self._log_native(
+            "fixture.mcp.resource.read.started",
+            {
+                "binding_id": interaction.binding_id,
+                "resource_name": interaction.resource_name,
+                "resource_uri": interaction.resource_uri,
+                "endpoint_url": interaction.endpoint_url,
+            },
+        )
         await self._emit(
             {
                 "type": "tool.call.started",
@@ -436,23 +488,27 @@ class FixtureProviderAdapter(ProviderAdapter):
                 "arguments": arguments,
             }
         )
-        await asyncio.sleep(0.01)
+        payload_text = await self._read_mcp_resource(interaction)
         await self._emit(
             {
                 "type": "tool.call.delta",
                 "turn_id": turn_id,
                 "item_id": item_id,
-                "delta": "echo fixture-provider-check",
+                "delta": interaction.resource_uri,
             }
         )
-        await asyncio.sleep(0.01)
         await self._emit(
             {
                 "type": "tool.call.completed",
                 "turn_id": turn_id,
                 "item_id": item_id,
                 "tool_name": tool_name,
-                "result": {"exitCode": 0, "output": "fixture-provider-check"},
+                "result": {
+                    "binding_id": interaction.binding_id,
+                    "resource_name": interaction.resource_name,
+                    "resource_uri": interaction.resource_uri,
+                    "payload": payload_text,
+                },
             }
         )
         await self._emit(
@@ -460,16 +516,113 @@ class FixtureProviderAdapter(ProviderAdapter):
                 "type": "task.progress",
                 "turn_id": turn_id,
                 "item": {
-                    "type": "commandExecution",
+                    "type": "mcpResourceRead",
                     "id": item_id,
-                    "command": "echo fixture-provider-check",
+                    "resource": interaction.resource_name,
+                    "uri": interaction.resource_uri,
                     "status": "completed",
-                    "aggregatedOutput": "fixture-provider-check",
-                    "exitCode": 0,
-                    "text": "command completed (exit 0) [0ms]\nfixture-provider-check",
+                    "aggregatedOutput": payload_text,
+                    "text": f"read MCP resource {interaction.resource_uri}\n{payload_text}",
                 },
             }
         )
+        self._log_native(
+            "fixture.mcp.resource.read.completed",
+            {
+                "binding_id": interaction.binding_id,
+                "resource_name": interaction.resource_name,
+                "resource_uri": interaction.resource_uri,
+                "payload": payload_text,
+            },
+        )
+
+    def _can_use_mcp(self) -> bool:
+        if self._invocation_plan is None:
+            return False
+        debug_access = self._invocation_plan.debug_metadata.get("mcp_access")
+        if not isinstance(debug_access, dict):
+            return False
+        endpoint_url = _coerce_optional_str(debug_access.get("endpoint_url"))
+        binding_id = _coerce_optional_str(self._invocation_plan.binding_id or debug_access.get("binding_id"))
+        return endpoint_url is not None and binding_id is not None and any(
+            resource_name in _READ_ONLY_RESOURCE_URIS for resource_name in self._invocation_plan.visible_resources
+        )
+
+    def _should_use_mcp(self, *, prompt: str, scenario: FixtureScenario) -> bool:
+        return self._can_use_mcp() and not scenario.ask_question and _prompt_requests_mcp(prompt)
+
+    def _require_mcp_resource_interaction(self, *, prompt: str) -> MCPResourceInteraction:
+        if self._invocation_plan is None:
+            raise RuntimeError("Fixture MCP interaction requested without an invocation plan.")
+        debug_access = self._invocation_plan.debug_metadata.get("mcp_access")
+        if not isinstance(debug_access, dict):
+            raise RuntimeError("Fixture MCP interaction requested without bound MCP access metadata.")
+        endpoint_url = _coerce_optional_str(debug_access.get("endpoint_url"))
+        binding_id = _coerce_optional_str(self._invocation_plan.binding_id or debug_access.get("binding_id"))
+        if endpoint_url is None or binding_id is None:
+            raise RuntimeError("Fixture MCP interaction requested without a live MCP endpoint or binding id.")
+        visible_resources = [
+            resource_name
+            for resource_name in self._invocation_plan.visible_resources
+            if resource_name in _READ_ONLY_RESOURCE_URIS
+        ]
+        if not visible_resources:
+            raise RuntimeError("Fixture MCP interaction requested but no readable MCP resources are available.")
+
+        preferred_resources = [
+            name
+            for name in _mcp_resource_preferences(prompt)
+            if name in visible_resources
+        ]
+        resource_name = preferred_resources[0] if preferred_resources else visible_resources[0]
+        return MCPResourceInteraction(
+            endpoint_url=endpoint_url,
+            binding_id=binding_id,
+            resource_name=resource_name,
+            resource_uri=_READ_ONLY_RESOURCE_URIS[resource_name],
+        )
+
+    async def _read_mcp_resource(self, interaction: MCPResourceInteraction) -> str:
+        asgi_app = None if self._invocation_plan is None else self._invocation_plan.debug_metadata.get("mcp_asgi_app")
+        if asgi_app is not None:
+            async with asgi_app.router.lifespan_context(asgi_app):
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=asgi_app),
+                    base_url="http://127.0.0.1",
+                    headers={BINDING_HEADER_NAME: interaction.binding_id},
+                ) as http_client:
+                    async with streamable_http_client(
+                        interaction.endpoint_url,
+                        http_client=http_client,
+                        terminate_on_close=True,
+                    ) as (read_stream, write_stream, _):
+                        async with ClientSession(read_stream, write_stream) as session:
+                            await session.initialize()
+                            resource_result = await session.read_resource(interaction.resource_uri)
+        else:
+            async with httpx.AsyncClient(headers={BINDING_HEADER_NAME: interaction.binding_id}) as http_client:
+                async with streamable_http_client(
+                    interaction.endpoint_url,
+                    http_client=http_client,
+                    terminate_on_close=True,
+                ) as (read_stream, write_stream, _):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+                        resource_result = await session.read_resource(interaction.resource_uri)
+        await asyncio.sleep(0.5)
+
+        contents = getattr(resource_result, "contents", None)
+        if isinstance(contents, list) and contents:
+            first = contents[0]
+            text = getattr(first, "text", None)
+            if isinstance(text, str) and text:
+                return text
+            if hasattr(first, "model_dump"):
+                return json.dumps(first.model_dump(mode="json"), sort_keys=True)
+        if hasattr(resource_result, "model_dump"):
+            return json.dumps(resource_result.model_dump(mode="json"), sort_keys=True)
+        return json.dumps({"resource_uri": interaction.resource_uri})
+
 
     def _apply_file_mutations(self, scenario: FixtureScenario, *, runtime_mode: RuntimeMode) -> None:
         if not scenario.file_mutations:
@@ -611,7 +764,6 @@ def parse_fixture_scenario(prompt: str) -> FixtureScenario:
 
     file_mutations: list[FileMutation] = []
     content = _infer_content_from_prompt(prompt)
-    use_tool = False
     ask_question = False
     fail = False
     long_response = False
@@ -634,9 +786,7 @@ def parse_fixture_scenario(prompt: str) -> FixtureScenario:
             continue
         tokens = [token for token in re.split(r"[\s,_-]+", normalized) if token]
         for token in tokens:
-            if token == "tool":
-                use_tool = True
-            elif token in {"question", "ask"}:
+            if token in {"question", "ask"}:
                 ask_question = True
             elif token == "error":
                 fail = True
@@ -646,7 +796,6 @@ def parse_fixture_scenario(prompt: str) -> FixtureScenario:
     return FixtureScenario(
         file_mutations=tuple(file_mutations),
         content=content,
-        use_tool=use_tool,
         ask_question=ask_question,
         fail=fail,
         long_response=long_response,
@@ -680,6 +829,7 @@ def _response_text(
     resolved_payload: Any | None,
     runtime_mode: RuntimeMode,
     approval_policy: str,
+    mcp_used: bool,
 ) -> str:
     if "User Answer:" in prompt:
         answer = prompt.split("User Answer:", 1)[1].strip().splitlines()[0]
@@ -697,6 +847,8 @@ def _response_text(
         f"- Runtime mode: {runtime_mode.value}",
         f"- Approval policy: {approval_policy}",
     ]
+    if mcp_used:
+        response_lines.append("- MCP access: completed one real orchestrator-bound resource read.")
     if scenario.file_mutations:
         rendered = ", ".join(f"{mutation.mode}:{mutation.relative_path}" for mutation in scenario.file_mutations)
         response_lines.append(f"- File edits: {rendered}")
@@ -745,6 +897,61 @@ def _infer_content_from_prompt(prompt: str) -> str | None:
 
 def _chunk_text(text: str, *, chunk_size: int) -> list[str]:
     return [text[index : index + chunk_size] for index in range(0, len(text), chunk_size)] or [""]
+
+
+def _mcp_resource_preferences(prompt: str) -> tuple[str, ...]:
+    normalized_prompt = " ".join(_MARKER_PATTERN.sub("", prompt).lower().split())
+    preferences: list[str] = []
+
+    if any(token in normalized_prompt for token in ("question", "answer", "decision", "oauth", "auth")):
+        preferences.extend(
+            [
+                "vibrant.list_pending_questions",
+                "vibrant.get_gatekeeper_session",
+                "vibrant.get_workflow_session",
+            ]
+        )
+    if any(token in normalized_prompt for token in ("task", "attempt", "review", "workspace", "demo.txt")):
+        preferences.extend(
+            [
+                "vibrant.list_active_attempts",
+                "vibrant.get_workflow_session",
+                "vibrant.list_pending_review_tickets",
+            ]
+        )
+    if any(token in normalized_prompt for token in ("workflow", "plan", "planning", "status")):
+        preferences.extend(
+            [
+                "vibrant.get_workflow_session",
+                "vibrant.get_workflow_status",
+                "vibrant.get_roadmap",
+            ]
+        )
+
+    preferences.extend(_PREFERRED_MCP_RESOURCES)
+
+    ordered: list[str] = []
+    for resource_name in preferences:
+        if resource_name not in ordered:
+            ordered.append(resource_name)
+    return tuple(ordered)
+
+
+def _prompt_requests_mcp(prompt: str) -> bool:
+    normalized_prompt = " ".join(_MARKER_PATTERN.sub("", prompt).lower().split())
+    return any(
+        token in normalized_prompt
+        for token in (
+            "inspect",
+            "workflow",
+            "status",
+            "review",
+            "evidence",
+            "orchestrator",
+            "roadmap",
+            "consensus",
+        )
+    )
 
 
 def _resolve_workspace_path(workspace_root: Path, relative_path: str) -> Path:

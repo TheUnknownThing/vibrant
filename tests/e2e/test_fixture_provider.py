@@ -11,8 +11,10 @@ import pytest
 
 from tests.e2e.fixture_provider import FixtureProviderAdapter
 from vibrant.models.agent import AgentRecord, AgentType
+from vibrant.orchestrator.policy.shared.capabilities import worker_binding_preset
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
+from vibrant.providers.invocation_compiler import compile_provider_invocation
 
 
 def _make_agent_record(project_root: Path, *, run_id: str) -> AgentRecord:
@@ -69,8 +71,7 @@ async def test_fixture_provider_logs_and_writes_workspace_files(tmp_path: Path) 
         adapter,
         "Update demo.txt with a deterministic change.\n"
         "[mock:write demo.txt]\n"
-        "[mock:content workspace-change]\n"
-        "[mock:tool]",
+        "[mock:content workspace-change]",
     )
     await adapter.stop_session()
 
@@ -87,13 +88,58 @@ async def test_fixture_provider_logs_and_writes_workspace_files(tmp_path: Path) 
 
     assert any(line["event"] == "fixture.file.write" for line in native_lines)
     assert any(line["event"] == "fixture.turn.completed" for line in native_lines)
-    assert any(line["event"] == "tool.call.started" for line in canonical_lines)
     assert any(line["event"] == "assistant.message.completed" for line in canonical_lines)
     assert canonical_lines[0]["data"]["run_id"] == "run-write"
     assert canonical_lines[0]["data"]["agent_id"] == "agent-run-write"
     assert "type" not in canonical_lines[0]["data"]
     assert "timestamp" not in canonical_lines[0]["data"]
     assert canonical_lines[-1]["event"] == "session.state.changed"
+
+
+@pytest.mark.asyncio
+async def test_fixture_provider_reads_orchestrator_mcp_resource_via_invocation_plan(
+    e2e_project,
+    e2e_orchestrator,
+) -> None:
+    agent_record = _make_agent_record(e2e_project.project_root, run_id="run-mcp")
+    bound = e2e_orchestrator._binding_service.bind_preset(
+        preset=worker_binding_preset(
+            e2e_orchestrator.mcp_server,
+            agent_record.identity.agent_id,
+            agent_record.identity.role,
+        ),
+        run_id=agent_record.identity.run_id,
+        conversation_id=None,
+    )
+    e2e_orchestrator.mcp_host.register_binding(bound)
+    invocation_plan = compile_provider_invocation(None, bound.access)
+    invocation_plan.debug_metadata["mcp_asgi_app"] = e2e_orchestrator.mcp_host.http_app()
+    mcp_access = invocation_plan.debug_metadata.get("mcp_access")
+    if isinstance(mcp_access, dict):
+        mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
+    adapter = FixtureProviderAdapter(
+        cwd=str(e2e_project.project_root),
+        agent_record=agent_record,
+        invocation_plan=invocation_plan,
+    )
+
+    await adapter.start_session(cwd=str(e2e_project.project_root))
+    await adapter.start_thread(cwd=str(e2e_project.project_root))
+    await _run_turn(
+        adapter,
+        "Inspect the orchestrator workflow status before finishing.",
+    )
+    await adapter.stop_session()
+
+    native_lines = _read_ndjson(agent_record.provider.native_event_log or "")
+    canonical_lines = _read_ndjson(agent_record.provider.canonical_event_log or "")
+    completed_reads = [line for line in native_lines if line["event"] == "fixture.mcp.resource.read.completed"]
+
+    assert len(completed_reads) == 1
+    assert completed_reads[0]["data"]["resource_name"] == "vibrant.get_workflow_session"
+    assert json.loads(completed_reads[0]["data"]["payload"])["status"] == "init"
+    assert any(line["event"] == "tool.call.started" for line in canonical_lines)
+    assert any(line["event"] == "tool.call.completed" for line in canonical_lines)
 
 
 @pytest.mark.asyncio

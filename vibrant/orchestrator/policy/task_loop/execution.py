@@ -251,7 +251,9 @@ class ExecutionCoordinator:
     ) -> None:
         runtime = BaseAgentRuntime(self._build_code_agent())
         binding_service, mcp_host = self._require_mcp_bridge()
-        await mcp_host.ensure_started()
+        use_inprocess_mcp = bool(getattr(self.adapter_factory, "supports_inprocess_mcp", False))
+        if not use_inprocess_mcp:
+            await mcp_host.ensure_started()
         bound_capabilities = binding_service.bind_preset(
             preset=worker_binding_preset(
                 binding_service.mcp_server,
@@ -267,6 +269,11 @@ class ExecutionCoordinator:
             agent_record.provider.kind,
             bound_capabilities.access,
         )
+        invocation_plan.debug_metadata["mcp_asgi_app"] = mcp_host.http_app()
+        if use_inprocess_mcp:
+            mcp_access = invocation_plan.debug_metadata.get("mcp_access")
+            if isinstance(mcp_access, dict) and not mcp_access.get("endpoint_url"):
+                mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
 
         handle = None
         if provider_thread is not None and provider_thread.resumable:

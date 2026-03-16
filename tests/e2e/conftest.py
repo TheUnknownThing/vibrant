@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 import pytest_asyncio
 
@@ -35,3 +37,4 @@ async def e2e_orchestrator(e2e_project: E2EProjectContext):
     finally:
         e2e_project.snapshot_orchestrator(orchestrator)
         await orchestrator.shutdown()
+        await asyncio.sleep(0.5)

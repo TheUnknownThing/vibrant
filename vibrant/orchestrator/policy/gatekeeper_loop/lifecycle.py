@@ -145,8 +145,9 @@ class GatekeeperLifecycleService:
         self._persist()
 
         binding_service, mcp_host = self._require_mcp_bridge()
-
-        await mcp_host.ensure_started()
+        use_inprocess_mcp = bool(getattr(self.gatekeeper.agent.adapter_factory, "supports_inprocess_mcp", False))
+        if not use_inprocess_mcp:
+            await mcp_host.ensure_started()
         bound_capabilities = binding_service.bind_preset(
             preset=gatekeeper_binding_preset(binding_service.mcp_server, agent_record.identity.run_id),
             run_id=agent_record.identity.run_id,
@@ -158,6 +159,11 @@ class GatekeeperLifecycleService:
             agent_record.provider.kind,
             bound_capabilities.access,
         )
+        invocation_plan.debug_metadata["mcp_asgi_app"] = mcp_host.http_app()
+        if use_inprocess_mcp:
+            mcp_access = invocation_plan.debug_metadata.get("mcp_access")
+            if isinstance(mcp_access, dict) and not mcp_access.get("endpoint_url"):
+                mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
 
         try:
             if provider_thread is not None:
