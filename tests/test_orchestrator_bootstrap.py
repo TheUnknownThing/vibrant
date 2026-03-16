@@ -58,7 +58,7 @@ def test_bootstrap_projects_gatekeeper_resume_from_run_record(tmp_path: Path) ->
     workflow_state_store.save(state)
 
     orchestrator = create_orchestrator(tmp_path)
-    snapshot = orchestrator.control_plane.workflow_snapshot()
+    snapshot = OrchestratorFacade(orchestrator).workflow_snapshot()
 
     assert snapshot.gatekeeper.run_id == "gatekeeper-run-1"
     assert snapshot.gatekeeper.provider_thread_id == "thread-existing"
@@ -124,12 +124,6 @@ def test_ui_surface_excludes_mcp_only_compatibility_aliases(tmp_path: Path) -> N
     assert not hasattr(orchestrator, "set_pending_questions")
     assert not hasattr(orchestrator, "review_task_outcome")
     assert not hasattr(orchestrator, "mark_task_for_retry")
-    assert not hasattr(orchestrator.control_plane, "set_pending_questions")
-    assert not hasattr(orchestrator.control_plane, "review_task_outcome")
-    assert not hasattr(orchestrator.control_plane, "mark_task_for_retry")
-    assert not hasattr(orchestrator.control_plane, "list_agent_records")
-    assert not hasattr(orchestrator.control_plane, "list_active_agents")
-    assert not hasattr(orchestrator.control_plane, "get_agent_record")
     assert not hasattr(facade, "set_pending_questions")
     assert not hasattr(facade, "resolve_question")
     assert not hasattr(facade, "update_task")
@@ -214,7 +208,7 @@ def test_resume_workflow_restores_planning_phase(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    orchestrator.control_plane.set_workflow_status(WorkflowStatus.PLANNING)
+    facade.set_workflow_status(WorkflowStatus.PLANNING)
     paused = facade.pause_workflow()
     resumed = facade.resume_workflow()
 
@@ -226,6 +220,6 @@ def test_facade_surfaces_failed_workflow_without_paused_fallback(tmp_path: Path)
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    orchestrator.control_plane.set_workflow_status(WorkflowStatus.FAILED)
+    facade.set_workflow_status(WorkflowStatus.FAILED)
 
     assert facade.get_workflow_status().value == "failed"

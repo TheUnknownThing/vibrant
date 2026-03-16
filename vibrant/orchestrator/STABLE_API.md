@@ -13,18 +13,19 @@ as layered `basic`, `policy`, and `interface` packages.
 
 ## Status
 
-As of **March 15, 2026**, the stable contract is defined by:
+As of **March 16, 2026**, the stable contract is defined by:
 
-- the **interface control-plane model** described here
+- the public Python facade, `OrchestratorFacade`
 - the **typed MCP resource/tool surface**
 - the **workflow-session read model**, including the orchestrator-owned
   concurrency limit
 - the **read models and conversation subscription semantics**
-- the **compatibility constraints** required during migration
+- the consumer constraints required during migration
 
-During the migration, first-party consumers may still use compatibility entry
-points such as `OrchestratorFacade` and `OrchestratorMCPServer`, but those
-entry points must behave according to the redesigned authority model.
+First-party Python consumers should integrate through
+`vibrant.orchestrator.OrchestratorFacade`. MCP consumers should integrate
+through `OrchestratorMCPServer`. The internal `interface` package may remain
+part of the implementation, but it is not itself the public Python contract.
 
 ## Design Rules
 
@@ -43,7 +44,7 @@ The stable contract is governed by the following rules:
 The stable integration model is:
 
 1. bootstrap an orchestrator root for one project
-2. submit workflow or user actions through the interface control plane or compatibility facade
+2. submit workflow or user actions through `OrchestratorFacade` or typed MCP tools
 3. read coherent state through snapshots and typed query adapters
 4. subscribe to orchestrator-owned conversation streams
 5. use MCP resources/tools for Gatekeeper-driven mutations
@@ -199,10 +200,18 @@ than the durable store or recovery layer:
 - Provider resume cursors, provider thread paths, and workspace paths are not
   part of the public attempt-inspection contract.
 
-## Interface Control Plane Contract
+## Internal Interface Layer
 
 The layered orchestrator is built around `basic` capabilities, `policy` loops,
-and an `interface` control plane with the following stable semantics:
+and an `interface` layer that composes explicit command and query adapters.
+That layer remains useful internally for wiring, test seams, and MCP hosting,
+but it is not a stable public import path.
+
+The important public rule is that first-party consumers must not depend on
+`vibrant.orchestrator.interface.*` directly. Internal interface naming may
+evolve as long as the facade and MCP semantics stay stable.
+
+Today the internal control plane is shaped roughly like:
 
 ```python
 @dataclass
@@ -262,40 +271,51 @@ class InterfaceControlPlane:
     ) -> list[ReviewTicket]: ...
 ```
 
-The stable behavioral rule is that public consumers receive a **submission
-receipt plus explicit wait/query methods**, not raw lifecycle or runtime
-services as their primary integration surface.
+These semantics matter because the public facade is expected to preserve them:
+public consumers receive a submission receipt plus explicit wait/query methods,
+not raw lifecycle or runtime services as their primary integration surface.
 
 `RuntimeExecutionResult` is the narrow wait result for those flows. It does not
 double as a raw event transcript or provider-debug bundle.
 
-The control plane currently exposes the workflow-session projection as a stable
-read surface. The concurrency limit is therefore observable through the public
-API even though there is not yet a dedicated stable write method for changing it.
+The internal layer currently exposes the workflow-session projection used by
+the facade and MCP surfaces. The concurrency limit is therefore observable
+through the public API even though there is not yet a dedicated stable write
+method for changing it.
 
-## Compatibility Facade
+## OrchestratorFacade Contract
 
-`OrchestratorFacade` remains the compatibility surface for first-party app code
-while the redesign is being integrated.
+`OrchestratorFacade` is the stable first-party Python integration surface.
 
-Compatibility commitments:
+Facade commitments:
 
 - it must expose coherent snapshot reads
-- it may preserve selected legacy entry points temporarily
-- it must route mutations through the interface control plane
+- it must expose semantic workflow, task, review, and conversation operations
+- it must route mutations through the internal interface command handlers
+- it may expose consumer-ready convenience helpers when they are built from
+  stable public reads and commands
 - it must not preserve legacy authority behavior that contradicts the redesign
+- it must not require consumers to reach through to raw stores, policy
+  services, or other orchestrator internals
 
-Allowed temporary compatibility examples:
+Allowed facade behavior examples:
 
+- coherent snapshots such as `snapshot()`
 - convenience reads such as roadmap or consensus accessors
-- async user-message helpers that internally translate into control-plane submissions
-- stable task/run projection helpers used by the current TUI
+- async user-message helpers that internally translate into typed submissions
+- semantic workflow helpers such as transition planning/pause/resume behavior
+- stable task/run projection helpers used by the TUI
 
-Not allowed as compatibility behavior:
+Not allowed as facade behavior:
 
 - direct Gatekeeper file-writing semantics
 - review decision inference from task text or status diffs
 - text-based pending-question reconciliation as the authoritative model
+- public escape hatches that require consumers to use `facade.orchestrator`,
+  raw stores, or internal policy services
+
+The facade may be backed by an internal control plane, but consumers should not
+need to know or care about that layering.
 
 ## MCP Stable Contract
 
@@ -417,13 +437,13 @@ The stable conversation contract requires:
 - request lifecycle events
 - no raw hidden reasoning in stored history
 
-## Compatibility Constraints
+## Consumer Constraints
 
 The redesign requires an explicit migration path. The following constraints are
 stable requirements during that migration:
 
 1. First-party consumers must have a migration path before stable consumer APIs change.
-2. Legacy semantic aliases are not part of the stable contract and should be removed as consumers migrate.
+2. Legacy semantic aliases may exist inside the facade temporarily, but the facade itself is the stable contract.
 3. Legacy authority paths are deprecated and must not define the durable model.
 4. Provider logs may remain exposed for debugging, but they cannot be treated as the primary UI history.
 5. Workflow status and consensus metadata must not form a two-way synchronization loop.
@@ -447,10 +467,10 @@ orchestrator packages purely because they exist on disk.
 When migrating a first-party consumer:
 
 1. Prefer snapshot reads over store peeking.
-2. Prefer control-plane or semantic facade actions over status-patching helpers.
+2. Prefer facade actions over status-patching helpers.
 3. Prefer conversation subscriptions over provider-log polling for chat history.
 4. Prefer review-ticket resolution commands over task-status mutations.
-5. Treat compatibility aliases as transitional, not as the long-term design.
+5. Treat direct raw orchestrator access as internal, not as the long-term design.
 
 ## Example Integration Shape
 
@@ -466,5 +486,5 @@ submission = await facade.submit_user_message("Build the CLI and the TUI.")
 conversation = facade.conversation(submission.conversation_id)
 ```
 
-The exact consumer API may include compatibility wrappers, but it must preserve
-the redesigned semantics described above.
+The exact facade surface may evolve, but it must preserve the redesigned
+semantics described above.

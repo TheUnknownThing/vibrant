@@ -7,6 +7,7 @@ import pytest
 from vibrant.agents.gatekeeper import GatekeeperTrigger
 
 from vibrant.orchestrator import create_orchestrator
+from vibrant.orchestrator.facade import OrchestratorFacade
 from vibrant.orchestrator.types import GatekeeperLifecycleStatus, QuestionPriority, QuestionStatus
 from vibrant.project_init import initialize_project
 
@@ -19,6 +20,7 @@ def _prepare_orchestrator(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_control_plane_routes_pending_question_through_single_submit_command(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
     question = orchestrator.question_store.create(
         text="Should we use OAuth or email auth first?",
         priority=QuestionPriority.BLOCKING,
@@ -44,7 +46,7 @@ async def test_control_plane_routes_pending_question_through_single_submit_comma
     monkeypatch.setattr(orchestrator.gatekeeper_lifecycle, "submit", fake_submit)
     monkeypatch.setattr(orchestrator.runtime_service, "wait_for_run", fake_wait_for_run)
 
-    submission = await orchestrator.control_plane.submit_user_input("Start with OAuth.")
+    submission = await facade.submit_user_message("Start with OAuth.")
     pending = orchestrator.question_store.get(question.question_id)
 
     assert submission.agent_id == "gatekeeper-agent"
@@ -52,7 +54,7 @@ async def test_control_plane_routes_pending_question_through_single_submit_comma
     assert "Should we use OAuth or email auth first?" in str(captured["request"].trigger_description)
     assert pending is not None and pending.status is QuestionStatus.PENDING
 
-    await orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
+    await facade.wait_for_gatekeeper_submission(submission)
 
     resolved = orchestrator.question_store.get(question.question_id)
     assert resolved is not None and resolved.status is QuestionStatus.RESOLVED
@@ -61,6 +63,7 @@ async def test_control_plane_routes_pending_question_through_single_submit_comma
 @pytest.mark.asyncio
 async def test_failed_answer_submission_leaves_question_pending(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
     question = orchestrator.question_store.create(
         text="Do we need mobile support in v1?",
         priority=QuestionPriority.BLOCKING,
@@ -78,19 +81,20 @@ async def test_failed_answer_submission_leaves_question_pending(tmp_path: Path, 
     monkeypatch.setattr(orchestrator.gatekeeper_lifecycle, "submit", fake_submit)
 
     with pytest.raises(RuntimeError, match="submit failed"):
-        await orchestrator.control_plane.submit_user_input("Not for v1.")
+        await facade.submit_user_message("Not for v1.")
 
     persisted = orchestrator.question_store.get(question.question_id)
     assert persisted is not None
     assert persisted.status is QuestionStatus.PENDING
     assert persisted.answer is None
-    assert orchestrator.control_plane.gatekeeper_state().pending_question.question_id == question.question_id
-    assert "submit failed" in (orchestrator.control_plane.gatekeeper_state().last_error or "")
+    assert facade.gatekeeper_state().pending_question.question_id == question.question_id
+    assert "submit failed" in (facade.gatekeeper_state().last_error or "")
 
 
 @pytest.mark.asyncio
 async def test_failed_submission_result_leaves_question_pending(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
     question = orchestrator.question_store.create(
         text="Should we keep SQLite for local mode?",
         priority=QuestionPriority.BLOCKING,
@@ -114,8 +118,8 @@ async def test_failed_submission_result_leaves_question_pending(tmp_path: Path, 
     monkeypatch.setattr(orchestrator.gatekeeper_lifecycle, "submit", fake_submit)
     monkeypatch.setattr(orchestrator.runtime_service, "wait_for_run", fake_wait_for_run)
 
-    submission = await orchestrator.control_plane.submit_user_input("Yes, keep it.")
-    result = await orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
+    submission = await facade.submit_user_message("Yes, keep it.")
+    result = await facade.wait_for_gatekeeper_submission(submission)
     persisted = orchestrator.question_store.get(question.question_id)
 
     assert result.error == "provider failure"
@@ -147,6 +151,7 @@ def test_question_store_preserves_non_policy_scopes(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_gatekeeper_runtime_error_is_not_cleared_by_late_turn_completed(tmp_path: Path) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
     lifecycle = orchestrator.gatekeeper_lifecycle
     lifecycle._session.run_id = "run-1"
     lifecycle._session.lifecycle_state = GatekeeperLifecycleStatus.RUNNING
@@ -168,7 +173,7 @@ async def test_gatekeeper_runtime_error_is_not_cleared_by_late_turn_completed(tm
         }
     )
 
-    state = orchestrator.control_plane.gatekeeper_state()
+    state = facade.gatekeeper_state()
 
     assert state.session.lifecycle_state is GatekeeperLifecycleStatus.FAILED
     assert state.session.last_error == "provider failed"

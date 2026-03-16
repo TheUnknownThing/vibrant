@@ -119,7 +119,7 @@ class VibrantApp(App):
         if cwd:
             self._settings.default_cwd = cwd
 
-        self.orchestrator: Orchestrator | None = None
+        self._orchestrator_root: Orchestrator | None = None
         self.orchestrator_facade: OrchestratorFacade | None = None
         self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
@@ -313,14 +313,14 @@ class VibrantApp(App):
         self._launch_roadmap_runner(notify_when_idle=True)
 
     async def action_interrupt_gatekeeper(self) -> None:
-        if self.orchestrator is None:
+        if self.orchestrator_facade is None:
             self.notify(
                 f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
                 severity="warning",
             )
             return
 
-        await self.orchestrator.gatekeeper_lifecycle.interrupt_active_turn()
+        await self.orchestrator_facade.interrupt_gatekeeper()
 
     async def _run_roadmap_tasks(self, *, notify_when_idle: bool) -> None:
         assert self.orchestrator_facade is not None
@@ -424,12 +424,9 @@ class VibrantApp(App):
             self._refresh_gatekeeper_state()
 
     def _roadmap_execution_mode(self) -> RoadmapExecutionMode:
-        if self.orchestrator is None:
+        if self.orchestrator_facade is None:
             return RoadmapExecutionMode.AUTOMATIC
-        mode = self.orchestrator.execution_mode
-        if isinstance(mode, RoadmapExecutionMode):
-            return mode
-        return RoadmapExecutionMode(str(mode).strip().lower())
+        return self.orchestrator_facade.get_execution_mode()
 
     def _handle_task_results(self, results: list[TaskResult]) -> None:
         for result in results:
@@ -439,7 +436,7 @@ class VibrantApp(App):
         self.exit()
 
     async def on_input_bar_message_submitted(self, event: InputBar.MessageSubmitted) -> None:
-        if self.orchestrator is None:
+        if self.orchestrator_facade is None:
             self.notify(
                 f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
                 severity="warning",
@@ -616,18 +613,18 @@ class VibrantApp(App):
         self._project_root = project_root
         vibrant_dir = project_root / DEFAULT_CONFIG_DIR
         if not vibrant_dir.exists():
-            self.orchestrator = None
+            self._orchestrator_root = None
             self.orchestrator_facade = None
             return
 
         try:
             ensure_project_files(project_root)
-            self.orchestrator = self._orchestrator_factory(project_root)
-            self.orchestrator_facade = OrchestratorFacade(self.orchestrator)
+            self._orchestrator_root = self._orchestrator_factory(project_root)
+            self.orchestrator_facade = OrchestratorFacade(self._orchestrator_root)
             self._attach_orchestrator_subscriptions()
         except Exception as exc:
             logger.exception("Failed to initialize project lifecycle")
-            self.orchestrator = None
+            self._orchestrator_root = None
             self.orchestrator_facade = None
             self.notify(f"Failed to load project state: {exc}", severity="error")
 
@@ -659,7 +656,7 @@ class VibrantApp(App):
             input_bar.set_history_provider(self._command_history_entries)
 
     def _sync_workspace_screen(self, *, prefer_chat_history: bool = False) -> None:
-        planning_mode = self.orchestrator is None or self._is_planning_mode()
+        planning_mode = self.orchestrator_facade is None or self._is_planning_mode()
         self.set_class(planning_mode, "planning-mode")
         self.set_class(not planning_mode, "vibing-mode")
 
@@ -1038,7 +1035,7 @@ class VibrantApp(App):
     def _default_input_placeholder(self) -> str:
         return (
             "Tell me what you want to build"
-            if self.orchestrator is None or self._is_planning_mode()
+            if self.orchestrator_facade is None or self._is_planning_mode()
             else InputBar.DEFAULT_PLACEHOLDER
         )
 

@@ -52,6 +52,9 @@ class InterfaceControlPlane:
     async def stop_gatekeeper(self):
         return await self.backend.commands.stop_gatekeeper()
 
+    async def interrupt_gatekeeper(self):
+        return await self.backend.commands.interrupt_gatekeeper()
+
     async def run_next_task(self):
         return await self.backend.commands.run_next_task()
 
@@ -104,6 +107,12 @@ class InterfaceControlPlane:
 
     def list_recent_events(self, *, limit: int = 20):
         return self.backend.queries.list_recent_events(limit=limit)
+
+    def task_id_for_run(self, run_id: str) -> str | None:
+        return self.backend.queries.task_id_for_run(run_id)
+
+    def run_task_ids(self) -> dict[str, str]:
+        return self.backend.queries.run_task_ids()
 
     def get_workflow_status(self):
         return self.backend.queries.get_workflow_status()

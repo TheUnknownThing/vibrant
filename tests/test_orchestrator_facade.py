@@ -34,7 +34,7 @@ async def test_facade_submit_gatekeeper_input_routes_through_control_plane(tmp_p
         calls.append(("wait", submission.agent_id))
         return SimpleNamespace(events=[], summary="done")
 
-    facade.control_plane = SimpleNamespace(
+    facade._control_plane = SimpleNamespace(
         submit_user_input=fake_submit,
         wait_for_gatekeeper_submission=fake_wait,
     )

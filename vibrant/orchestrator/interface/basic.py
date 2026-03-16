@@ -140,6 +140,12 @@ class BasicQueryAdapter:
     def list_recent_events(self, *, limit: int = 20):
         return self.event_log.list_recent_events(limit=limit)
 
+    def task_id_for_run(self, run_id: str) -> str | None:
+        return self.attempt_store.task_id_for_run(run_id)
+
+    def run_task_ids(self) -> dict[str, str]:
+        return self.attempt_store.run_task_ids()
+
     def get_consensus_document(self):
         return self.consensus_store.load()
 

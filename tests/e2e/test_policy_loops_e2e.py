@@ -22,7 +22,7 @@ from tests.e2e.artifacts import E2EProjectContext
 from tests.e2e.fixture_provider import FixtureProviderAdapter
 from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.models.task import TaskInfo, TaskStatus
-from vibrant.orchestrator import create_orchestrator
+from vibrant.orchestrator import OrchestratorFacade, create_orchestrator
 from vibrant.orchestrator.types import (
     AttemptStatus,
     GatekeeperLifecycleStatus,
@@ -64,10 +64,15 @@ def _create_restarted_orchestrator(project: E2EProjectContext):
     )
 
 
+def _facade(orchestrator) -> OrchestratorFacade:
+    return OrchestratorFacade(orchestrator)
+
+
 async def _wait_for_gatekeeper_input_request(orchestrator, run_id: str, *, timeout: float = 3.0) -> Any:
+    facade = _facade(orchestrator)
     async with asyncio.timeout(timeout):
         while True:
-            run = orchestrator.control_plane.get_run(run_id)
+            run = facade.get_run(run_id)
             if run is not None and run.runtime.awaiting_input and run.runtime.input_requests:
                 return run
             await asyncio.sleep(0.01)
@@ -80,7 +85,7 @@ async def _respond_to_gatekeeper_request(
     request_id: int | str,
     result: dict[str, Any],
 ) -> None:
-    await orchestrator.control_plane.respond_to_gatekeeper_request(
+    await _facade(orchestrator).respond_to_gatekeeper_request(
         run_id,
         request_id,
         result=result,
@@ -93,7 +98,8 @@ async def _run_single_task_to_review_pending(
     task_id: str,
     prompt: str,
 ) -> tuple[Any, Any, Any]:
-    orchestrator.control_plane.add_task(
+    facade = _facade(orchestrator)
+    facade.add_task(
         _build_task(
             task_id=task_id,
             title="Deterministic worker change",
@@ -101,12 +107,12 @@ async def _run_single_task_to_review_pending(
             acceptance=["demo.txt contains the requested content"],
         )
     )
-    orchestrator.control_plane.end_planning_phase()
-    results = await orchestrator.control_plane.run_until_blocked()
+    facade.end_planning_phase()
+    results = await facade.run_until_blocked()
     assert len(results) == 1
     result = results[0]
-    ticket = orchestrator.control_plane.list_pending_review_tickets()[0]
-    attempt = orchestrator.control_plane.get_attempt_execution(ticket.attempt_id)
+    ticket = facade.list_pending_review_tickets()[0]
+    attempt = facade.get_attempt_execution(ticket.attempt_id)
     return result, ticket, attempt
 
 
@@ -117,14 +123,15 @@ def _assert_log_contains(path: str | Path, *, event: str) -> None:
 
 @pytest.mark.asyncio
 async def test_gatekeeper_question_resolution_e2e(e2e_project: E2EProjectContext, e2e_orchestrator) -> None:
-    question = e2e_orchestrator.control_plane.request_user_decision(
+    facade = _facade(e2e_orchestrator)
+    question = facade.request_user_decision(
         "Should we start with OAuth or email auth first?\n[mock:question]",
         blocking_scope="planning",
     )
 
-    submission = await e2e_orchestrator.control_plane.submit_user_input("Start with OAuth first.")
-    pending_before = e2e_orchestrator.control_plane.get_question(question.question_id)
-    state_after_submit = e2e_orchestrator.control_plane.gatekeeper_state()
+    submission = await facade.submit_user_message("Start with OAuth first.")
+    pending_before = facade.get_question(question.question_id)
+    state_after_submit = facade.gatekeeper_state()
 
     assert pending_before is not None
     assert pending_before.status is QuestionStatus.PENDING
@@ -135,7 +142,7 @@ async def test_gatekeeper_question_resolution_e2e(e2e_project: E2EProjectContext
     }
 
     handle_snapshot = await _wait_for_gatekeeper_input_request(e2e_orchestrator, submission.run_id)
-    awaiting_state = e2e_orchestrator.control_plane.gatekeeper_state()
+    awaiting_state = facade.gatekeeper_state()
 
     assert awaiting_state.session.lifecycle_state is GatekeeperLifecycleStatus.AWAITING_USER
     assert len(handle_snapshot.runtime.input_requests) == 1
@@ -147,17 +154,17 @@ async def test_gatekeeper_question_resolution_e2e(e2e_project: E2EProjectContext
         result={"answer": "Use OAuth first."},
     )
 
-    result = await e2e_orchestrator.control_plane.wait_for_gatekeeper_submission(submission)
-    resolved = e2e_orchestrator.control_plane.get_question(question.question_id)
-    gatekeeper_run = e2e_orchestrator.control_plane.get_run(submission.run_id)
-    conversation = e2e_orchestrator.control_plane.conversation(submission.conversation_id)
+    result = await facade.wait_for_gatekeeper_submission(submission)
+    resolved = facade.get_question(question.question_id)
+    gatekeeper_run = facade.get_run(submission.run_id)
+    conversation = facade.conversation(submission.conversation_id)
     snapshot = e2e_project.snapshot_orchestrator(e2e_orchestrator)
 
     assert result.error is None
     assert resolved is not None
     assert resolved.status is QuestionStatus.RESOLVED
     assert resolved.answer == "Start with OAuth first."
-    assert e2e_orchestrator.control_plane.gatekeeper_state().session.lifecycle_state is GatekeeperLifecycleStatus.IDLE
+    assert facade.gatekeeper_state().session.lifecycle_state is GatekeeperLifecycleStatus.IDLE
     assert gatekeeper_run is not None
     assert gatekeeper_run.provider.native_event_log is not None
     assert gatekeeper_run.provider.canonical_event_log is not None
@@ -180,6 +187,7 @@ async def test_task_loop_happy_path_review_restart_accept_e2e(
     e2e_project: E2EProjectContext,
     e2e_orchestrator,
 ) -> None:
+    facade = _facade(e2e_orchestrator)
     result, ticket, attempt = await _run_single_task_to_review_pending(
         e2e_orchestrator,
         task_id="task-happy-path",
@@ -191,9 +199,9 @@ async def test_task_loop_happy_path_review_restart_accept_e2e(
             "[mock:tool]"
         ),
     )
-    task = e2e_orchestrator.control_plane.get_task("task-happy-path")
+    task = facade.get_task("task-happy-path")
     review_diff = Path(ticket.diff_ref or "")
-    worker_run = e2e_orchestrator.control_plane.get_run(ticket.run_id)
+    worker_run = facade.get_run(ticket.run_id)
 
     assert result.outcome == "review_pending"
     assert task is not None and task.status is TaskStatus.COMPLETED
@@ -213,10 +221,11 @@ async def test_task_loop_happy_path_review_restart_accept_e2e(
 
     restarted = _create_restarted_orchestrator(e2e_project)
     try:
-        resolution = restarted.control_plane.accept_review_ticket(ticket.ticket_id)
-        accepted_task = restarted.control_plane.get_task("task-happy-path")
-        accepted_attempt = restarted.control_plane.get_attempt_execution(ticket.attempt_id)
-        accepted_ticket = restarted.control_plane.get_review_ticket(ticket.ticket_id)
+        restarted_facade = _facade(restarted)
+        resolution = restarted_facade.accept_review_ticket(ticket.ticket_id)
+        accepted_task = restarted_facade.get_task("task-happy-path")
+        accepted_attempt = restarted_facade.get_attempt_execution(ticket.attempt_id)
+        accepted_ticket = restarted_facade.get_review_ticket(ticket.ticket_id)
         snapshot = e2e_project.snapshot_orchestrator(restarted)
 
         assert resolution.decision == "accept"
@@ -233,6 +242,7 @@ async def test_task_loop_happy_path_review_restart_accept_e2e(
 
 @pytest.mark.asyncio
 async def test_task_loop_retry_cycle_e2e(e2e_project: E2EProjectContext, e2e_orchestrator) -> None:
+    facade = _facade(e2e_orchestrator)
     first_result, first_ticket, first_attempt = await _run_single_task_to_review_pending(
         e2e_orchestrator,
         task_id="task-retry-cycle",
@@ -243,7 +253,7 @@ async def test_task_loop_retry_cycle_e2e(e2e_project: E2EProjectContext, e2e_orc
         ),
     )
 
-    retry_resolution = e2e_orchestrator.control_plane.retry_review_ticket(
+    retry_resolution = facade.retry_review_ticket(
         first_ticket.ticket_id,
         failure_reason="Need a different deterministic result.",
         prompt_patch=(
@@ -253,12 +263,12 @@ async def test_task_loop_retry_cycle_e2e(e2e_project: E2EProjectContext, e2e_orc
             "[mock:tool]"
         ),
     )
-    second_results = await e2e_orchestrator.control_plane.run_until_blocked()
-    second_ticket = e2e_orchestrator.control_plane.list_pending_review_tickets()[0]
-    second_attempt = e2e_orchestrator.control_plane.get_attempt_execution(second_ticket.attempt_id)
-    task = e2e_orchestrator.control_plane.get_task("task-retry-cycle")
-    review_history = e2e_orchestrator.control_plane.list_review_tickets(task_id="task-retry-cycle")
-    first_ticket_state = e2e_orchestrator.control_plane.get_review_ticket(first_ticket.ticket_id)
+    second_results = await facade.run_until_blocked()
+    second_ticket = facade.list_pending_review_tickets()[0]
+    second_attempt = facade.get_attempt_execution(second_ticket.attempt_id)
+    task = facade.get_task("task-retry-cycle")
+    review_history = facade.list_review_tickets(task_id="task-retry-cycle")
+    first_ticket_state = facade.get_review_ticket(first_ticket.ticket_id)
 
     assert first_result.outcome == "review_pending"
     assert retry_resolution.decision == "retry"
@@ -274,9 +284,9 @@ async def test_task_loop_retry_cycle_e2e(e2e_project: E2EProjectContext, e2e_orc
     assert first_ticket.run_id != second_ticket.run_id
     assert len(review_history) == 2
 
-    resolution = e2e_orchestrator.control_plane.accept_review_ticket(second_ticket.ticket_id)
-    accepted_task = e2e_orchestrator.control_plane.get_task("task-retry-cycle")
-    accepted_attempt = e2e_orchestrator.control_plane.get_attempt_execution(second_ticket.attempt_id)
+    resolution = facade.accept_review_ticket(second_ticket.ticket_id)
+    accepted_task = facade.get_task("task-retry-cycle")
+    accepted_attempt = facade.get_attempt_execution(second_ticket.attempt_id)
     snapshot = e2e_project.snapshot_orchestrator(e2e_orchestrator)
 
     assert resolution.decision == "accept"
@@ -289,7 +299,8 @@ async def test_task_loop_retry_cycle_e2e(e2e_project: E2EProjectContext, e2e_orc
 
 @pytest.mark.asyncio
 async def test_task_loop_worker_request_is_rejected_e2e(e2e_project: E2EProjectContext, e2e_orchestrator) -> None:
-    e2e_orchestrator.control_plane.add_task(
+    facade = _facade(e2e_orchestrator)
+    facade.add_task(
         _build_task(
             task_id="task-worker-request-rejected",
             title="Worker request rejection",
@@ -297,18 +308,18 @@ async def test_task_loop_worker_request_is_rejected_e2e(e2e_project: E2EProjectC
             acceptance=["worker run fails instead of awaiting user input"],
         )
     )
-    e2e_orchestrator.control_plane.end_planning_phase()
+    facade.end_planning_phase()
 
-    results = await e2e_orchestrator.control_plane.run_until_blocked()
-    task = e2e_orchestrator.control_plane.get_task("task-worker-request-rejected")
-    attempts = e2e_orchestrator.control_plane.list_attempt_executions(task_id="task-worker-request-rejected")
+    results = await facade.run_until_blocked()
+    task = facade.get_task("task-worker-request-rejected")
+    attempts = facade.list_attempt_executions(task_id="task-worker-request-rejected")
     code_attempt = attempts[0] if attempts else None
     worker_run = (
-        e2e_orchestrator.control_plane.get_run(code_attempt.run_id)
+        facade.get_run(code_attempt.run_id)
         if code_attempt is not None and code_attempt.run_id is not None
         else None
     )
-    pending_tickets = e2e_orchestrator.control_plane.list_pending_review_tickets()
+    pending_tickets = facade.list_pending_review_tickets()
     snapshot = e2e_project.snapshot_orchestrator(e2e_orchestrator)
 
     assert len(results) == 1

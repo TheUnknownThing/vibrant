@@ -29,7 +29,10 @@ from .basic.stores import (
 )
 from .basic.stores.gatekeeper_session import project_gatekeeper_session
 from .basic.workspace import WorkspaceService
-from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBackend, PolicyCommandAdapter
+from .interface.backend import OrchestratorBackend
+from .interface.basic import BasicQueryAdapter
+from .interface.control_plane import InterfaceControlPlane
+from .interface.policy import PolicyCommandAdapter
 from .interface.mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
 from .policy.gatekeeper_loop import GatekeeperLifecycleService, GatekeeperUserLoop
 from .policy.task_loop import ExecutionCoordinator, TaskLoop

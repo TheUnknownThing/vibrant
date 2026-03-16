@@ -48,6 +48,9 @@ class PolicyCommandAdapter:
     async def stop_gatekeeper(self):
         return await self.gatekeeper_loop.stop()
 
+    async def interrupt_gatekeeper(self):
+        return await self.gatekeeper_loop.lifecycle.interrupt_active_turn()
+
     def set_workflow_status(self, status: WorkflowStatus) -> WorkflowSnapshot:
         return self.gatekeeper_loop.transition_workflow(status)
 

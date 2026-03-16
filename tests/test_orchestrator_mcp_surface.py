@@ -36,12 +36,12 @@ def _build_server(tmp_path: Path):
     orchestrator = create_orchestrator(tmp_path)
     facade = OrchestratorFacade(orchestrator)
     assert orchestrator.mcp_server is not None
-    return facade, orchestrator.mcp_server, gatekeeper_principal()
+    return facade, orchestrator, orchestrator.mcp_server, gatekeeper_principal()
 
 
 @pytest.mark.asyncio
 async def test_mcp_server_supports_semantic_tools_and_resources(tmp_path: Path) -> None:
-    facade, server, principal = _build_server(tmp_path)
+    facade, _, server, principal = _build_server(tmp_path)
 
     await server.call_tool(
         "vibrant.add_task",
@@ -77,8 +77,7 @@ async def test_mcp_server_supports_semantic_tools_and_resources(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_mcp_server_exposes_attempt_execution_without_breaking_active_attempt_shape(tmp_path: Path) -> None:
-    facade, server, principal = _build_server(tmp_path)
-    orchestrator = facade.orchestrator
+    facade, orchestrator, server, principal = _build_server(tmp_path)
 
     await server.call_tool(
         "vibrant.add_task",
@@ -132,7 +131,7 @@ async def test_mcp_server_exposes_attempt_execution_without_breaking_active_atte
 
 @pytest.mark.asyncio
 async def test_mcp_surface_keeps_only_name_level_update_roadmap_alias(tmp_path: Path) -> None:
-    facade, server, principal = _build_server(tmp_path)
+    facade, _, server, principal = _build_server(tmp_path)
 
     roadmap = await server.call_tool(
         "vibrant.update_roadmap",
