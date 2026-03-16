@@ -665,20 +665,18 @@ class VibrantApp(App):
         agent_output = vibing_screen.agent_output
         for summary in summaries:
             conversation_id = summary.conversation_id
-            if conversation_id not in self._agent_output_loaded_conversation_ids:
-                frames = self.orchestrator.control_plane.conversation_frames(conversation_id)
-                for event in frames:
-                    agent_output.ingest_stream_event(event)
-                self._agent_output_loaded_conversation_ids.add(conversation_id)
             if conversation_id in self._agent_output_conversation_subscriptions:
                 continue
+            replay = conversation_id not in self._agent_output_loaded_conversation_ids
             self._agent_output_conversation_subscriptions[conversation_id] = (
                 self.orchestrator.control_plane.subscribe_conversation(
                     conversation_id,
                     self._on_agent_output_conversation_event,
-                    replay=False,
+                    replay=replay,
                 )
             )
+            if replay:
+                self._agent_output_loaded_conversation_ids.add(conversation_id)
 
     def _close_orchestrator_subscriptions(self) -> None:
         for subscription in (self._runtime_event_subscription, self._gatekeeper_conversation_subscription):

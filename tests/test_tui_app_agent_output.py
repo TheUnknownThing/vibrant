@@ -113,6 +113,6 @@ def test_refresh_agent_output_registry_hydrates_and_subscribes_when_logs_are_vis
     app._refresh_agent_output_registry(SimpleNamespace(agent_records=[]))
 
     assert agent_output.synced_calls == [(["conv-1"], []), (["conv-1"], [])]
-    assert control_plane.frame_calls == ["conv-1"]
-    assert control_plane.subscribe_calls == [("conv-1", False)]
-    assert agent_output.ingested_events == [frame]
+    assert control_plane.frame_calls == []
+    assert control_plane.subscribe_calls == [("conv-1", True)]
+    assert agent_output.ingested_events == []
