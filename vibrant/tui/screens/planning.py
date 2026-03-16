@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static
@@ -9,6 +10,8 @@ from textual.widgets import Static
 from ..widgets.chat_panel import ChatPanel
 from ..widgets.consensus_view import ConsensusView
 from ..widgets.input_bar import InputBar
+
+_MOBILE_BREAKPOINT = 110
 
 
 class PlanningScreen(Static):
@@ -28,6 +31,17 @@ class PlanningScreen(Static):
         min-width: 48;
         margin-right: 1;
         display: none;
+    }
+
+    PlanningScreen.-mobile #planning-layout {
+        layout: vertical;
+    }
+
+    PlanningScreen.-mobile #planning-consensus-panel {
+        min-width: 0;
+        margin-right: 0;
+        margin-bottom: 1;
+        height: 18;
     }
 
     PlanningScreen #planning-shell {
@@ -60,6 +74,16 @@ class PlanningScreen(Static):
         super().__init__(**kwargs)
         self._consensus_visible = False
         self._consensus_auto_revealed = False
+
+    def on_mount(self) -> None:
+        self._apply_responsive_layout()
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self) -> None:
+        self.set_class(self.size.width < _MOBILE_BREAKPOINT, "-mobile")
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="planning-layout"):
