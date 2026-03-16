@@ -52,7 +52,7 @@ async def test_facade_submit_gatekeeper_input_routes_through_control_plane(tmp_p
 def test_facade_run_projection_propagates_runtime_errors(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     facade = OrchestratorFacade(orchestrator)
-    orchestrator.agent_run_store.upsert(
+    orchestrator._agent_run_store.upsert(
         AgentRecord(
             identity={
                 "run_id": "run-broken",
@@ -67,7 +67,7 @@ def test_facade_run_projection_propagates_runtime_errors(tmp_path: Path, monkeyp
     def broken_snapshot_handle(run_id: str):
         raise RuntimeError(f"runtime snapshot failed for {run_id}")
 
-    monkeypatch.setattr(orchestrator.runtime_service, "snapshot_handle", broken_snapshot_handle)
+    monkeypatch.setattr(orchestrator._runtime_service, "snapshot_handle", broken_snapshot_handle)
 
     with pytest.raises(RuntimeError, match="runtime snapshot failed for run-broken"):
         facade.get_run("run-broken")

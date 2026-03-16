@@ -21,7 +21,7 @@ def _prepare_orchestrator(tmp_path: Path):
 async def test_control_plane_routes_pending_question_through_single_submit_command(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     facade = OrchestratorFacade(orchestrator)
-    question = orchestrator.question_store.create(
+    question = orchestrator._question_store.create(
         text="Should we use OAuth or email auth first?",
         priority=QuestionPriority.BLOCKING,
         source_role="gatekeeper",
@@ -43,11 +43,11 @@ async def test_control_plane_routes_pending_question_through_single_submit_comma
         assert run_id == "run-1"
         return SimpleNamespace(error=None, summary="done")
 
-    monkeypatch.setattr(orchestrator.gatekeeper_lifecycle, "submit", fake_submit)
-    monkeypatch.setattr(orchestrator.runtime_service, "wait_for_run", fake_wait_for_run)
+    monkeypatch.setattr(orchestrator._gatekeeper_lifecycle, "submit", fake_submit)
+    monkeypatch.setattr(orchestrator._runtime_service, "wait_for_run", fake_wait_for_run)
 
     submission = await facade.submit_user_message("Start with OAuth.")
-    pending = orchestrator.question_store.get(question.question_id)
+    pending = orchestrator._question_store.get(question.question_id)
 
     assert submission.agent_id == "gatekeeper-agent"
     assert captured["request"].trigger is GatekeeperTrigger.USER_CONVERSATION
@@ -56,7 +56,7 @@ async def test_control_plane_routes_pending_question_through_single_submit_comma
 
     await facade.wait_for_gatekeeper_submission(submission)
 
-    resolved = orchestrator.question_store.get(question.question_id)
+    resolved = orchestrator._question_store.get(question.question_id)
     assert resolved is not None and resolved.status is QuestionStatus.RESOLVED
 
 
@@ -64,7 +64,7 @@ async def test_control_plane_routes_pending_question_through_single_submit_comma
 async def test_failed_answer_submission_leaves_question_pending(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     facade = OrchestratorFacade(orchestrator)
-    question = orchestrator.question_store.create(
+    question = orchestrator._question_store.create(
         text="Do we need mobile support in v1?",
         priority=QuestionPriority.BLOCKING,
         source_role="gatekeeper",
@@ -78,12 +78,12 @@ async def test_failed_answer_submission_leaves_question_pending(tmp_path: Path, 
     async def fake_submit(**kwargs):
         raise RuntimeError("submit failed")
 
-    monkeypatch.setattr(orchestrator.gatekeeper_lifecycle, "submit", fake_submit)
+    monkeypatch.setattr(orchestrator._gatekeeper_lifecycle, "submit", fake_submit)
 
     with pytest.raises(RuntimeError, match="submit failed"):
         await facade.submit_user_message("Not for v1.")
 
-    persisted = orchestrator.question_store.get(question.question_id)
+    persisted = orchestrator._question_store.get(question.question_id)
     assert persisted is not None
     assert persisted.status is QuestionStatus.PENDING
     assert persisted.answer is None
@@ -95,7 +95,7 @@ async def test_failed_answer_submission_leaves_question_pending(tmp_path: Path, 
 async def test_failed_submission_result_leaves_question_pending(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     facade = OrchestratorFacade(orchestrator)
-    question = orchestrator.question_store.create(
+    question = orchestrator._question_store.create(
         text="Should we keep SQLite for local mode?",
         priority=QuestionPriority.BLOCKING,
         source_role="gatekeeper",
@@ -115,12 +115,12 @@ async def test_failed_submission_result_leaves_question_pending(tmp_path: Path, 
         assert run_id == "run-2"
         return SimpleNamespace(error="provider failure", summary=None)
 
-    monkeypatch.setattr(orchestrator.gatekeeper_lifecycle, "submit", fake_submit)
-    monkeypatch.setattr(orchestrator.runtime_service, "wait_for_run", fake_wait_for_run)
+    monkeypatch.setattr(orchestrator._gatekeeper_lifecycle, "submit", fake_submit)
+    monkeypatch.setattr(orchestrator._runtime_service, "wait_for_run", fake_wait_for_run)
 
     submission = await facade.submit_user_message("Yes, keep it.")
     result = await facade.wait_for_gatekeeper_submission(submission)
-    persisted = orchestrator.question_store.get(question.question_id)
+    persisted = orchestrator._question_store.get(question.question_id)
 
     assert result.error == "provider failure"
     assert persisted is not None
@@ -131,7 +131,7 @@ async def test_failed_submission_result_leaves_question_pending(tmp_path: Path, 
 def test_question_store_preserves_non_policy_scopes(tmp_path: Path) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
 
-    question = orchestrator.question_store.create(
+    question = orchestrator._question_store.create(
         text="Keep scope as provided",
         priority=QuestionPriority.NORMAL,
         source_role="gatekeeper",
@@ -142,7 +142,7 @@ def test_question_store_preserves_non_policy_scopes(tmp_path: Path) -> None:
         task_id=None,
     )
 
-    persisted = orchestrator.question_store.get(question.question_id)
+    persisted = orchestrator._question_store.get(question.question_id)
 
     assert persisted is not None
     assert persisted.blocking_scope == "custom-scope"
@@ -152,12 +152,12 @@ def test_question_store_preserves_non_policy_scopes(tmp_path: Path) -> None:
 async def test_gatekeeper_runtime_error_is_not_cleared_by_late_turn_completed(tmp_path: Path) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     facade = OrchestratorFacade(orchestrator)
-    lifecycle = orchestrator.gatekeeper_lifecycle
+    lifecycle = orchestrator._gatekeeper_lifecycle
     lifecycle._session.run_id = "run-1"
     lifecycle._session.lifecycle_state = GatekeeperLifecycleStatus.RUNNING
     lifecycle._session.active_turn_id = "turn-1"
 
-    await orchestrator.runtime_service.ingest_event(
+    await orchestrator._runtime_service.ingest_event(
         {
             "type": "runtime.error",
             "run_id": "run-1",
@@ -165,7 +165,7 @@ async def test_gatekeeper_runtime_error_is_not_cleared_by_late_turn_completed(tm
             "error_message": "provider failed",
         }
     )
-    await orchestrator.runtime_service.ingest_event(
+    await orchestrator._runtime_service.ingest_event(
         {
             "type": "turn.completed",
             "run_id": "run-1",

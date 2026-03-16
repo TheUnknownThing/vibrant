@@ -345,6 +345,12 @@ The TUI must read orchestrator-owned conversation frames, not provider-native tr
 
 ### 6.1 Orchestrator Control Plane
 
+The control plane is a logical subsystem, not the public Python shape of the
+`Orchestrator` bootstrap root. The root object should stay narrow: bootstrap a
+project-scoped orchestrator, expose MCP host/server creation and shutdown, and
+keep service composition details internal. First-party Python behavior access
+should go through `OrchestratorFacade`.
+
 Responsibilities:
 
 1. Own the workflow state machine.

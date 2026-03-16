@@ -139,7 +139,7 @@ class OrchestratorFacade:
 
     def __init__(self, orchestrator) -> None:
         self._orchestrator = orchestrator
-        self._control_plane = orchestrator.control_plane
+        self._control_plane = orchestrator._control_plane
         self.roles = _RoleReadView(self)
         self.instances = _InstanceReadView(self)
         self.runs = _RunReadView(self)
@@ -152,7 +152,7 @@ class OrchestratorFacade:
             question_records=tuple(self.list_question_records()),
             roadmap=self._control_plane.get_roadmap(),
             consensus=self._control_plane.get_consensus_document(),
-            consensus_path=self._orchestrator.consensus_path,
+            consensus_path=self._orchestrator._consensus_store.path,
             roles=tuple(self.list_roles()),
             instances=tuple(self.list_instances()),
             runs=tuple(self.list_runs()),
@@ -188,10 +188,10 @@ class OrchestratorFacade:
         return self._control_plane.get_roadmap()
 
     def get_consensus_source_path(self) -> Path | None:
-        return self._orchestrator.consensus_path
+        return self._orchestrator._consensus_store.path
 
     def get_execution_mode(self) -> RoadmapExecutionMode:
-        mode = self._orchestrator.execution_mode
+        mode = self._orchestrator._config.execution_mode
         if isinstance(mode, RoadmapExecutionMode):
             return mode
         return RoadmapExecutionMode(str(mode).strip().lower())

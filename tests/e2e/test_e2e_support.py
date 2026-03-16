@@ -71,10 +71,10 @@ def test_e2e_project_fixture_initializes_git_repo_and_config(e2e_project) -> Non
 
 @pytest.mark.asyncio
 async def test_e2e_orchestrator_fixture_injects_fixture_provider(e2e_project, e2e_orchestrator) -> None:
-    assert e2e_orchestrator.adapter_factory is FixtureProviderAdapter
-    assert e2e_orchestrator.execution_coordinator.adapter_factory is FixtureProviderAdapter
-    assert e2e_orchestrator.gatekeeper.agent.adapter_factory is FixtureProviderAdapter
-    assert e2e_orchestrator.config.concurrency_limit == 1
+    assert e2e_orchestrator._adapter_factory is FixtureProviderAdapter
+    assert e2e_orchestrator._execution_coordinator.adapter_factory is FixtureProviderAdapter
+    assert e2e_orchestrator._gatekeeper.agent.adapter_factory is FixtureProviderAdapter
+    assert e2e_orchestrator._config.concurrency_limit == 1
 
     snapshot = e2e_project.snapshot_orchestrator(e2e_orchestrator)
 

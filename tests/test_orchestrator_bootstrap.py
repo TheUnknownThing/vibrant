@@ -19,12 +19,12 @@ def _prepare_project(tmp_path: Path):
 def test_create_orchestrator_bootstraps_redesigned_services(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
 
-    assert orchestrator.workflow_state_store.load().workflow_status.value == "init"
+    assert orchestrator._workflow_state_store.load().workflow_status.value == "init"
     assert orchestrator.mcp_server is not None
     assert orchestrator.mcp_host is not None
-    assert orchestrator.binding_service is not None
-    assert orchestrator.conversation_store.base_dir.exists()
-    assert orchestrator.attempt_store.list_active() == []
+    assert orchestrator._binding_service is not None
+    assert orchestrator._conversation_store.base_dir.exists()
+    assert orchestrator._attempt_store.list_active() == []
 
 
 def test_bootstrap_projects_gatekeeper_resume_from_run_record(tmp_path: Path) -> None:
@@ -91,7 +91,7 @@ def test_bootstrap_clears_stale_instance_active_run_pointer(tmp_path: Path) -> N
     )
 
     orchestrator = create_orchestrator(tmp_path)
-    instance = orchestrator.agent_instance_store.get("worker-1")
+    instance = orchestrator._agent_instance_store.get("worker-1")
 
     assert instance is not None
     assert instance.latest_run_id == "run-stale"
@@ -152,7 +152,7 @@ def test_facade_derives_task_run_queries_from_attempts(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    orchestrator.agent_run_store.upsert(
+    orchestrator._agent_run_store.upsert(
         AgentRecord(
             identity={
                 "run_id": "run-task-1",
@@ -164,7 +164,7 @@ def test_facade_derives_task_run_queries_from_attempts(tmp_path: Path) -> None:
             outcome={"summary": "Finished task 1"},
         )
     )
-    orchestrator.agent_run_store.upsert(
+    orchestrator._agent_run_store.upsert(
         AgentRecord(
             identity={
                 "run_id": "run-task-2",
@@ -176,7 +176,7 @@ def test_facade_derives_task_run_queries_from_attempts(tmp_path: Path) -> None:
             outcome={"summary": "Finished task 2"},
         )
     )
-    orchestrator.attempt_store.create(
+    orchestrator._attempt_store.create(
         task_id="task-1",
         workspace_id="workspace-1",
         task_definition_version=1,

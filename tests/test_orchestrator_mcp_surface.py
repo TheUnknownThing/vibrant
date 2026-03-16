@@ -86,8 +86,8 @@ async def test_mcp_server_exposes_attempt_execution_without_breaking_active_atte
         title="Recover an active attempt",
         acceptance_criteria=["attempt can be inspected"],
     )
-    workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
-    attempt = orchestrator.attempt_store.create(
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
         task_id="task-1",
         task_definition_version=1,
         workspace_id=workspace.workspace_id,
@@ -95,11 +95,11 @@ async def test_mcp_server_exposes_attempt_execution_without_breaking_active_atte
         code_run_id="run-task-1",
         conversation_id="attempt-conv-1",
     )
-    orchestrator.conversation_stream.bind_run(
+    orchestrator._conversation_stream.bind_run(
         conversation_id="attempt-conv-1",
         run_id="run-task-1",
     )
-    orchestrator.conversation_stream.record_host_message(
+    orchestrator._conversation_stream.record_host_message(
         conversation_id="attempt-conv-1",
         role="system",
         text="Attempt resumed for inspection.",

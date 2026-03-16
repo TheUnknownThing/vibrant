@@ -26,6 +26,9 @@ First-party Python consumers should integrate through
 `vibrant.orchestrator.OrchestratorFacade`. MCP consumers should integrate
 through `OrchestratorMCPServer`. The internal `interface` package may remain
 part of the implementation, but it is not itself the public Python contract.
+The `Orchestrator` bootstrap root is intentionally narrower: it is for
+project-root bootstrap plus MCP host/server lifecycle, not for direct access
+to stores, policy loops, or interface adapters.
 
 ## Design Rules
 
@@ -52,11 +55,29 @@ The stable integration model is:
 Consumers should not rely on:
 
 - internal service composition
+- internal attributes on `Orchestrator`
 - store implementation details
 - provider-native logs as primary history
 - provider-specific event chunking, auxiliary events, or terminal-event ordering
 - ad hoc status patching APIs
 - Gatekeeper prose as an authority channel
+
+## Bootstrap Root Boundary
+
+`Orchestrator` is the composition root, not the public behavior surface.
+
+Publicly, consumers may rely on:
+
+- `project_root`
+- `vibrant_dir`
+- `mcp_server`
+- `mcp_host`
+- `shutdown()`
+
+Everything else on the root should be treated as internal wiring, even when it
+exists for first-party tests under underscore-prefixed names. Python consumers
+that need workflow actions, snapshots, questions, task management, review
+operations, or conversation access should use `OrchestratorFacade`.
 
 ## Provider Adapter Compatibility
 

@@ -68,12 +68,12 @@ class E2EProjectContext:
         """Persist a manifest snapshot from durable orchestrator state."""
 
         return self.update_manifest(
-            run_ids=[record.identity.run_id for record in orchestrator.agent_run_store.list()],
-            conversation_ids=[manifest.conversation_id for manifest in orchestrator.conversation_store.list_manifests()],
-            question_ids=[record.question_id for record in orchestrator.question_store.list()],
-            attempt_ids=[record.attempt_id for record in orchestrator.attempt_store.list_all()],
-            review_ticket_ids=_json_mapping_keys(orchestrator.review_ticket_store.path),
-            workspace_ids=[record.workspace_id for record in orchestrator.workspace_store.list_all()],
+            run_ids=[record.identity.run_id for record in orchestrator._agent_run_store.list()],
+            conversation_ids=[manifest.conversation_id for manifest in orchestrator._conversation_store.list_manifests()],
+            question_ids=[record.question_id for record in orchestrator._question_store.list()],
+            attempt_ids=[record.attempt_id for record in orchestrator._attempt_store.list_all()],
+            review_ticket_ids=_json_mapping_keys(orchestrator._review_ticket_store.path),
+            workspace_ids=[record.workspace_id for record in orchestrator._workspace_store.list_all()],
             diff_paths=sorted(str(path.resolve()) for path in (orchestrator.vibrant_dir / "review-diffs").glob("*.diff")),
         )
 
