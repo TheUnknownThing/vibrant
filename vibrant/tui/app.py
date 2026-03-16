@@ -777,25 +777,19 @@ class VibrantApp(App):
             self.notify("Initialize a project before entering the vibing phase.", severity="warning")
             return False
 
-        try:
-            for _ in range(2):
-                current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
-                if current_status not in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
-                    break
-                next_status = (
-                    OrchestratorStatus.PLANNING
-                    if current_status is OrchestratorStatus.INIT
-                    else OrchestratorStatus.EXECUTING
-                )
-                self._transition_workflow_state(next_status)
-        except Exception as exc:
-            logger.exception("Failed to enter vibing phase")
-            self.notify(f"Failed to enter vibing phase: {exc}", severity="error")
-            self._set_status(f"Failed to enter vibing phase: {exc}")
-            return False
+        for _ in range(2):
+            current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
+            if current_status not in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
+                break
+            next_status = (
+                OrchestratorStatus.PLANNING
+                if current_status is OrchestratorStatus.INIT
+                else OrchestratorStatus.EXECUTING
+            )
+            self._transition_workflow_state(next_status)
 
         self._todo_exit_message = None
-        self.call_after_refresh(self._refresh_project_views)
+        self._sync_workspace_screen(prefer_chat_history=prefer_chat_history)
         self._set_status("Entered vibing phase")
         self._start_automatic_workflow_if_needed()
         return True
