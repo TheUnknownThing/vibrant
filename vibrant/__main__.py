@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import shlex
 import sys
 from collections.abc import Sequence
 
@@ -54,6 +55,32 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable debug logging to ~/.vibrant/debug.log",
     )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Serve the Textual app over HTTP via textual-serve",
+    )
+    parser.add_argument(
+        "--serve-host",
+        default="0.0.0.0",
+        help="Host interface for --serve (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--serve-port",
+        type=int,
+        default=8000,
+        help="Port for --serve (default: 8000)",
+    )
+    parser.add_argument(
+        "--serve-public-url",
+        default=None,
+        help="Optional externally reachable URL shown by textual-serve",
+    )
+    parser.add_argument(
+        "--textual-client",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     subparsers = parser.add_subparsers(dest="command")
     init_parser = subparsers.add_parser("init", help="Initialize the .vibrant project directory")
@@ -66,6 +93,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _build_textual_client_command(args: argparse.Namespace) -> str:
+    command_parts = [sys.executable, "-m", "vibrant", "--textual-client"]
+    if args.cwd:
+        command_parts.extend(["--cwd", args.cwd])
+    if args.model:
+        command_parts.extend(["--model", args.model])
+    if args.debug:
+        command_parts.append("--debug")
+    return shlex.join(command_parts)
+
+
+def _serve_app(args: argparse.Namespace) -> None:
+    from textual_serve.server import Server
+
+    server = Server(
+        _build_textual_client_command(args),
+        host=args.serve_host,
+        port=args.serve_port,
+        title="Vibrant",
+        public_url=args.serve_public_url,
+    )
+    server.serve(debug=args.debug)
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -73,6 +124,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     if args.command == "init":
         vibrant_dir = initialize_project(args.path)
         print(f"Initialized Vibrant project in {vibrant_dir}")
+        return
+
+    if args.serve and not args.textual_client:
+        _serve_app(args)
         return
 
     start_path = args.cwd or os.getcwd()
