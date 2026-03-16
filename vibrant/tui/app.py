@@ -170,9 +170,11 @@ class VibrantApp(App):
         await self._stop_project_refresh_loop()
         self._close_orchestrator_subscriptions()
 
-    async def action_open_settings(self) -> None:
-        result = await self.push_screen_wait(SettingsPanel(self._settings))
-        if not result:
+    def action_open_settings(self) -> None:
+        self.push_screen(SettingsPanel(self._settings), self._handle_settings_dismissed)
+
+    def _handle_settings_dismissed(self, result: AppSettings | None) -> None:
+        if result is None:
             return
 
         self._settings = result
@@ -472,7 +474,7 @@ class VibrantApp(App):
             else:
                 self.notify(f"Current model: {self._settings.default_model}")
         elif cmd == "settings":
-            await self.action_open_settings()
+            self.action_open_settings()
         elif cmd == "vibe":
             self._transition_to_vibing(prefer_chat_history=True)
         elif cmd in {"run", "next", "task"}:
