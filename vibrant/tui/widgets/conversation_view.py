@@ -7,7 +7,7 @@ from typing import Literal
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Static
+from textual.widgets import Markdown, Static
 
 from ...orchestrator.types import AgentConversationEntry, AgentConversationView, AgentStreamEvent
 
@@ -24,14 +24,13 @@ TOOL_STATUS_LABELS: dict[ToolCallStatus, str] = {
 }
 
 
-class TextPart(Static):
-    """Plain text message part widget."""
+class TextPart(Markdown):
+    """Markdown-backed message part widget."""
 
     def __init__(self, text: str, **kwargs: object) -> None:
-        super().__init__("", markup=False, classes="conversation-part text-part msg-content", **kwargs)
+        super().__init__(text, classes="conversation-part text-part msg-content", **kwargs)
         self.styles.height = "auto"
         self.text = text
-        self._refresh()
 
     def _refresh(self) -> None:
         self.update(self.text)
@@ -261,6 +260,10 @@ class ConversationView(Static):
 
     ConversationView .msg-content {
         margin-top: 0;
+    }
+
+    ConversationView .text-part {
+        padding: 0;
     }
 
     ConversationView .msg-tool {
