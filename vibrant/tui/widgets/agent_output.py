@@ -643,6 +643,15 @@ def _compose_line(event: CanonicalEvent, message: str) -> str:
     return f"{prefix}{message}" if prefix else message
 
 
+def _request_opened_label(event: CanonicalEvent) -> str:
+    request_kind = str(event.get("request_kind") or "request").strip().lower()
+    if request_kind == "approval":
+        return "⚠ Approval requested"
+    if request_kind == "user-input":
+        return "⚠ User input requested"
+    return "⚠ Request opened"
+
+
 def _render_canonical_event_lines(event: CanonicalEvent) -> list[str]:
     event_type = str(event.get("type") or "event")
 
@@ -656,8 +665,8 @@ def _render_canonical_event_lines(event: CanonicalEvent) -> list[str]:
         if event.get("error") is not None:
             return [_compose_line(event, f"✗ {tool_name} failed")]
         return [_compose_line(event, f"✅ {tool_name} completed")]
-    if event_type == "user-input.requested":
-        return [_compose_line(event, "⚠ User input requested")]
+    if event_type in {"request.opened", "user-input.requested"}:
+        return [_compose_line(event, _request_opened_label(event))]
     if event_type == "runtime.error":
         return [_compose_line(event, f"✗ {_error_text(event)}".rstrip())]
     return []

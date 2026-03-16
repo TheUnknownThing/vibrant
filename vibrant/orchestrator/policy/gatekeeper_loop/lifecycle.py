@@ -284,7 +284,10 @@ class GatekeeperLifecycleService:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.RUNNING
         elif event_type == "turn.completed":
             self._session.active_turn_id = None
-            if self._session.lifecycle_state is not GatekeeperLifecycleStatus.AWAITING_USER:
+            if self._session.lifecycle_state not in {
+                GatekeeperLifecycleStatus.AWAITING_USER,
+                GatekeeperLifecycleStatus.FAILED,
+            }:
                 self._session.lifecycle_state = GatekeeperLifecycleStatus.IDLE
         elif event_type in {"request.opened", "user-input.requested"}:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.AWAITING_USER

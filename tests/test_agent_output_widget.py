@@ -187,6 +187,54 @@ async def test_agent_output_debug_view_renders_canonical_payloads():
 
 
 @pytest.mark.asyncio
+async def test_agent_output_renders_request_opened_like_user_input_requested():
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+
+        widget.ingest_canonical_event(
+            {
+                "agent_id": "agent-task-003",
+                "run_id": "run-task-003",
+                "type": "request.opened",
+                "timestamp": "2026-03-11T12:00:01Z",
+                "request_id": "req-1",
+                "request_kind": "user-input",
+            }
+        )
+        await pilot.pause()
+
+        rendered = widget.get_rendered_text()
+
+        assert "⚠ User input requested" in rendered
+
+
+@pytest.mark.asyncio
+async def test_agent_output_renders_approval_request_opened_distinctly():
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+
+        widget.ingest_canonical_event(
+            {
+                "agent_id": "agent-task-003",
+                "run_id": "run-task-003",
+                "type": "request.opened",
+                "timestamp": "2026-03-11T12:00:02Z",
+                "request_id": "req-2",
+                "request_kind": "approval",
+            }
+        )
+        await pilot.pause()
+
+        rendered = widget.get_rendered_text()
+
+        assert "⚠ Approval requested" in rendered
+
+
+@pytest.mark.asyncio
 async def test_agent_output_starts_new_reasoning_widget_after_visible_output():
     record = AgentRecord(
         identity={

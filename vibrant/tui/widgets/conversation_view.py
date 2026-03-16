@@ -290,7 +290,7 @@ def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamE
                 role="system",
                 kind="status",
                 turn_id=event.turn_id,
-                text=event.text or _status_text(event.type),
+                text=event.text or _status_text(event),
                 payload=event.payload,
                 started_at=event.created_at,
                 finished_at=event.created_at,
@@ -356,13 +356,24 @@ def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamE
     target.finished_at = event.created_at
 
 
-def _status_text(event_type: str) -> str:
+def _request_status_text(payload: object, *, resolved: bool) -> str:
+    request_kind = ""
+    if isinstance(payload, dict):
+        request_kind = str(payload.get("request_kind") or "").strip().lower()
+    if request_kind == "approval":
+        return "Approval resolved" if resolved else "Approval requested"
+    if request_kind == "user-input":
+        return "User input resolved" if resolved else "User input requested"
+    return "Request resolved" if resolved else "Request opened"
+
+
+def _status_text(event: AgentStreamEvent) -> str:
     return {
         "conversation.turn.started": "Turn started",
         "conversation.turn.completed": "Turn completed",
-        "conversation.request.opened": "User input requested",
-        "conversation.request.resolved": "User input resolved",
-    }.get(event_type, event_type)
+        "conversation.request.opened": _request_status_text(event.payload, resolved=False),
+        "conversation.request.resolved": _request_status_text(event.payload, resolved=True),
+    }.get(event.type, event.type)
 
 
 def _entry_shape(event_type: str) -> tuple[str | None, str | None]:

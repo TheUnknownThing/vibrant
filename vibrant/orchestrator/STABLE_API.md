@@ -5,6 +5,7 @@ This document defines the stable public contract for the orchestrator redesign.
 Related design notes:
 
 - [`TYPES_AUDIT.md`](/home/rogerw/project/vibrant/vibrant/orchestrator/TYPES_AUDIT.md): audit of larger orchestrator types and cleanup plan
+- [`BEHAVIOR_CONTRACT.md`](/home/rogerw/project/vibrant/vibrant/providers/BEHAVIOR_CONTRACT.md): provider adapter compatibility contract consumed by the runtime and orchestrator
 
 It is written from the perspective of **external and first-party consumers**
 that need a durable integration boundary while the implementation is organized
@@ -52,8 +53,28 @@ Consumers should not rely on:
 - internal service composition
 - store implementation details
 - provider-native logs as primary history
+- provider-specific event chunking, auxiliary events, or terminal-event ordering
 - ad hoc status patching APIs
 - Gatekeeper prose as an authority channel
+
+## Provider Adapter Compatibility
+
+Provider adapters are part of the stable runtime boundary. The normative
+behavior rules live in
+[`BEHAVIOR_CONTRACT.md`](/home/rogerw/project/vibrant/vibrant/providers/BEHAVIOR_CONTRACT.md).
+
+The important orchestrator rule is that providers are accepted based on
+normalized behavior, not based on matching Codex or Claude internals. A
+provider is compatible if it:
+
+- satisfies the `ProviderAdapter` lifecycle surface
+- persists resumable thread metadata when available
+- terminates turns through canonical `turn.completed` or `runtime.error`
+- surfaces interactive pauses through canonical `request.*` events
+- emits assistant transcript text through `content.delta`
+
+Consumers must not require provider-specific event timing, payload layout, or
+native protocol details beyond that contract.
 
 ## Stable Identity Model
 

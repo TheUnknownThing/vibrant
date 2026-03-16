@@ -716,6 +716,15 @@ def _recent_activity_from_events(events: Sequence[CanonicalEvent]) -> list[str]:
     return deduped
 
 
+def _request_activity_label(event: CanonicalEvent) -> str:
+    request_kind = str(event.get("request_kind") or "request").strip().lower()
+    if request_kind == "approval":
+        return "Approval requested"
+    if request_kind == "user-input":
+        return "User input requested"
+    return "Request opened"
+
+
 def _activity_lines_from_event(event: CanonicalEvent) -> list[str]:
     event_type = str(event.get("type") or "")
     if event_type == "turn.started":
@@ -724,8 +733,8 @@ def _activity_lines_from_event(event: CanonicalEvent) -> list[str]:
         return ["Turn completed"]
     if event_type == "task.completed":
         return ["Task completed"]
-    if event_type == "user-input.requested":
-        return ["User input requested"]
+    if event_type in {"request.opened", "user-input.requested"}:
+        return [_request_activity_label(event)]
     if event_type == "runtime.error":
         return [f"Error: {extract_error_message(event)}"]
     if event_type != "task.progress":

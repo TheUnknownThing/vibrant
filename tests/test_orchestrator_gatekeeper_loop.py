@@ -7,7 +7,7 @@ import pytest
 from vibrant.agents.gatekeeper import GatekeeperTrigger
 
 from vibrant.orchestrator import create_orchestrator
-from vibrant.orchestrator.types import QuestionPriority, QuestionStatus
+from vibrant.orchestrator.types import GatekeeperLifecycleStatus, QuestionPriority, QuestionStatus
 from vibrant.project_init import initialize_project
 
 
@@ -142,3 +142,34 @@ def test_question_store_preserves_non_policy_scopes(tmp_path: Path) -> None:
 
     assert persisted is not None
     assert persisted.blocking_scope == "custom-scope"
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_runtime_error_is_not_cleared_by_late_turn_completed(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    lifecycle = orchestrator.gatekeeper_lifecycle
+    lifecycle._session.run_id = "run-1"
+    lifecycle._session.lifecycle_state = GatekeeperLifecycleStatus.RUNNING
+    lifecycle._session.active_turn_id = "turn-1"
+
+    await orchestrator.runtime_service.ingest_event(
+        {
+            "type": "runtime.error",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "error_message": "provider failed",
+        }
+    )
+    await orchestrator.runtime_service.ingest_event(
+        {
+            "type": "turn.completed",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+        }
+    )
+
+    state = orchestrator.control_plane.gatekeeper_state()
+
+    assert state.session.lifecycle_state is GatekeeperLifecycleStatus.FAILED
+    assert state.session.last_error == "provider failed"
+    assert state.session.active_turn_id is None
