@@ -302,6 +302,8 @@ class AgentOutput(Static):
         self._latest_run_id_by_agent: dict[str, str] = {}
         self._mounted_block_widgets: dict[int, LogBlockWidget] = {}
         self._mounted_debug_widgets: dict[int, Static] = {}
+        self._mounted_stream_conversation_id: str | None = None
+        self._mounted_debug_conversation_id: str | None = None
         self._stream_scroll: AgentOutputScroll | None = None
         self._debug_scroll: AgentOutputScroll | None = None
         self._stream_body: Vertical | None = None
@@ -426,6 +428,8 @@ class AgentOutput(Static):
         self._latest_run_id_by_agent.clear()
         self._mounted_block_widgets.clear()
         self._mounted_debug_widgets.clear()
+        self._mounted_stream_conversation_id = None
+        self._mounted_debug_conversation_id = None
         if message:
             self._empty_message = message
         self._update_meta()
@@ -818,15 +822,18 @@ class AgentOutput(Static):
             return
         self._window_mutation_guard = True
         try:
-            # TODO: Change it to append mode
-            self._stream_body.remove_children()
-            self._mounted_block_widgets.clear()
             if state is None:
+                self._stream_body.remove_children()
+                self._mounted_block_widgets.clear()
+                self._mounted_stream_conversation_id = None
                 self._stream_body.mount(
                     Static(self._empty_message, classes="agent-output-entry agent-output-status", markup=False)
                 )
                 return
             if not state.blocks:
+                self._stream_body.remove_children()
+                self._mounted_block_widgets.clear()
+                self._mounted_stream_conversation_id = state.conversation_id
                 self._stream_body.mount(
                     Static(
                         "Operational activity will appear here…",
@@ -836,8 +843,52 @@ class AgentOutput(Static):
                 )
                 return
             self._ensure_stream_window_bounds(state)
-            for index in range(state.visible_start, state.visible_end):
+            if self._mounted_stream_conversation_id != state.conversation_id:
+                self._stream_body.remove_children()
+                self._mounted_block_widgets.clear()
+                self._mounted_stream_conversation_id = state.conversation_id
+            elif self._stream_body.children and not self._mounted_block_widgets:
+                self._stream_body.remove_children()
+
+            if not self._mounted_block_widgets:
+                for index in range(state.visible_start, state.visible_end):
+                    self._append_stream_widget(state, index)
+                return
+
+            current_start = min(self._mounted_block_widgets)
+            current_end = max(self._mounted_block_widgets) + 1
+
+            while current_start < state.visible_start:
+                widget = self._mounted_block_widgets.pop(current_start, None)
+                if widget is not None:
+                    widget.remove()
+                current_start += 1
+
+            while current_end > state.visible_end:
+                current_end -= 1
+                widget = self._mounted_block_widgets.pop(current_end, None)
+                if widget is not None:
+                    widget.remove()
+
+            if not self._mounted_block_widgets:
+                for index in range(state.visible_start, state.visible_end):
+                    self._append_stream_widget(state, index)
+                return
+
+            current_start = min(self._mounted_block_widgets)
+            current_end = max(self._mounted_block_widgets) + 1
+
+            if current_start > state.visible_start:
+                self._prepend_stream_widgets(state, state.visible_start, current_start)
+                current_start = state.visible_start
+
+            for index in range(current_end, state.visible_end):
                 self._append_stream_widget(state, index)
+
+            for index in range(max(current_start, state.visible_start), min(current_end, state.visible_end)):
+                widget = self._mounted_block_widgets.get(index)
+                if widget is not None:
+                    widget.set_block(state.blocks[index])
         finally:
             self._window_mutation_guard = False
 
@@ -846,18 +897,68 @@ class AgentOutput(Static):
             return
         self._window_mutation_guard = True
         try:
-            # TODO: Change it to append mode
-            self._debug_body.remove_children()
-            self._mounted_debug_widgets.clear()
             if state is None:
+                self._debug_body.remove_children()
+                self._mounted_debug_widgets.clear()
+                self._mounted_debug_conversation_id = None
                 self._debug_body.mount(Static("No event debug output yet.", classes="agent-output-debug-line"))
                 return
             if not state.debug_lines:
+                self._debug_body.remove_children()
+                self._mounted_debug_widgets.clear()
+                self._mounted_debug_conversation_id = state.conversation_id
                 self._debug_body.mount(Static("Waiting for event debug output…", classes="agent-output-debug-line"))
                 return
             self._ensure_debug_window_bounds(state)
-            for index in range(state.debug_visible_start, state.debug_visible_end):
+            if self._mounted_debug_conversation_id != state.conversation_id:
+                self._debug_body.remove_children()
+                self._mounted_debug_widgets.clear()
+                self._mounted_debug_conversation_id = state.conversation_id
+            elif self._debug_body.children and not self._mounted_debug_widgets:
+                self._debug_body.remove_children()
+
+            if not self._mounted_debug_widgets:
+                for index in range(state.debug_visible_start, state.debug_visible_end):
+                    self._append_debug_widget(state, index)
+                return
+
+            current_start = min(self._mounted_debug_widgets)
+            current_end = max(self._mounted_debug_widgets) + 1
+
+            while current_start < state.debug_visible_start:
+                widget = self._mounted_debug_widgets.pop(current_start, None)
+                if widget is not None:
+                    widget.remove()
+                current_start += 1
+
+            while current_end > state.debug_visible_end:
+                current_end -= 1
+                widget = self._mounted_debug_widgets.pop(current_end, None)
+                if widget is not None:
+                    widget.remove()
+
+            if not self._mounted_debug_widgets:
+                for index in range(state.debug_visible_start, state.debug_visible_end):
+                    self._append_debug_widget(state, index)
+                return
+
+            current_start = min(self._mounted_debug_widgets)
+            current_end = max(self._mounted_debug_widgets) + 1
+
+            if current_start > state.debug_visible_start:
+                self._prepend_debug_widgets(state, state.debug_visible_start, current_start)
+                current_start = state.debug_visible_start
+
+            for index in range(current_end, state.debug_visible_end):
                 self._append_debug_widget(state, index)
+
+            for index in range(
+                max(current_start, state.debug_visible_start),
+                min(current_end, state.debug_visible_end),
+            ):
+                widget = self._mounted_debug_widgets.get(index)
+                if widget is not None:
+                    widget.update(state.debug_lines[index])
         finally:
             self._window_mutation_guard = False
 
@@ -871,7 +972,7 @@ class AgentOutput(Static):
     def _append_debug_widget(self, state: ConversationLogState, index: int) -> None:
         if self._debug_body is None or index in self._mounted_debug_widgets:
             return
-        line = list(state.debug_lines)[index]
+        line = state.debug_lines[index]
         widget = Static(line, classes="agent-output-debug-line", markup=False)
         self._mounted_debug_widgets[index] = widget
         self._debug_body.mount(widget)

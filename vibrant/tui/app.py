@@ -126,6 +126,7 @@ class VibrantApp(App):
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
         self._agent_output_conversation_subscriptions: dict[str, Any] = {}
+        self._agent_output_loaded_conversation_ids: set[str] = set()
         self._gatekeeper_conversation_id: str | None = None
         self._workspace_screen: WorkspaceScreen | None = None
         self._task_execution_in_progress = False
@@ -634,6 +635,7 @@ class VibrantApp(App):
                 with suppress(Exception):
                     subscription.close()
             self._agent_output_conversation_subscriptions = {}
+            self._agent_output_loaded_conversation_ids.clear()
             return
 
         desired_ids = {summary.conversation_id for summary in summaries}
@@ -644,17 +646,37 @@ class VibrantApp(App):
                 subscription.close()
             self._agent_output_conversation_subscriptions.pop(conversation_id, None)
 
+        self._agent_output_loaded_conversation_ids.intersection_update(desired_ids)
+
+    def ensure_agent_output_loaded(self) -> None:
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            return
+        self._refresh_agent_output_registry(snapshot, hydrate=True)
+
+    def _hydrate_agent_output_conversations(self, summaries: list[ConversationSummary]) -> None:
+        if self.orchestrator is None:
+            return
+
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is None:
+            return
+
+        agent_output = vibing_screen.agent_output
         for summary in summaries:
             conversation_id = summary.conversation_id
             if conversation_id in self._agent_output_conversation_subscriptions:
                 continue
+            replay = conversation_id not in self._agent_output_loaded_conversation_ids
             self._agent_output_conversation_subscriptions[conversation_id] = (
                 self.orchestrator.control_plane.subscribe_conversation(
                     conversation_id,
                     self._on_agent_output_conversation_event,
-                    replay=True,
+                    replay=replay,
                 )
             )
+            if replay:
+                self._agent_output_loaded_conversation_ids.add(conversation_id)
 
     def _close_orchestrator_subscriptions(self) -> None:
         for subscription in (self._runtime_event_subscription, self._gatekeeper_conversation_subscription):
@@ -668,6 +690,7 @@ class VibrantApp(App):
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
         self._agent_output_conversation_subscriptions = {}
+        self._agent_output_loaded_conversation_ids.clear()
         self._gatekeeper_conversation_id = None
 
     def _attach_orchestrator_subscriptions(self) -> None:
@@ -777,25 +800,19 @@ class VibrantApp(App):
             self.notify("Initialize a project before entering the vibing phase.", severity="warning")
             return False
 
-        try:
-            for _ in range(2):
-                current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
-                if current_status not in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
-                    break
-                next_status = (
-                    OrchestratorStatus.PLANNING
-                    if current_status is OrchestratorStatus.INIT
-                    else OrchestratorStatus.EXECUTING
-                )
-                self._transition_workflow_state(next_status)
-        except Exception as exc:
-            logger.exception("Failed to enter vibing phase")
-            self.notify(f"Failed to enter vibing phase: {exc}", severity="error")
-            self._set_status(f"Failed to enter vibing phase: {exc}")
-            return False
+        for _ in range(2):
+            current_status = _normalize_orchestrator_status(orchestrator.get_workflow_status())
+            if current_status not in {OrchestratorStatus.INIT, OrchestratorStatus.PLANNING}:
+                break
+            next_status = (
+                OrchestratorStatus.PLANNING
+                if current_status is OrchestratorStatus.INIT
+                else OrchestratorStatus.EXECUTING
+            )
+            self._transition_workflow_state(next_status)
 
         self._todo_exit_message = None
-        self.call_after_refresh(self._refresh_project_views)
+        self._sync_workspace_screen(prefer_chat_history=prefer_chat_history)
         self._set_status("Entered vibing phase")
         self._start_automatic_workflow_if_needed()
         return True
@@ -880,7 +897,12 @@ class VibrantApp(App):
             agent_summaries=task_summaries,
         )
 
-    def _refresh_agent_output_registry(self, snapshot: OrchestratorSnapshot | None) -> None:
+    def _refresh_agent_output_registry(
+        self,
+        snapshot: OrchestratorSnapshot | None,
+        *,
+        hydrate: bool | None = None,
+    ) -> None:
         if snapshot is None or self.orchestrator is None:
             self._sync_agent_output_conversation_bindings([])
             vibing_screen = self.vibing_screen()
@@ -897,6 +919,9 @@ class VibrantApp(App):
             conversation_summaries = self.orchestrator.control_plane.list_conversation_summaries()
             vibing_screen.agent_output.sync_conversations(conversation_summaries, snapshot.agent_records)
             self._sync_agent_output_conversation_bindings(conversation_summaries)
+            should_hydrate = hydrate if hydrate is not None else vibing_screen.active_tab == "agent-logs"
+            if should_hydrate:
+                self._hydrate_agent_output_conversations(conversation_summaries)
 
     def _refresh_consensus_views(self, snapshot: OrchestratorSnapshot | None) -> None:
         consensus_document = snapshot.consensus if snapshot is not None else None
