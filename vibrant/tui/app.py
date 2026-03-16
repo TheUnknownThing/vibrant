@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -33,6 +34,8 @@ from .widgets.settings_panel import SettingsPanel
 logger = logging.getLogger(__name__)
 OrchestratorFactory = Callable[..., Orchestrator]
 WorkspaceScreen = PlanningScreen | VibingScreen
+_MOBILE_BREAKPOINT = 80
+
 _STREAM_ONLY_EVENT_TYPES = {
     "assistant.message.delta",
     "assistant.thinking.delta",
@@ -66,6 +69,15 @@ class VibrantApp(App):
         background: $primary-background;
         padding: 0 1;
         color: $text-muted;
+    }
+
+    VibrantApp.-mobile Header,
+    VibrantApp.-mobile Footer {
+        display: none;
+    }
+
+    VibrantApp.-mobile #status-bar {
+        height: auto;
     }
     """
 
@@ -151,6 +163,7 @@ class VibrantApp(App):
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
 
         if not self._project_has_vibrant_state():
             self._set_status("Project not initialized")
@@ -158,6 +171,14 @@ class VibrantApp(App):
             return
 
         self.call_after_refresh(self._focus_primary_input)
+
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._apply_mobile_chrome()
+
+    def _apply_mobile_chrome(self) -> None:
+        self.set_class(self.size.width < _MOBILE_BREAKPOINT, "-mobile")
 
     async def on_unmount(self) -> None:
         for task in (self._gatekeeper_request_task, self._roadmap_runner_task):
@@ -180,6 +201,7 @@ class VibrantApp(App):
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
 
         if not self._project_has_vibrant_state():
             self._set_status("Project not initialized")
@@ -204,6 +226,7 @@ class VibrantApp(App):
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
         self._set_status(f"Initialized Vibrant project in {project_root}")
         self.notify(f"Initialized Vibrant project in {project_root}")
         self.call_after_refresh(self._focus_primary_input)
@@ -707,6 +730,7 @@ class VibrantApp(App):
         self._todo_exit_message = None
         self._sync_workspace_screen(prefer_chat_history=prefer_chat_history)
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
         self._set_status("Entered vibing phase")
         self._start_automatic_workflow_if_needed()
         return True

@@ -16,10 +16,57 @@ import shutil
 import shlex
 import sys
 from collections.abc import Sequence
+from typing import Any
 
 from .config import find_project_root, load_config
 from .project_init import initialize_project
 from .providers.base import ProviderKind
+
+
+class _DynamicHostServer:
+    """Small wrapper around textual-serve that builds URLs from request host."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        from textual_serve.server import Server
+
+        self._server: Server = Server(*args, **kwargs)
+
+    def serve(self, debug: bool = False) -> None:
+        from aiohttp import web
+        import aiohttp_jinja2
+
+        @aiohttp_jinja2.template("app_index.html")
+        async def _dynamic_handle_index(request: web.Request) -> dict[str, Any]:
+            router = request.app.router
+            try:
+                font_size = int(request.query.get("fontsize", "16"))
+            except ValueError:
+                font_size = 16
+
+            forwarded_proto = request.headers.get("x-forwarded-proto")
+            scheme = forwarded_proto.split(",", 1)[0].strip() if forwarded_proto else request.scheme
+            origin = f"{scheme}://{request.host}"
+
+            def get_url(route: str, **args: Any) -> str:
+                path = router[route].url_for(**args)
+                return f"{origin}{path}"
+
+            websocket_scheme = "wss" if scheme == "https" else "ws"
+            app_websocket_url = get_url("websocket").replace(f"{scheme}://", f"{websocket_scheme}://", 1)
+
+            return {
+                "font_size": font_size,
+                "app_websocket_url": app_websocket_url,
+                "config": {
+                    "static": {
+                        "url": get_url("static", filename="/").rstrip("/") + "/",
+                    }
+                },
+                "application": {"name": self._server.title},
+            }
+
+        self._server.handle_index = _dynamic_handle_index
+        self._server.serve(debug=debug)
 
 
 def _check_binary(binary: str | None) -> str | None:
@@ -105,9 +152,7 @@ def _build_textual_client_command(args: argparse.Namespace) -> str:
 
 
 def _serve_app(args: argparse.Namespace) -> None:
-    from textual_serve.server import Server
-
-    server = Server(
+    server = _DynamicHostServer(
         _build_textual_client_command(args),
         host=args.serve_host,
         port=args.serve_port,

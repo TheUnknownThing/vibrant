@@ -46,9 +46,18 @@ class VibingScreen(Static):
     VibingScreen.-mobile #plan-panel {
         width: 1fr;
         min-width: 0;
-        height: 12;
+        height: 10;
         margin-right: 0;
         margin-bottom: 1;
+    }
+
+    VibingScreen.-mobile #workspace-tabs {
+        margin-top: 0;
+    }
+
+    VibingScreen.-mobile #workspace-tabs > ContentTabs,
+    VibingScreen.-mobile #workspace-tabs Tabs {
+        height: auto;
     }
 
     VibingScreen #vibing-main {
@@ -122,7 +131,7 @@ class VibingScreen(Static):
                                 markup=True,
                             )
                             yield ChatPanel(id="conversation-panel")
-                    with TabPane("Consensus File", id="consensus"):
+                    with TabPane("Consensus", id="consensus"):
                         yield ConsensusView(id="consensus-panel")
                     with TabPane("Agent Logs", id="agent-logs"):
                         yield AgentOutput(id="agent-output-panel")
