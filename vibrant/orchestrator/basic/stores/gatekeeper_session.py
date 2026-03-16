@@ -44,6 +44,11 @@ def project_gatekeeper_session(
     return replace(
         session,
         agent_id=agent_id,
+        incarnation_id=(
+            run_record.identity.incarnation_id
+            if run_record is not None
+            else session.incarnation_id
+        ),
         provider_thread_id=provider_thread_id,
         resumable=resumable,
     )

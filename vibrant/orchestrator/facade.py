@@ -446,6 +446,27 @@ class OrchestratorFacade:
     async def run_until_blocked(self):
         return await self._control_plane.run_until_blocked()
 
+    async def pause_gatekeeper(self, reason: str | None = None):
+        return await self._control_plane.pause_gatekeeper(reason)
+
+    async def resume_gatekeeper(self):
+        return await self._control_plane.resume_gatekeeper()
+
+    async def pause_task_execution(self):
+        return await self._control_plane.pause_task_execution()
+
+    async def resume_task_execution(self):
+        return await self._control_plane.resume_task_execution()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await self._control_plane.resume_attempt(attempt_id)
+
+    async def pause_policies(self, reason: str | None = None):
+        return await self._control_plane.pause_policies(reason)
+
+    async def resume_policies(self):
+        return await self._control_plane.resume_policies()
+
     async def interrupt_gatekeeper(self) -> bool:
         if not self._control_plane.gatekeeper_busy():
             return False

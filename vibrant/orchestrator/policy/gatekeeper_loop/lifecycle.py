@@ -96,9 +96,13 @@ class GatekeeperLifecycleService:
         await self.ensure_session()
         if self._session.lifecycle_state is GatekeeperLifecycleStatus.STOPPED:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.IDLE
+            self._session.last_error = None
             self._session.updated_at = utc_now()
             self._persist()
         return self.snapshot()
+
+    async def resume_session(self) -> GatekeeperSessionSnapshot:
+        return await self.resume_or_start()
 
     async def submit(
         self,
@@ -110,10 +114,15 @@ class GatekeeperLifecycleService:
         self._ensure_no_active_submission()
         session = await self.resume_or_start()
         prompt = self.gatekeeper.render_prompt(request)
+        provider_thread = None
+        if resume:
+            provider_thread = self._resolve_resume_handle(session=session)
+        logical_run_id = session.run_id if resume and session.run_id else None
         agent_record = self.gatekeeper.build_run_record(
             request,
             agent_id=GATEKEEPER_ROLE,
             role=GATEKEEPER_ROLE,
+            run_id=logical_run_id,
         )
         agent_record.context.prompt_used = prompt
         instance = ensure_gatekeeper_instance(
@@ -132,12 +141,9 @@ class GatekeeperLifecycleService:
             run_id=agent_record.identity.run_id,
         )
 
-        provider_thread = None
-        if resume:
-            provider_thread = self._resolve_resume_handle(session=session)
-
         self._session.agent_id = instance.identity.agent_id
         self._session.run_id = agent_record.identity.run_id
+        self._session.incarnation_id = agent_record.identity.incarnation_id
         self._session.conversation_id = conversation_id
         self._session.lifecycle_state = GatekeeperLifecycleStatus.STARTING
         self._session.last_error = None
@@ -216,7 +222,22 @@ class GatekeeperLifecycleService:
             self._active_handle = None
         self._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
         self._session.run_id = None
+        self._session.incarnation_id = None
         self._session.active_turn_id = None
+        self._session.updated_at = utc_now()
+        self._persist()
+        return self.snapshot()
+
+    async def pause_session(self, *, reason: str | None = None) -> GatekeeperSessionSnapshot:
+        if self._active_handle_run_id is not None:
+            self.runtime_service.annotate_run(self._active_handle_run_id, stop_reason="paused")
+            await self.runtime_service.kill_run(self._active_handle_run_id)
+            self._release_binding(self._active_handle_run_id)
+            self._active_handle_run_id = None
+            self._active_handle = None
+        self._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
+        self._session.active_turn_id = None
+        self._session.last_error = reason
         self._session.updated_at = utc_now()
         self._persist()
         return self.snapshot()
@@ -244,6 +265,7 @@ class GatekeeperLifecycleService:
         return RuntimeHandleSnapshot(
             agent_id=self._session.agent_id or run_id,
             run_id=run_id,
+            incarnation_id=self._session.incarnation_id,
             state=handle.state.value,
             provider_thread_id=handle.provider_thread.thread_id,
             awaiting_input=handle.awaiting_input,
@@ -254,6 +276,7 @@ class GatekeeperLifecycleService:
         await self.stop_session()
         self._session.agent_id = None
         self._session.run_id = None
+        self._session.incarnation_id = None
         self._session.provider_thread_id = None
         self._session.resumable = False
         self._session.lifecycle_state = GatekeeperLifecycleStatus.NOT_STARTED
@@ -268,6 +291,7 @@ class GatekeeperLifecycleService:
             GatekeeperSessionSnapshot(
                 agent_id=self._session.agent_id,
                 run_id=self._session.run_id,
+                incarnation_id=self._session.incarnation_id,
                 conversation_id=self._session.conversation_id,
                 lifecycle_state=self._session.lifecycle_state,
                 provider_thread_id=self._session.provider_thread_id,
@@ -283,8 +307,11 @@ class GatekeeperLifecycleService:
         try:
             result: NormalizedRunResult = await handle.wait()
         except Exception as exc:
-            self._session.lifecycle_state = GatekeeperLifecycleStatus.FAILED
-            self._session.last_error = str(exc)
+            if self._is_paused_run(run_id):
+                self._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
+            else:
+                self._session.lifecycle_state = GatekeeperLifecycleStatus.FAILED
+                self._session.last_error = str(exc)
             self._session.updated_at = utc_now()
             self._release_binding(run_id)
             self._persist()
@@ -293,8 +320,12 @@ class GatekeeperLifecycleService:
         self._session.provider_thread_id = result.provider_thread.thread_id
         self._session.resumable = result.provider_thread.resumable
         self._session.run_id = result.run_id
+        self._session.incarnation_id = result.incarnation_id
         self._session.updated_at = utc_now()
-        if result.awaiting_input:
+        if self._is_paused_run(run_id):
+            self._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
+            self._session.last_error = None
+        elif result.awaiting_input:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.AWAITING_USER
         elif result.error:
             self._session.lifecycle_state = GatekeeperLifecycleStatus.FAILED
@@ -311,6 +342,14 @@ class GatekeeperLifecycleService:
     async def _on_runtime_event(self, event: CanonicalEvent) -> None:
         run_id = event.get("run_id")
         if not isinstance(run_id, str) or run_id != self._session.run_id:
+            return
+        if self._session.lifecycle_state is GatekeeperLifecycleStatus.STOPPED and self._is_paused_run(run_id):
+            provider_thread_id = event.get("provider_thread_id")
+            if isinstance(provider_thread_id, str) and provider_thread_id:
+                self._session.provider_thread_id = provider_thread_id
+                self._session.resumable = True
+            self._session.updated_at = utc_now()
+            self._persist()
             return
 
         event_type = str(event.get("type") or "")
@@ -350,6 +389,7 @@ class GatekeeperLifecycleService:
         return GatekeeperSessionSnapshot(
             agent_id=projected.agent_id,
             run_id=projected.run_id,
+            incarnation_id=projected.incarnation_id,
             conversation_id=projected.conversation_id,
             lifecycle_state=projected.lifecycle_state,
             provider_thread_id=projected.provider_thread_id,
@@ -414,3 +454,7 @@ class GatekeeperLifecycleService:
         if session.run_id is None:
             return None
         return self.run_store.get(session.run_id)
+
+    def _is_paused_run(self, run_id: str) -> bool:
+        record = self.run_store.get(run_id)
+        return bool(record is not None and record.lifecycle.stop_reason == "paused")

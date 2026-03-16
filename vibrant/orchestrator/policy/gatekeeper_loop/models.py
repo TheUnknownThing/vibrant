@@ -22,6 +22,7 @@ class GatekeeperSubmission:
     conversation_id: str
     agent_id: str | None
     run_id: str | None
+    incarnation_id: str | None
     accepted: bool
     active_turn_id: str | None
     question_id: str | None = None

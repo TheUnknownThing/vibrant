@@ -181,14 +181,43 @@ class ExecutionCoordinator:
             raise KeyError(f"Attempt not found after resume: {attempt_id}")
         return recovered
 
+    async def resume_attempt(
+        self,
+        attempt_id: str,
+        *,
+        prepared: PreparedTaskExecution,
+    ) -> AttemptRecord:
+        session = self.execution_session.get(attempt_id)
+        if session is None:
+            raise KeyError(f"Attempt not found: {attempt_id}")
+        if session.live:
+            attempt = self.attempt_store.get(attempt_id)
+            if attempt is None:
+                raise KeyError(f"Attempt not found: {attempt_id}")
+            return attempt
+        if not session.workspace_path:
+            raise RuntimeError(f"Attempt is not resumable: {attempt_id}")
+        return await self.recover_attempt(attempt_id, prepared=prepared)
+
     async def await_attempt_completion(self, attempt_id: str) -> AttemptCompletion:
         attempt = self.attempt_store.get(attempt_id)
         if attempt is None:
             raise KeyError(f"Attempt not found: {attempt_id}")
         if attempt.code_run_id is None:
             raise ValueError(f"Attempt has no code run: {attempt_id}")
+        session = self.execution_session.get(attempt_id)
+        incarnation_id = session.incarnation_id if session is not None else None
 
-        runtime_result = await self.runtime_service.wait_for_run(attempt.code_run_id)
+        wait_for_run = self.runtime_service.wait_for_run
+        try:
+            runtime_result = await wait_for_run(
+                attempt.code_run_id,
+                incarnation_id=incarnation_id,
+            )
+        except TypeError as exc:
+            if "incarnation_id" not in str(exc):
+                raise
+            runtime_result = await wait_for_run(attempt.code_run_id)
         if runtime_result.awaiting_input:
             error = runtime_result.error or WORKER_INPUT_UNSUPPORTED_ERROR
             return AttemptCompletion(
@@ -227,6 +256,18 @@ class ExecutionCoordinator:
 
     def reconcile_active_sessions(self) -> list[AttemptExecutionSnapshot]:
         return self.execution_session.reconcile_active()
+
+    async def pause_active_attempts(self) -> list[AttemptExecutionSnapshot]:
+        paused: list[AttemptExecutionSnapshot] = []
+        for session in self.execution_session.list_active():
+            if not session.live or session.run_id is None:
+                continue
+            self.runtime_service.annotate_run(session.run_id, stop_reason="paused")
+            await self.runtime_service.kill_run(session.run_id)
+            refreshed = self.execution_session.get(session.attempt_id)
+            if refreshed is not None:
+                paused.append(refreshed)
+        return paused
 
     def _persist_run(self, run_record: AgentRunRecord) -> None:
         self.agent_run_store.upsert(run_record)
@@ -337,6 +378,7 @@ class ExecutionCoordinator:
             task=prepared.task,
             workspace=workspace,
             prompt=prompt,
+            run_id=session.run_id or attempt.code_run_id,
         )
         self._persist_run(agent_record)
 
@@ -355,11 +397,13 @@ class ExecutionCoordinator:
         return replace(
             session,
             run_id=agent_record.identity.run_id,
+            incarnation_id=agent_record.identity.incarnation_id,
             conversation_id=conversation_id,
             status=AttemptStatus.RUNNING,
             live=False,
             awaiting_input=False,
             input_requests=[],
+            run_stop_reason=None,
             provider_resume_handle=None,
             provider_thread_id=None,
             resumable=False,
@@ -380,6 +424,7 @@ class ExecutionCoordinator:
         task: TaskInfo,
         workspace: WorkspaceHandle,
         prompt: str,
+        run_id: str | None = None,
     ) -> AgentRunRecord:
         instance = ensure_task_agent_instance(
             self.agent_instance_store,
@@ -392,6 +437,7 @@ class ExecutionCoordinator:
             prompt=prompt,
             agent_id=instance.identity.agent_id,
             role=instance.identity.role,
+            run_id=run_id,
             vibrant_dir=self.project_root / DEFAULT_CONFIG_DIR,
         )
 

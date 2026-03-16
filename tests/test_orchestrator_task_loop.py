@@ -567,11 +567,12 @@ async def test_execution_coordinator_recover_attempt_resumes_existing_provider_t
     session = orchestrator._execution_coordinator.attempt_execution(attempt.attempt_id)
 
     assert recovered is not None
-    assert recovered.code_run_id is not None and recovered.code_run_id != "run-old"
+    assert recovered.code_run_id == "run-old"
     assert captured["prompt"] == "Resume the coding task."
     assert captured["provider_thread"].thread_id == "thread-existing"
     assert session is not None
     assert session.run_id == recovered.code_run_id
+    assert session.incarnation_id is not None
     assert session.resumable is False
 
 
@@ -626,8 +627,101 @@ async def test_execution_coordinator_recover_attempt_falls_back_to_fresh_start(t
     recovered = await orchestrator._execution_coordinator.recover_attempt(attempt.attempt_id, prepared=prepared)
 
     assert recovered is not None
-    assert recovered.code_run_id is not None and recovered.code_run_id != "run-old"
+    assert recovered.code_run_id == "run-old"
     assert captured["prompt"] == "Start from scratch if needed."
+
+
+def test_execution_coordinator_treats_paused_run_as_recoverable(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-paused",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator._agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-paused",
+                "incarnation_id": "inc-paused",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.KILLED, "stop_reason": "paused"},
+            context={
+                "worktree_path": workspace.path,
+                "prompt_used": "Resume after pause.",
+            },
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+
+    session = orchestrator._execution_coordinator.attempt_execution(attempt.attempt_id)
+    recovery = orchestrator._execution_coordinator.next_attempt_to_recover()
+
+    assert session is not None
+    assert session.run_id == "run-paused"
+    assert session.run_stop_reason == "paused"
+    assert recovery is not None
+    assert recovery.attempt_id == attempt.attempt_id
+
+
+@pytest.mark.asyncio
+async def test_resume_attempt_command_recovers_without_waiting_for_dispatch_tick(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-paused",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator._agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-paused",
+                "incarnation_id": "inc-paused",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.KILLED, "stop_reason": "paused"},
+            context={
+                "worktree_path": workspace.path,
+                "prompt_used": "Resume after pause.",
+            },
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_resume_run(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(orchestrator._runtime_service, "resume_run", fake_resume_run)
+
+    recovered = await orchestrator._task_loop.resume_attempt(attempt.attempt_id)
+    session = orchestrator._execution_coordinator.attempt_execution(attempt.attempt_id)
+
+    assert recovered.code_run_id == "run-paused"
+    assert captured["provider_thread"].thread_id == "thread-existing"
+    assert session is not None
+    assert session.run_id == "run-paused"
+    assert session.incarnation_id is not None
+    assert session.incarnation_id != "inc-paused"
 
 
 @pytest.mark.asyncio

@@ -66,6 +66,15 @@ class TaskLoop:
     async def run_until_blocked(self) -> list[TaskResult]:
         return await attempts.run_until_blocked(self)
 
+    async def pause_active_execution(self):
+        return await self.execution.pause_active_attempts()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await attempts.resume_attempt(self, attempt_id)
+
+    async def resume_active_execution(self):
+        return await attempts.resume_active_attempt(self)
+
     def get_review_ticket(self, ticket_id: str) -> ReviewTicket | None:
         return reviews.get_review_ticket(self, ticket_id)
 

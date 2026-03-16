@@ -288,6 +288,7 @@ class BasicQueryAdapter:
         awaiting_input = False
         input_requests = []
         has_handle = False
+        stop_reason = record.lifecycle.stop_reason
         try:
             runtime_snapshot = self.runtime_service.snapshot_handle(record.identity.run_id)
         except KeyError:
@@ -297,20 +298,26 @@ class BasicQueryAdapter:
             awaiting_input = runtime_snapshot.awaiting_input
             input_requests = runtime_snapshot.input_requests
             has_handle = True
+        done = record.lifecycle.status.value in _DONE_RUN_STATUSES and stop_reason != "paused"
+        active = record.lifecycle.status.value in _ACTIVE_RUN_STATUSES and not (stop_reason == "paused" and not has_handle)
+        if not has_handle and stop_reason == "paused":
+            state = "stopped"
 
         return AgentRunSnapshot(
             identity=AgentRunIdentitySnapshot(
                 agent_id=record.identity.agent_id,
                 run_id=record.identity.run_id,
                 role=record.identity.role,
+                incarnation_id=record.identity.incarnation_id,
             ),
             runtime=AgentRunRuntimeSnapshot(
                 status=record.lifecycle.status.value,
                 state=state,
                 has_handle=has_handle,
-                active=record.lifecycle.status.value in _ACTIVE_RUN_STATUSES,
-                done=record.lifecycle.status.value in _DONE_RUN_STATUSES,
+                active=active,
+                done=done,
                 awaiting_input=awaiting_input,
+                stop_reason=record.lifecycle.stop_reason,
                 pid=record.lifecycle.pid,
                 started_at=record.lifecycle.started_at,
                 finished_at=record.lifecycle.finished_at,

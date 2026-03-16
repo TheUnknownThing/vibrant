@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from vibrant.agents.gatekeeper import GatekeeperTrigger
+from vibrant.agents.runtime import NormalizedRunResult, RunState
+from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, ProviderResumeHandle, AgentType
 
 from vibrant.orchestrator import create_orchestrator
 from vibrant.orchestrator.facade import OrchestratorFacade
@@ -178,3 +180,113 @@ async def test_gatekeeper_runtime_error_is_not_cleared_by_late_turn_completed(tm
     assert state.session.lifecycle_state is GatekeeperLifecycleStatus.FAILED
     assert state.session.last_error == "provider failed"
     assert state.session.active_turn_id is None
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_pause_and_resume_reuses_logical_run_id(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+    lifecycle = orchestrator._gatekeeper_lifecycle
+    prior_record = AgentRecord(
+        identity={
+            "run_id": "gatekeeper-session-1",
+            "incarnation_id": "inc-old",
+            "agent_id": "gatekeeper",
+            "role": AgentType.GATEKEEPER.value,
+            "type": AgentType.GATEKEEPER,
+        },
+        lifecycle={"status": AgentStatus.RUNNING},
+        provider=AgentProviderMetadata(
+            provider_thread_id="thread-existing",
+            resume_cursor={"threadId": "thread-existing"},
+        ),
+    )
+    orchestrator._agent_run_store.upsert(prior_record)
+    lifecycle._session.run_id = "gatekeeper-session-1"
+    lifecycle._session.incarnation_id = "inc-old"
+    lifecycle._session.agent_id = "gatekeeper"
+    lifecycle._session.conversation_id = "gatekeeper-conversation"
+    lifecycle._session.lifecycle_state = GatekeeperLifecycleStatus.RUNNING
+    lifecycle._active_handle_run_id = "gatekeeper-session-1"
+    lifecycle._active_handle = object()
+
+    def fake_annotate(run_id: str, *, stop_reason: str | None = None) -> None:
+        record = orchestrator._agent_run_store.get(run_id)
+        assert record is not None
+        record.lifecycle.stop_reason = stop_reason
+        orchestrator._agent_run_store.upsert(record)
+
+    async def fake_kill_run(run_id: str):
+        assert run_id == "gatekeeper-session-1"
+        return SimpleNamespace()
+
+    captured: dict[str, object] = {}
+
+    class _FakeHandle:
+        def __init__(self, agent_record) -> None:
+            self.agent_record = agent_record
+            self.state = SimpleNamespace(value=RunState.RUNNING.value)
+            self.provider_thread = ProviderResumeHandle(thread_id="thread-existing")
+            self.awaiting_input = False
+            self.input_requests = []
+
+        async def wait(self):
+            return NormalizedRunResult(
+                run_id=self.agent_record.identity.run_id,
+                agent_id=self.agent_record.identity.agent_id,
+                role=self.agent_record.identity.role,
+                status=AgentStatus.COMPLETED,
+                state=RunState.COMPLETED,
+                incarnation_id=self.agent_record.identity.incarnation_id,
+                provider_thread=ProviderResumeHandle(thread_id="thread-existing"),
+            )
+
+    async def fake_resume_run(**kwargs):
+        captured.update(kwargs)
+        return _FakeHandle(kwargs["agent_record"])
+
+    async def fake_start_run(**kwargs):
+        raise AssertionError("gatekeeper resume should reuse the existing logical run")
+
+    monkeypatch.setattr(orchestrator._runtime_service, "annotate_run", fake_annotate)
+    monkeypatch.setattr(orchestrator._runtime_service, "kill_run", fake_kill_run)
+    monkeypatch.setattr(orchestrator._runtime_service, "resume_run", fake_resume_run)
+    monkeypatch.setattr(orchestrator._runtime_service, "start_run", fake_start_run)
+
+    paused = await facade.pause_gatekeeper("user_paused")
+    await lifecycle.submit(
+        request=SimpleNamespace(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description="Resume after pause.",
+            agent_summary=None,
+        ),
+        submission_id="submission-1",
+        resume=True,
+    )
+
+    agent_record = captured["agent_record"]
+    assert paused.session.lifecycle_state is GatekeeperLifecycleStatus.STOPPED
+    assert paused.session.run_id == "gatekeeper-session-1"
+    assert lifecycle.snapshot().run_id == "gatekeeper-session-1"
+    assert agent_record.identity.run_id == "gatekeeper-session-1"
+    assert agent_record.identity.incarnation_id != "inc-old"
+
+
+@pytest.mark.asyncio
+async def test_resume_gatekeeper_clears_stopped_state_without_new_submission(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+    lifecycle = orchestrator._gatekeeper_lifecycle
+    lifecycle._session.run_id = "gatekeeper-session-1"
+    lifecycle._session.incarnation_id = "inc-1"
+    lifecycle._session.agent_id = "gatekeeper"
+    lifecycle._session.conversation_id = "gatekeeper-conversation"
+    lifecycle._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
+    lifecycle._session.last_error = "paused"
+
+    resumed = await facade.resume_gatekeeper()
+
+    assert resumed.session.lifecycle_state is GatekeeperLifecycleStatus.IDLE
+    assert resumed.session.run_id == "gatekeeper-session-1"
+    assert resumed.session.incarnation_id == "inc-1"
+    assert resumed.session.last_error is None

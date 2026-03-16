@@ -128,6 +128,7 @@ class AgentBase(ABC):
         """Add agent-specific metadata to a canonical event before forwarding."""
         event.setdefault("agent_id", agent_record.identity.agent_id)
         event.setdefault("run_id", agent_record.identity.run_id)
+        event.setdefault("incarnation_id", agent_record.identity.incarnation_id)
         event.setdefault("role", agent_record.identity.role)
         return event
 

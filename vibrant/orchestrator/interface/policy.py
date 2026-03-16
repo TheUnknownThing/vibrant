@@ -48,8 +48,41 @@ class PolicyCommandAdapter:
     async def stop_gatekeeper(self):
         return await self.gatekeeper_loop.stop()
 
+    async def pause_gatekeeper(self, reason: str | None = None):
+        return await self.gatekeeper_loop.pause(reason)
+
+    async def resume_gatekeeper(self):
+        return await self.gatekeeper_loop.resume()
+
     async def interrupt_gatekeeper(self):
         return await self.gatekeeper_loop.lifecycle.interrupt_active_turn()
+
+    async def pause_task_execution(self):
+        return await self.task_loop.pause_active_execution()
+
+    async def resume_task_execution(self):
+        return await self.task_loop.resume_active_execution()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await self.task_loop.resume_attempt(attempt_id)
+
+    async def pause_policies(self, reason: str | None = None) -> dict[str, object]:
+        gatekeeper = await self.gatekeeper_loop.pause(reason)
+        attempts = await self.task_loop.pause_active_execution()
+        return {
+            "gatekeeper": gatekeeper,
+            "attempts": attempts,
+        }
+
+    async def resume_policies(self) -> dict[str, object]:
+        workflow = self.gatekeeper_loop.resume_workflow()
+        gatekeeper = await self.gatekeeper_loop.resume()
+        attempt = await self.task_loop.resume_active_execution()
+        return {
+            "workflow": workflow,
+            "gatekeeper": gatekeeper,
+            "attempt": attempt,
+        }
 
     def begin_planning_phase(self) -> WorkflowSnapshot:
         return self.gatekeeper_loop.begin_planning()

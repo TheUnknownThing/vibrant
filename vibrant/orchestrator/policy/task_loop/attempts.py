@@ -311,6 +311,40 @@ async def run_until_blocked(loop: TaskLoop) -> list[TaskResult]:
     return results
 
 
+async def resume_attempt(loop: TaskLoop, attempt_id: str) -> AttemptRecord:
+    attempt = loop.attempt_store.get(attempt_id)
+    if attempt is None:
+        raise KeyError(f"Attempt not found: {attempt_id}")
+    lease = task_projection.build_attempt_lease(loop, attempt)
+    prepared = prepare_task_execution(
+        lease=lease,
+        roadmap_store=loop.roadmap_store,
+        consensus_store=loop.consensus_store,
+        project_name=loop.consensus_store.project_name,
+    )
+    recovered = await loop.execution.resume_attempt(attempt_id, prepared=prepared)
+    task_projection.record_task_state(
+        loop,
+        recovered.task_id,
+        TaskState.ACTIVE,
+        active_attempt_id=recovered.attempt_id,
+    )
+    loop._set_snapshot(
+        stage=TaskLoopStage.CODING,
+        active_lease=lease,
+        active_attempt_id=recovered.attempt_id,
+        blocking_reason=None,
+    )
+    return recovered
+
+
+async def resume_active_attempt(loop: TaskLoop) -> AttemptRecord | None:
+    session = loop.execution.next_attempt_to_recover()
+    if session is None:
+        return None
+    return await resume_attempt(loop, session.attempt_id)
+
+
 async def _auto_review_ticket(
     loop: TaskLoop,
     *,

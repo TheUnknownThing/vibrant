@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
+from uuid import uuid4
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
@@ -188,6 +189,7 @@ class AgentLifecycle(BaseModel):
     pid: int | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    stop_reason: str | None = None
 
 
 class AgentExecutionContext(BaseModel):
@@ -246,6 +248,7 @@ class AgentRunIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
+    incarnation_id: str | None = None
     agent_id: str
     role: str
     type: AgentType | None = None
@@ -256,6 +259,12 @@ class AgentRunIdentity(BaseModel):
         if isinstance(value, str):
             return _normalize_role(value)
         return value
+
+    @model_validator(mode="after")
+    def ensure_incarnation_id(self) -> "AgentRunIdentity":
+        if self.incarnation_id is None:
+            self.incarnation_id = self.run_id
+        return self
 
 
 class AgentRunRecord(BaseModel):
@@ -316,6 +325,7 @@ class AgentRunRecord(BaseModel):
         finished_at: datetime | None = None,
         exit_code: int | None = None,
         error: str | None = None,
+        stop_reason: str | None = None,
     ) -> None:
         if not self.can_transition_to(next_status):
             raise ValueError(
@@ -327,9 +337,19 @@ class AgentRunRecord(BaseModel):
             self.outcome.exit_code = exit_code
         if error is not None:
             self.outcome.error = error
+        if stop_reason is not None:
+            self.lifecycle.stop_reason = stop_reason
+        elif next_status not in self.TERMINAL_STATUSES:
+            self.lifecycle.stop_reason = None
 
         if next_status in self.TERMINAL_STATUSES:
             self.lifecycle.finished_at = finished_at or self.lifecycle.finished_at or datetime.now(timezone.utc)
+
+
+def next_incarnation_id() -> str:
+    """Return a new opaque execution incarnation id."""
+
+    return f"inc-{uuid4().hex[:12]}"
 
 
 # Temporary alias while the run/instance split propagates through lower layers.

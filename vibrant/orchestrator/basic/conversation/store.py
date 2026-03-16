@@ -84,6 +84,7 @@ class ConversationStore:
             payload = json.loads(raw)
             if not isinstance(payload, dict):
                 continue
+            payload.setdefault("incarnation_id", None)
             frames.append(AgentStreamEvent(**payload))
         return frames
 

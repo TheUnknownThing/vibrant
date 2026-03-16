@@ -52,8 +52,29 @@ class InterfaceControlPlane:
     async def stop_gatekeeper(self):
         return await self.backend.commands.stop_gatekeeper()
 
+    async def pause_gatekeeper(self, reason: str | None = None):
+        return await self.backend.commands.pause_gatekeeper(reason)
+
+    async def resume_gatekeeper(self):
+        return await self.backend.commands.resume_gatekeeper()
+
     async def interrupt_gatekeeper(self):
         return await self.backend.commands.interrupt_gatekeeper()
+
+    async def pause_task_execution(self):
+        return await self.backend.commands.pause_task_execution()
+
+    async def resume_task_execution(self):
+        return await self.backend.commands.resume_task_execution()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await self.backend.commands.resume_attempt(attempt_id)
+
+    async def pause_policies(self, reason: str | None = None):
+        return await self.backend.commands.pause_policies(reason)
+
+    async def resume_policies(self):
+        return await self.backend.commands.resume_policies()
 
     async def run_next_task(self):
         return await self.backend.commands.run_next_task()

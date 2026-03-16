@@ -74,6 +74,16 @@ class GatekeeperUserLoop:
         self._last_error = self.lifecycle.snapshot().last_error
         return self.snapshot()
 
+    async def pause(self, reason: str | None = None) -> GatekeeperLoopState:
+        await self.lifecycle.pause_session(reason=reason)
+        self._last_error = self.lifecycle.snapshot().last_error
+        return self.snapshot()
+
+    async def resume(self) -> GatekeeperLoopState:
+        await self.lifecycle.resume_session()
+        self._last_error = self.lifecycle.snapshot().last_error
+        return self.snapshot()
+
     def request_user_decision(
         self,
         text: str,
