@@ -17,6 +17,7 @@ import shlex
 import sys
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from .config import find_project_root, load_config
 from .project_init import initialize_project
@@ -43,16 +44,18 @@ class _DynamicHostServer:
             except ValueError:
                 font_size = 16
 
-            forwarded_proto = request.headers.get("x-forwarded-proto")
-            scheme = forwarded_proto.split(",", 1)[0].strip() if forwarded_proto else request.scheme
-            origin = f"{scheme}://{request.host}"
+            origin = self._server.public_url.rstrip("/")
 
             def get_url(route: str, **args: Any) -> str:
                 path = router[route].url_for(**args)
-                return f"{origin}{path}"
+                path_text = str(path)
+                if not path_text.startswith("/"):
+                    path_text = f"/{path_text}"
+                return f"{origin}{path_text}"
 
-            websocket_scheme = "wss" if scheme == "https" else "ws"
-            app_websocket_url = get_url("websocket").replace(f"{scheme}://", f"{websocket_scheme}://", 1)
+            websocket_parts = urlsplit(get_url("websocket"))
+            websocket_scheme = "wss" if websocket_parts.scheme == "https" else "ws"
+            app_websocket_url = urlunsplit(websocket_parts._replace(scheme=websocket_scheme))
 
             return {
                 "font_size": font_size,
