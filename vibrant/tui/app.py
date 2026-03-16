@@ -44,6 +44,13 @@ _STREAM_ONLY_EVENT_TYPES = {
     "tool.call.delta",
 }
 
+
+def _should_autofocus_primary_input(*, is_web: bool, width: int) -> bool:
+    """Avoid opening the mobile browser keyboard during initial app bootstrap."""
+
+    return not is_web or width >= _MOBILE_BREAKPOINT
+
+
 class VibrantApp(App):
     """Terminal UI for managing roadmap execution and Gatekeeper conversations."""
 
@@ -148,6 +155,7 @@ class VibrantApp(App):
         self._paused_return_status: OrchestratorStatus | None = None
         self._banner_text: str | None = None
         self._todo_exit_message: str | None = None
+        self._mobile_chrome_enabled: bool | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -178,7 +186,11 @@ class VibrantApp(App):
         self._apply_mobile_chrome()
 
     def _apply_mobile_chrome(self) -> None:
-        self.set_class(self.size.width < _MOBILE_BREAKPOINT, "-mobile")
+        is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        if self._mobile_chrome_enabled == is_mobile:
+            return
+        self._mobile_chrome_enabled = is_mobile
+        self.set_class(is_mobile, "-mobile")
 
     async def on_unmount(self) -> None:
         for task in (self._gatekeeper_request_task, self._roadmap_runner_task):
@@ -658,6 +670,8 @@ class VibrantApp(App):
         return (self._project_root / DEFAULT_CONFIG_DIR).exists()
 
     def _focus_primary_input(self) -> None:
+        if not _should_autofocus_primary_input(is_web=self.is_web, width=self.size.width):
+            return
         with suppress(Exception):
             if self._workspace_screen is not None:
                 self._workspace_screen.focus_primary_input()

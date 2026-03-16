@@ -83,6 +83,7 @@ class PlanningScreen(Static):
         super().__init__(**kwargs)
         self._consensus_visible = False
         self._consensus_auto_revealed = False
+        self._is_mobile_layout: bool | None = None
 
     def on_mount(self) -> None:
         self._apply_responsive_layout()
@@ -93,6 +94,9 @@ class PlanningScreen(Static):
 
     def _apply_responsive_layout(self) -> None:
         is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        if self._is_mobile_layout == is_mobile:
+            return
+        self._is_mobile_layout = is_mobile
         self.set_class(is_mobile, "-mobile")
         hero = self.query_one("#planning-hero", Static)
         hero.update(_MOBILE_HERO_TEXT if is_mobile else _HERO_TEXT)

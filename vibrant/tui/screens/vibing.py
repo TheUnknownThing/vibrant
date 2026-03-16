@@ -115,6 +115,7 @@ class VibingScreen(Static):
         self._initial_tab = initial_tab if initial_tab in self._VALID_TABS else "task-status"
         self._active_tab = self._initial_tab
         self._selected_task_id: str | None = None
+        self._is_mobile_layout: bool | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="vibing-shell"):
@@ -148,6 +149,9 @@ class VibingScreen(Static):
 
     def _apply_responsive_layout(self) -> None:
         is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        if self._is_mobile_layout == is_mobile:
+            return
+        self._is_mobile_layout = is_mobile
         self.set_class(is_mobile, "-mobile")
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:

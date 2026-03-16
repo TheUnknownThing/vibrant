@@ -8,6 +8,15 @@ from vibrant import __main__
 
 
 class TestTextualServeCLI:
+    def test_default_web_font_size_uses_larger_scale_for_iphone(self) -> None:
+        assert __main__._default_web_font_size("Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X)") == 20
+
+    def test_resolve_web_font_size_honors_query_override(self) -> None:
+        assert __main__._resolve_web_font_size("22", user_agent="Mozilla/5.0 (iPhone)") == 22
+
+    def test_resolve_web_font_size_falls_back_to_default_on_invalid_override(self) -> None:
+        assert __main__._resolve_web_font_size("abc", user_agent="Mozilla/5.0 (iPhone)") == 20
+
     def test_build_textual_client_command_includes_forwarded_flags(self) -> None:
         args = Namespace(cwd="/tmp/project", model="gpt-test", debug=True)
 
