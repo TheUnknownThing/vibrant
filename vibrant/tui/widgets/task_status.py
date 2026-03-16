@@ -533,6 +533,7 @@ def _render_progress_summary(progress: _RoadmapProgress) -> str:
 
 def _render_task_details(task: TaskInfo, progress: _RoadmapProgress, tasks: Sequence[TaskInfo]) -> str:
     position = next((index for index, candidate in enumerate(tasks, start=1) if candidate.id == task.id), 1)
+    dependents = [candidate.id for candidate in tasks if task.id in candidate.dependencies]
     lines = [
         "Selected Task",
         f"{task.id} - {task.title}",
@@ -544,6 +545,7 @@ def _render_task_details(task: TaskInfo, progress: _RoadmapProgress, tasks: Sequ
         f"Branch: {task.branch or f'vibrant/{task.id}'}",
         f"Retries: {task.retry_count} / {task.max_retries}",
         f"Dependencies: {', '.join(task.dependencies) if task.dependencies else 'none'}",
+        f"Dependents: {', '.join(dependents) if dependents else 'none'}",
         f"Skills: {', '.join(task.skills) if task.skills else 'none'}",
     ]
 

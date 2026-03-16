@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -38,6 +38,9 @@ class TaskTreeNodeData:
 
     task: TaskInfo
     agent_summary: str | None = None
+
+
+TaskNodeRelation = Literal["default", "focused", "dependency", "dependent"]
 
 
 class TaskDetailScreen(ModalScreen[None]):
@@ -164,12 +167,15 @@ class PlanTree(Static):
         self._tasks_by_id: dict[str, TaskInfo] = {}
         self._summaries_by_task_id: dict[str, str] = {}
         self._node_ids_by_task_id: dict[str, int] = {}
+        self._task_order: tuple[str, ...] = ()
+        self._visual_signatures_by_task_id: dict[str, tuple[tuple[TaskStatus, int | None, str], TaskNodeRelation]] = {}
+        self._focused_task_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("[b]Plan / Tasks[/b]", id="plan-tree-header", markup=True)
         self._tree = Tree("Roadmap", id="plan-tree-widget")
         self._tree.show_root = False
-        self._tree.guide_depth = 2
+        self._tree.guide_depth = 1
         self._tree.root.expand()
         yield self._tree
 
@@ -184,15 +190,35 @@ class PlanTree(Static):
 
         self._tasks_by_id = {task.id: task for task in tasks}
         self._summaries_by_task_id = dict(agent_summaries or {})
-        self._rebuild_tree(tasks)
+        if not tasks:
+            self.clear_tasks()
+            return
+
+        task_order = tuple(task.id for task in tasks)
+        structure_changed = task_order != self._task_order
+
+        if structure_changed:
+            self._rebuild_tree(tasks)
+        else:
+            for task in tasks:
+                self._update_task_node(task)
+
+        self._task_order = task_order
+        self._refresh_dependency_labels(selected_task_id)
         if selected_task_id:
-            self.select_task(selected_task_id)
+            if structure_changed:
+                self.call_after_refresh(self.select_task, selected_task_id)
+            else:
+                self.select_task(selected_task_id)
 
     def clear_tasks(self, message: str = "No roadmap tasks found.") -> None:
         """Clear the tree and show a single informational row."""
 
         self._tasks_by_id = {}
         self._summaries_by_task_id = {}
+        self._task_order = ()
+        self._visual_signatures_by_task_id = {}
+        self._focused_task_id = None
         if self._tree is None:
             return
         self._tree.root.remove_children()
@@ -225,6 +251,8 @@ class PlanTree(Static):
         node = self._tree.get_node_by_id(node_id)
         if node is None:
             return
+        if self._tree.cursor_node is node:
+            return
         self._tree.move_cursor(node, animate=False)
 
     def get_task_label(self, task_id: str) -> str | None:
@@ -245,12 +273,14 @@ class PlanTree(Static):
         data = getattr(event.node, "data", None)
         if not isinstance(data, TaskTreeNodeData):
             return
+        self._refresh_dependency_labels(data.task.id)
         self.post_message(self.TaskHighlighted(data.task))
 
     def on_tree_node_selected(self, event: Tree.NodeSelected[TaskTreeNodeData | None]) -> None:
         data = getattr(event.node, "data", None)
         if not isinstance(data, TaskTreeNodeData):
             return
+        self._refresh_dependency_labels(data.task.id)
         self.post_message(self.TaskSelected(data.task))
 
     def _open_node_details(self, node: Any) -> None:
@@ -265,52 +295,111 @@ class PlanTree(Static):
 
         self._tree.root.remove_children()
         self._node_ids_by_task_id = {}
+        self._visual_signatures_by_task_id = {}
         if not tasks:
             self._tree.root.add_leaf(Text("No roadmap tasks found.", style="dim"), data=None)
             self._tree.root.expand()
             return
 
-        task_map = {task.id: task for task in tasks}
-        children_map: dict[str, list[TaskInfo]] = {task.id: [] for task in tasks}
-        roots: list[TaskInfo] = []
-
         for task in tasks:
-            parent_id = task.dependencies[0] if task.dependencies else None
-            if parent_id and parent_id in children_map:
-                children_map[parent_id].append(task)
-            else:
-                roots.append(task)
-
-        for task in roots:
-            self._add_task_node(self._tree.root, task, children_map)
+            self._add_task_node(self._tree.root, task)
         self._tree.root.expand()
 
     def _add_task_node(
         self,
         parent: Any,
         task: TaskInfo,
-        children_map: dict[str, list[TaskInfo]],
     ) -> None:
         summary = self._summaries_by_task_id.get(task.id)
         node = parent.add(
-            self._render_task_label(task),
+            self._render_task_label(task, relation="default"),
             data=TaskTreeNodeData(task=task, agent_summary=summary),
-            expand=bool(children_map.get(task.id)),
-            allow_expand=bool(children_map.get(task.id)),
+            expand=False,
+            allow_expand=False,
         )
         self._node_ids_by_task_id[task.id] = node.id
+        self._visual_signatures_by_task_id[task.id] = (self._task_label_signature(task), "default")
 
-        for child in children_map.get(task.id, []):
-            self._add_task_node(node, child, children_map)
+    def _update_task_node(self, task: TaskInfo) -> None:
+        if self._tree is None:
+            return
+        node_id = self._node_ids_by_task_id.get(task.id)
+        if node_id is None:
+            return
+        node = self._tree.get_node_by_id(node_id)
+        if node is None:
+            return
+        summary = self._summaries_by_task_id.get(task.id)
+        node.data = TaskTreeNodeData(task=task, agent_summary=summary)
 
-    def _render_task_label(self, task: TaskInfo) -> Text:
+    def _refresh_dependency_labels(self, focused_task_id: str | None) -> None:
+        if self._tree is None:
+            return
+
+        dependency_ids, dependent_ids = self._dependency_sets(focused_task_id)
+        self._focused_task_id = focused_task_id if focused_task_id in self._tasks_by_id else None
+
+        for task_id in self._task_order:
+            task = self._tasks_by_id.get(task_id)
+            if task is None:
+                continue
+            relation = self._relation_for_task(
+                task_id,
+                focused_task_id=self._focused_task_id,
+                dependency_ids=dependency_ids,
+                dependent_ids=dependent_ids,
+            )
+            visual_signature = (self._task_label_signature(task), relation)
+            if self._visual_signatures_by_task_id.get(task_id) == visual_signature:
+                continue
+            node_id = self._node_ids_by_task_id.get(task_id)
+            if node_id is None:
+                continue
+            node = self._tree.get_node_by_id(node_id)
+            if node is None:
+                continue
+            node.set_label(self._render_task_label(task, relation=relation))
+            self._visual_signatures_by_task_id[task_id] = visual_signature
+
+    def _dependency_sets(self, focused_task_id: str | None) -> tuple[set[str], set[str]]:
+        if focused_task_id is None or focused_task_id not in self._tasks_by_id:
+            return set(), set()
+
+        focused_task = self._tasks_by_id[focused_task_id]
+        dependency_ids = {dependency_id for dependency_id in focused_task.dependencies if dependency_id in self._tasks_by_id}
+        dependent_ids = {
+            task.id
+            for task in self._tasks_by_id.values()
+            if focused_task_id in task.dependencies
+        }
+        return dependency_ids, dependent_ids
+
+    def _relation_for_task(
+        self,
+        task_id: str,
+        *,
+        focused_task_id: str | None,
+        dependency_ids: set[str],
+        dependent_ids: set[str],
+    ) -> TaskNodeRelation:
+        if focused_task_id is None:
+            return "default"
+        if task_id == focused_task_id:
+            return "focused"
+        if task_id in dependency_ids:
+            return "dependency"
+        if task_id in dependent_ids:
+            return "dependent"
+        return "default"
+
+    def _render_task_label(self, task: TaskInfo, *, relation: TaskNodeRelation) -> Text:
         icon = STATUS_ICONS.get(task.status, "○")
         color = PRIORITY_STYLES.get(task.priority, "default")
         label = Text()
         label.append(f"{icon} ", style=color)
-        label.append(task.id, style=f"bold {color}")
+        label.append(task.id, style=self._task_id_style(color, relation))
         label.append(" — ")
-        label.append(task.title)
+        label.append(task.title, style=self._task_title_style(relation))
         if task.status is TaskStatus.IN_PROGRESS:
             label.append("  [running]", style="italic cyan")
         elif task.status is TaskStatus.FAILED:
@@ -319,7 +408,37 @@ class PlanTree(Static):
             label.append("  [user]", style="italic red")
         elif task.status is TaskStatus.ACCEPTED:
             label.append("  [accepted]", style="italic green")
+        if relation == "focused":
+            label.append("  [selected]", style="bold cyan")
+        elif relation == "dependency":
+            label.append("  [dependency]", style="bold yellow")
+        elif relation == "dependent":
+            label.append("  [dependent]", style="bold green")
         return label
+
+    @staticmethod
+    def _task_label_signature(task: TaskInfo) -> tuple[TaskStatus, int | None, str]:
+        return task.status, task.priority, task.title
+
+    @staticmethod
+    def _task_id_style(color: str, relation: TaskNodeRelation) -> str:
+        if relation == "focused":
+            return f"bold {color} reverse"
+        if relation == "dependency":
+            return f"bold underline {color}"
+        if relation == "dependent":
+            return f"bold italic {color}"
+        return f"bold {color}"
+
+    @staticmethod
+    def _task_title_style(relation: TaskNodeRelation) -> str:
+        if relation == "focused":
+            return "bold"
+        if relation == "dependency":
+            return "yellow"
+        if relation == "dependent":
+            return "green"
+        return "default"
 
 
 def _format_priority(priority: int | None) -> str:
