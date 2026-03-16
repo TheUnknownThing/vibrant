@@ -8,7 +8,7 @@ from uuid import uuid4
 from vibrant.models.task import TaskInfo, TaskStatus
 
 from ...types import ReviewTicketStatus, WorkflowStatus
-from ..shared.workflow import apply_workflow_status
+from ..workflow import WorkflowPolicy
 from .models import DispatchLease, ReviewResolutionCommand, TaskLoopStage, TaskState
 
 if TYPE_CHECKING:
@@ -45,14 +45,13 @@ def pending_review_ticket_ids(loop: TaskLoop) -> tuple[str, ...]:
 def maybe_complete_workflow(loop: TaskLoop) -> None:
     document = loop.roadmap_store.load()
     if workflow_is_complete(document.tasks):
-        apply_workflow_status(
+        WorkflowPolicy(
             workflow_state_store=loop.workflow_state_store,
             agent_run_store=loop.agent_run_store,
             consensus_store=loop.consensus_store,
             question_store=loop.question_store,
             attempt_store=loop.attempt_store,
-            status=WorkflowStatus.COMPLETED,
-        )
+        ).set_status(WorkflowStatus.COMPLETED)
         loop._set_snapshot(
             stage=TaskLoopStage.COMPLETED,
             active_lease=None,

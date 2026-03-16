@@ -20,7 +20,7 @@ from ..basic.stores import (
 )
 from ..policy.gatekeeper_loop.roles import GATEKEEPER_ROLE
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
-from ..policy.shared.workflow import WorkflowSessionResource
+from ..policy.workflow import WorkflowSessionResource
 from ..policy.task_loop.roles import DEFAULT_TASK_AGENT_ROLE
 from ..policy.task_loop import TaskLoop
 from ..types import (

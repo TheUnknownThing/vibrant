@@ -77,7 +77,7 @@ main facade methods.
 | API | Notes |
 | --- | --- |
 | `snapshot()` | Returns `OrchestratorSnapshot`. |
-| `get_workflow_status()` | Returns the current `OrchestratorStatus`. |
+| `get_workflow_status()` | Returns the current `WorkflowStatus`. |
 | `workflow_snapshot()` | Returns the current typed workflow snapshot. |
 | `workflow_session()` | Returns the durable workflow-session read model. |
 | `gatekeeper_state()` | Returns the current Gatekeeper loop state. |
@@ -93,7 +93,7 @@ main facade methods.
 | --- | --- |
 | `get_consensus_document()` | Returns the current `ConsensusDocument`, if present. |
 | `write_consensus_document(document)` | Replaces the consensus document with the provided typed document. |
-| `update_consensus(status=None, context=None)` | Applies a semantic consensus update. |
+| `update_consensus(context=None)` | Applies a semantic consensus context update. Workflow status remains policy-projected. |
 | `get_consensus_source_path()` | Returns the consensus document path, if present. |
 | `get_roadmap()` | Returns the current `RoadmapDocument`. |
 | `replace_roadmap(tasks, project=None)` | Replaces the roadmap using typed task definitions. |
@@ -166,7 +166,6 @@ All user-message submission flows use the same stable pattern:
 | `pause_workflow()` | Pauses the workflow. |
 | `resume_workflow()` | Resumes the workflow. |
 | `end_planning_phase()` | Transitions planning into execution. |
-| `set_workflow_status(status)` | Sets the workflow status directly. |
 | `can_transition_to(next_status)` | Returns whether a UI transition is currently allowed. |
 | `transition_workflow_state(next_status)` | Applies the semantic UI transition plan. |
 | `infer_resume_status()` | Infers the resume status from the current facade-visible state. |

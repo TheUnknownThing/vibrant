@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
+from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
@@ -51,8 +51,8 @@ class PolicyCommandAdapter:
     async def interrupt_gatekeeper(self):
         return await self.gatekeeper_loop.lifecycle.interrupt_active_turn()
 
-    def set_workflow_status(self, status: WorkflowStatus) -> WorkflowSnapshot:
-        return self.gatekeeper_loop.transition_workflow(status)
+    def begin_planning_phase(self) -> WorkflowSnapshot:
+        return self.gatekeeper_loop.begin_planning()
 
     def end_planning_phase(self) -> WorkflowSnapshot:
         return self.gatekeeper_loop.end_planning()
@@ -84,10 +84,9 @@ class PolicyCommandAdapter:
     def update_consensus(
         self,
         *,
-        status: ConsensusStatus | str | None = None,
         context: str | None = None,
     ) -> ConsensusDocument:
-        return self.gatekeeper_loop.update_consensus(status=status, context=context)
+        return self.gatekeeper_loop.update_consensus(context=context)
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
         return self.gatekeeper_loop.write_consensus_document(document)

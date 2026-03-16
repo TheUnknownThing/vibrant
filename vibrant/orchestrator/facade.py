@@ -8,8 +8,7 @@ from typing import Any
 
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
-from vibrant.models.state import OrchestratorStatus
+from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 
 from .policy.gatekeeper_loop.questions import current_pending_question, select_pending_question_by_text
@@ -18,7 +17,6 @@ from .policy.gatekeeper_loop.transitions import (
     infer_resume_status,
     plan_ui_transition,
 )
-from .policy.shared.workflow import orchestrator_status_from_workflow
 from .types import (
     AgentInstanceSnapshot,
     AgentRunSnapshot,
@@ -31,7 +29,7 @@ from .types import (
 
 @dataclass(frozen=True)
 class OrchestratorSnapshot:
-    status: OrchestratorStatus
+    status: WorkflowStatus
     pending_questions: tuple[str, ...]
     question_records: tuple[QuestionView, ...]
     roadmap: RoadmapDocument | None
@@ -160,8 +158,8 @@ class OrchestratorFacade:
             user_input_banner=self.get_user_input_banner(),
         )
 
-    def get_workflow_status(self) -> OrchestratorStatus:
-        return orchestrator_status_from_workflow(self._control_plane.get_workflow_status())
+    def get_workflow_status(self) -> WorkflowStatus:
+        return self._control_plane.get_workflow_status()
 
     def workflow_snapshot(self):
         return self._control_plane.workflow_snapshot()
@@ -177,9 +175,6 @@ class OrchestratorFacade:
 
     def task_loop_state(self):
         return self._control_plane.task_loop_state()
-
-    def set_workflow_status(self, status: WorkflowStatus):
-        return self._control_plane.set_workflow_status(status)
 
     def get_consensus_document(self) -> ConsensusDocument | None:
         return self._control_plane.get_consensus_document()
@@ -350,8 +345,8 @@ class OrchestratorFacade:
     def replace_roadmap(self, *, tasks: list[TaskInfo], project: str | None = None) -> RoadmapDocument:
         return self._control_plane.replace_roadmap(tasks=tasks, project=project)
 
-    def update_consensus(self, *, status: ConsensusStatus | str | None = None, context: str | None = None) -> ConsensusDocument:
-        return self._control_plane.update_consensus(status=status, context=context)
+    def update_consensus(self, *, context: str | None = None) -> ConsensusDocument:
+        return self._control_plane.update_consensus(context=context)
 
     def request_user_decision(
         self,
@@ -477,7 +472,7 @@ class OrchestratorFacade:
         self._control_plane.resume_workflow()
         return self.get_workflow_status()
 
-    def end_planning_phase(self) -> OrchestratorStatus:
+    def end_planning_phase(self) -> WorkflowStatus:
         self._control_plane.end_planning_phase()
         return self.get_workflow_status()
 
@@ -509,11 +504,11 @@ class OrchestratorFacade:
         question = current_pending_question(self.list_pending_question_records())
         return question.text if question is not None else None
 
-    def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
+    def can_transition_to(self, next_status: WorkflowStatus) -> bool:
         current = self.get_workflow_status()
         return can_transition_ui_status(current, next_status)
 
-    def transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
+    def transition_workflow_state(self, next_status: WorkflowStatus) -> None:
         current_status = self.get_workflow_status()
         plan = plan_ui_transition(current_status, next_status)
         if plan.action == "noop":
@@ -524,17 +519,19 @@ class OrchestratorFacade:
         if plan.action == "resume":
             self._control_plane.resume_workflow()
             return
+        if plan.action == "begin_planning":
+            self._control_plane.begin_planning_phase()
+            return
         if plan.action == "end_planning":
             self._control_plane.end_planning_phase()
             return
-        self._control_plane.set_workflow_status(plan.workflow_status)
+        raise ValueError(f"Unhandled workflow transition action: {plan.action}")
 
-    def infer_resume_status(self) -> OrchestratorStatus:
+    def infer_resume_status(self) -> WorkflowStatus:
         workflow_session = self.workflow_session()
         if workflow_session.status is WorkflowStatus.PAUSED and workflow_session.resume_status is not None:
-            return orchestrator_status_from_workflow(workflow_session.resume_status)
+            return workflow_session.resume_status
         return infer_resume_status(
-            self.get_consensus_document(),
             self.snapshot().roadmap,
         )
 

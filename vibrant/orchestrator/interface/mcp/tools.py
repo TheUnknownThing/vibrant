@@ -19,9 +19,8 @@ class OrchestratorMCPTools:
         self,
         *,
         context: str | None = None,
-        status: str | None = None,
     ) -> Any:
-        return self.commands.update_consensus(context=context, status=status)
+        return self.commands.update_consensus(context=context)
 
     def add_task(
         self,

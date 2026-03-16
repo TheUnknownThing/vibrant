@@ -104,6 +104,9 @@ class GatekeeperUserLoop:
     def transition_workflow(self, status: WorkflowStatus) -> WorkflowSnapshot:
         return commands.transition_workflow(self, status)
 
+    def begin_planning(self) -> WorkflowSnapshot:
+        return commands.begin_planning(self)
+
     def end_planning(self) -> WorkflowSnapshot:
         return commands.end_planning(self)
 
@@ -122,8 +125,8 @@ class GatekeeperUserLoop:
     def replace_roadmap(self, *, tasks, project: str | None = None) -> object:
         return commands.replace_roadmap(self, tasks=tasks, project=project)
 
-    def update_consensus(self, *, status=None, context: str | None = None) -> object:
-        return commands.update_consensus(self, status=status, context=context)
+    def update_consensus(self, *, context: str | None = None) -> object:
+        return commands.update_consensus(self, context=context)
 
     def write_consensus_document(self, document) -> object:
         return commands.write_consensus_document(self, document)

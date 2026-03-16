@@ -8,8 +8,7 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
 
-from ...models.state import OrchestratorStatus
-from ...orchestrator.types import AgentConversationView, AgentStreamEvent, QuestionStatus, QuestionView
+from ...orchestrator.types import AgentConversationView, AgentStreamEvent, QuestionStatus, QuestionView, WorkflowStatus
 from .conversation_view import ConversationView
 
 
@@ -76,7 +75,7 @@ class ChatPanel(Static):
         self._question_summary_text = ""
         self._question_records: tuple[QuestionView, ...] = ()
         self._pending_questions: tuple[str, ...] = ()
-        self._status: OrchestratorStatus | str | None = None
+        self._status: WorkflowStatus | str | None = None
         self._notification_token = 0
         self._conversation: ConversationView | None = None
 
@@ -133,7 +132,7 @@ class ChatPanel(Static):
     def set_gatekeeper_state(
         self,
         *,
-        status: OrchestratorStatus | str | None,
+        status: WorkflowStatus | str | None,
         question_records: Sequence[QuestionView],
         flash: bool = False,
     ) -> None:
@@ -179,18 +178,18 @@ class ChatPanel(Static):
         notice.set_class(bool(self._pending_questions), "has-pending-question")
 
 
-def _format_subtitle(status: OrchestratorStatus | str | None, *, has_pending_questions: bool) -> str:
-    normalized = status.value if isinstance(status, OrchestratorStatus) else str(status or "").strip().lower()
+def _format_subtitle(status: WorkflowStatus | str | None, *, has_pending_questions: bool) -> str:
+    normalized = status.value if isinstance(status, WorkflowStatus) else str(status or "").strip().lower()
 
-    if normalized == OrchestratorStatus.PLANNING.value:
+    if normalized == WorkflowStatus.PLANNING.value:
         return "Planning · User to Gatekeeper"
-    if normalized == OrchestratorStatus.EXECUTING.value:
+    if normalized == WorkflowStatus.EXECUTING.value:
         return "Executing · Gatekeeper escalation" if has_pending_questions else "Executing · Gatekeeper history"
-    if normalized == OrchestratorStatus.PAUSED.value:
+    if normalized == WorkflowStatus.PAUSED.value:
         return "Paused · Review history"
-    if normalized == OrchestratorStatus.COMPLETED.value:
+    if normalized == WorkflowStatus.COMPLETED.value:
         return "Completed · Review history"
-    if normalized == OrchestratorStatus.FAILED.value:
+    if normalized == WorkflowStatus.FAILED.value:
         return "Failed · Review history"
     return "Gatekeeper conversation"
 

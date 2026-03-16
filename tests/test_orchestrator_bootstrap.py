@@ -208,7 +208,7 @@ def test_resume_workflow_restores_planning_phase(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    facade.set_workflow_status(WorkflowStatus.PLANNING)
+    facade.transition_workflow_state(WorkflowStatus.PLANNING)
     paused = facade.pause_workflow()
     resumed = facade.resume_workflow()
 
@@ -220,6 +220,6 @@ def test_facade_surfaces_failed_workflow_without_paused_fallback(tmp_path: Path)
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    facade.set_workflow_status(WorkflowStatus.FAILED)
+    orchestrator._workflow_state_store.update_workflow_status(WorkflowStatus.FAILED)
 
     assert facade.get_workflow_status().value == "failed"

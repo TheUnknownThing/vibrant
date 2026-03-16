@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -9,7 +10,7 @@ from uuid import uuid4
 from .config import DEFAULT_CONFIG_DIR, VibrantConfig
 from .consensus.writer import ConsensusWriter
 from .models.consensus import ConsensusDocument, ConsensusStatus
-from .models.state import OrchestratorState, OrchestratorStatus
+from .orchestrator.types import GatekeeperSessionSnapshot, WorkflowStatus, utc_now
 
 GITIGNORE_ENTRIES = [
     "logs/",
@@ -123,12 +124,24 @@ def _render_default_config() -> str:
 
 
 def _render_initial_state() -> str:
-    state = OrchestratorState(
-        session_id=str(uuid4()),
-        status=OrchestratorStatus.INIT,
-        last_consensus_version=0,
-    )
-    return state.model_dump_json(indent=2) + "\n"
+    gatekeeper_session = GatekeeperSessionSnapshot()
+    gatekeeper_payload = {
+        **asdict(gatekeeper_session),
+        "lifecycle_state": gatekeeper_session.lifecycle_state.value,
+    }
+    gatekeeper_payload.pop("provider_thread_id", None)
+    state = {
+        "session_id": str(uuid4()),
+        "started_at": utc_now(),
+        "workflow_status": WorkflowStatus.INIT.value,
+        "resume_status": None,
+        "concurrency_limit": 4,
+        "gatekeeper_session": gatekeeper_payload,
+        "total_agent_spawns": 0,
+    }
+    import json
+
+    return json.dumps(state, indent=2) + "\n"
 
 
 def _ensure_gitignore(path: Path) -> None:

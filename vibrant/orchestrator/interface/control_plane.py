@@ -34,6 +34,9 @@ class InterfaceControlPlane:
             error=error,
         )
 
+    def begin_planning_phase(self):
+        return self.backend.commands.begin_planning_phase()
+
     def end_planning_phase(self):
         return self.backend.commands.end_planning_phase()
 
@@ -42,9 +45,6 @@ class InterfaceControlPlane:
 
     def resume_workflow(self):
         return self.backend.commands.resume_workflow()
-
-    def set_workflow_status(self, status):
-        return self.backend.commands.set_workflow_status(status)
 
     async def restart_gatekeeper(self, reason: str | None = None):
         return await self.backend.commands.restart_gatekeeper(reason)
@@ -189,8 +189,8 @@ class InterfaceControlPlane:
     def replace_roadmap(self, *, tasks, project: str | None = None):
         return self.backend.commands.replace_roadmap(tasks=tasks, project=project)
 
-    def update_consensus(self, *, status=None, context: str | None = None):
-        return self.backend.commands.update_consensus(status=status, context=context)
+    def update_consensus(self, *, context: str | None = None):
+        return self.backend.commands.update_consensus(context=context)
 
     def write_consensus_document(self, document):
         return self.backend.commands.write_consensus_document(document)
