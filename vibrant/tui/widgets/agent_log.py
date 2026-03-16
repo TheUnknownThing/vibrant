@@ -712,7 +712,12 @@ class AgentOutput(Static):
             self._scroll_active_end()
 
     def is_showed(self):
-        return self.app.vibing_screen().active_tab == "agent-logs"
+        app = self.app
+        vibing_screen = getattr(app, "vibing_screen", None)
+        if not callable(vibing_screen):
+            return False
+        screen = vibing_screen()
+        return bool(screen is not None and screen.active_tab == "agent-logs")
 
     def _apply_active_stream_change(
         self,
