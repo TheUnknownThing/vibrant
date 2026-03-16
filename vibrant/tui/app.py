@@ -88,7 +88,7 @@ class VibrantApp(App):
             return False
 
         planning_screen = self._planning_screen()
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
 
         if action in {"open_help", "quit_app", "open_settings"}:
             return planning_screen is not None or vibing_screen is not None
@@ -254,14 +254,14 @@ class VibrantApp(App):
             self._start_automatic_workflow_if_needed()
 
     def action_cycle_agent_output(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Agent logs are only available in the vibing screen.", severity="warning")
             return
         vibing_screen.agent_output.action_cycle_agent()
 
     def action_show_task_status(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Task status is only available in the vibing screen.", severity="warning")
             return
@@ -275,7 +275,7 @@ class VibrantApp(App):
             self._set_status(f"Consensus panel {state}")
             return
 
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Consensus view is not available on this screen.", severity="warning")
             return
@@ -283,7 +283,7 @@ class VibrantApp(App):
         self._set_status("Opened Consensus tab")
 
     def action_show_chat_history(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Chat history is only available in the vibing screen.", severity="warning")
             return
@@ -291,7 +291,7 @@ class VibrantApp(App):
         self._set_status("Opened Gatekeeper chat history")
 
     def action_show_agent_logs(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Agent logs are only available in the vibing screen.", severity="warning")
             return
@@ -479,14 +479,14 @@ class VibrantApp(App):
             self._refresh_project_views()
             self._set_status("Refreshed project views")
         elif cmd == "history":
-            vibing_screen = self._vibing_screen()
+            vibing_screen = self.vibing_screen()
             if vibing_screen is None:
                 self.notify("Gatekeeper chat is already visible.")
                 return
             vibing_screen.show_chat_history()
             self._set_status("Opened Gatekeeper chat history")
         elif cmd == "logs":
-            vibing_screen = self._vibing_screen()
+            vibing_screen = self.vibing_screen()
             if vibing_screen is None:
                 self.notify("Agent logs are only available in the vibing screen.", severity="warning")
                 return
@@ -586,7 +586,7 @@ class VibrantApp(App):
         self.call_after_refresh(self._apply_agent_output_conversation_event, event)
 
     def _apply_agent_output_conversation_event(self, event: AgentStreamEvent) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             return
         with suppress(Exception):
@@ -742,7 +742,7 @@ class VibrantApp(App):
 
     def _refresh_project_views(self) -> None:
         self._sync_workspace_screen()
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         self._sync_gatekeeper_conversation_binding()
         orchestrator = self.orchestrator_facade
         agent_output = None
@@ -1063,7 +1063,7 @@ class VibrantApp(App):
         normalized = document.context.strip()
         return bool(normalized and normalized != DEFAULT_CONSENSUS_CONTEXT.strip())
 
-    def _vibing_screen(self) -> VibingScreen | None:
+    def vibing_screen(self) -> VibingScreen | None:
         if isinstance(self._workspace_screen, VibingScreen):
             return self._workspace_screen
         return None

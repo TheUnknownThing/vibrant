@@ -294,6 +294,7 @@ class AgentOutput(Static):
         self._conversations: dict[str, ConversationLogState] = {}
         self._conversation_order: list[str] = []
         self._active_conversation_id: str | None = None
+        self._active_conversation_index: int | None = None
         self._auto_follow = True
         self._debug_view_enabled = False
         self._empty_message = "No agent activity yet. Use /run to execute the next roadmap task."
@@ -688,6 +689,9 @@ class AgentOutput(Static):
     def _show_active_conversation(self, *, reset_window: bool) -> None:
         if not self.is_mounted:
             return
+        if self.is_showed():
+            return
+        
         state = self._active_state()
         if state is None:
             self._rebuild_stream_window(None)
@@ -700,10 +704,15 @@ class AgentOutput(Static):
             self._reset_debug_window_to_tail(state)
         state.unread_blocks = 0
         state.unread_debug_lines = 0
-        self._rebuild_stream_window(state)
-        self._rebuild_debug_window(state)
+        if self._debug_view_enabled:
+            self._rebuild_debug_window(state)
+        else:
+            self._rebuild_stream_window(state)
         if self._auto_follow:
             self._scroll_active_end()
+
+    def is_showed(self):
+        return self.app.vibing_screen().active_tab == "agent-logs"
 
     def _apply_active_stream_change(
         self,
@@ -804,6 +813,7 @@ class AgentOutput(Static):
             return
         self._window_mutation_guard = True
         try:
+            # TODO: Change it to append mode
             self._stream_body.remove_children()
             self._mounted_block_widgets.clear()
             if state is None:
@@ -831,6 +841,7 @@ class AgentOutput(Static):
             return
         self._window_mutation_guard = True
         try:
+            # TODO: Change it to append mode
             self._debug_body.remove_children()
             self._mounted_debug_widgets.clear()
             if state is None:
