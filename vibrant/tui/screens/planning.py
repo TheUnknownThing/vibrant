@@ -12,6 +12,11 @@ from ..widgets.consensus_view import ConsensusView
 from ..widgets.input_bar import InputBar
 
 _MOBILE_BREAKPOINT = 110
+_HERO_TEXT = (
+    "[b]Consensus Building[/b]\n"
+    "Tell the Gatekeeper what you want to build. When planning is ready, the orchestrator will move into execution automatically. Type [u]F7[/u] to toggle the consensus panel."
+)
+_MOBILE_HERO_TEXT = "[b]Consensus[/b]\nDescribe what to build, then press Enter to start planning."
 
 
 class PlanningScreen(Static):
@@ -58,6 +63,10 @@ class PlanningScreen(Static):
         background: $surface;
     }
 
+    PlanningScreen.-mobile #planning-hero {
+        padding: 1;
+    }
+
     PlanningScreen #conversation-panel {
         height: 1fr;
     }
@@ -74,6 +83,7 @@ class PlanningScreen(Static):
         super().__init__(**kwargs)
         self._consensus_visible = False
         self._consensus_auto_revealed = False
+        self._is_mobile_layout: bool | None = None
 
     def on_mount(self) -> None:
         self._apply_responsive_layout()
@@ -83,18 +93,19 @@ class PlanningScreen(Static):
         self._apply_responsive_layout()
 
     def _apply_responsive_layout(self) -> None:
-        self.set_class(self.size.width < _MOBILE_BREAKPOINT, "-mobile")
+        is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        if self._is_mobile_layout == is_mobile:
+            return
+        self._is_mobile_layout = is_mobile
+        self.set_class(is_mobile, "-mobile")
+        hero = self.query_one("#planning-hero", Static)
+        hero.update(_MOBILE_HERO_TEXT if is_mobile else _HERO_TEXT)
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="planning-layout"):
             yield ConsensusView(id="planning-consensus-panel")
             with Vertical(id="planning-shell"):
-                yield Static(
-                    "[b]Consensus Building[/b]\n"
-                    "Tell the Gatekeeper what you want to build. When planning is ready, the orchestrator will move into execution automatically. Type [u]F7[/u] to toggle the consensus panel.",
-                    id="planning-hero",
-                    markup=True,
-                )
+                yield Static(_HERO_TEXT, id="planning-hero", markup=True)
                 yield ChatPanel(id="conversation-panel")
                 yield InputBar(id="input-panel")
 

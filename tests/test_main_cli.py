@@ -4,7 +4,37 @@ from __future__ import annotations
 
 from argparse import Namespace
 
+import pytest
+
 from vibrant import __main__
+
+
+class _FakeRoute:
+    def __init__(self, path: str) -> None:
+        self._path = path
+
+    def url_for(self, **_: str) -> str:
+        return self._path
+
+
+class _FakeRouter:
+    def __getitem__(self, route: str) -> _FakeRoute:
+        paths = {
+            "websocket": _FakeRoute("/websocket"),
+            "static": _FakeRoute("/static/"),
+        }
+        return paths[route]
+
+
+class _FakeApp:
+    def __init__(self) -> None:
+        self.router = _FakeRouter()
+
+
+class _FakeRequest:
+    def __init__(self, fontsize: str = "16") -> None:
+        self.app = _FakeApp()
+        self.query = {"fontsize": fontsize}
 
 
 class TestTextualServeCLI:
@@ -74,3 +104,27 @@ class TestTextualServeCLI:
         assert captured["title"] == "Vibrant"
         assert captured["public_url"] == "https://demo.example.com"
         assert captured["debug"] is True
+
+    @pytest.mark.asyncio
+    async def test_dynamic_index_uses_public_url_for_websocket_and_static(self, monkeypatch) -> None:
+        class FakeServer:
+            def __init__(self, *_: object, **__: object) -> None:
+                self.public_url = "https://demo.example.com/vibrant"
+                self.title = "Vibrant"
+                self.handle_index = None
+
+            def serve(self, *, debug: bool) -> None:
+                del debug
+
+        monkeypatch.setattr("textual_serve.server.Server", FakeServer)
+        monkeypatch.setattr("aiohttp_jinja2.template", lambda _name: (lambda func: func))
+
+        server = __main__._DynamicHostServer("cmd", public_url="https://demo.example.com/vibrant")
+        server.serve()
+
+        request = _FakeRequest()
+        assert server._server.handle_index is not None
+        context = await server._server.handle_index(request)
+
+        assert context["app_websocket_url"] == "wss://demo.example.com/vibrant/websocket"
+        assert context["config"]["static"]["url"] == "https://demo.example.com/vibrant/static/"

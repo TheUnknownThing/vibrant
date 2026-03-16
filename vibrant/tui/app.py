@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -33,6 +34,8 @@ from .widgets.settings_panel import SettingsPanel
 logger = logging.getLogger(__name__)
 OrchestratorFactory = Callable[..., Orchestrator]
 WorkspaceScreen = PlanningScreen | VibingScreen
+_MOBILE_BREAKPOINT = 80
+
 _STREAM_ONLY_EVENT_TYPES = {
     "assistant.message.delta",
     "assistant.thinking.delta",
@@ -40,6 +43,13 @@ _STREAM_ONLY_EVENT_TYPES = {
     "reasoning.summary.delta",
     "tool.call.delta",
 }
+
+
+def _should_autofocus_primary_input(*, is_web: bool, width: int) -> bool:
+    """Avoid opening the mobile browser keyboard during initial app bootstrap."""
+
+    return not is_web or width >= _MOBILE_BREAKPOINT
+
 
 class VibrantApp(App):
     """Terminal UI for managing roadmap execution and Gatekeeper conversations."""
@@ -66,6 +76,15 @@ class VibrantApp(App):
         background: $primary-background;
         padding: 0 1;
         color: $text-muted;
+    }
+
+    VibrantApp.-mobile Header,
+    VibrantApp.-mobile Footer {
+        display: none;
+    }
+
+    VibrantApp.-mobile #status-bar {
+        height: auto;
     }
     """
 
@@ -136,6 +155,7 @@ class VibrantApp(App):
         self._paused_return_status: OrchestratorStatus | None = None
         self._banner_text: str | None = None
         self._todo_exit_message: str | None = None
+        self._mobile_chrome_enabled: bool | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -151,6 +171,7 @@ class VibrantApp(App):
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
 
         if not self._project_has_vibrant_state():
             self._set_status("Project not initialized")
@@ -158,6 +179,18 @@ class VibrantApp(App):
             return
 
         self.call_after_refresh(self._focus_primary_input)
+
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._apply_mobile_chrome()
+
+    def _apply_mobile_chrome(self) -> None:
+        is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        if self._mobile_chrome_enabled == is_mobile:
+            return
+        self._mobile_chrome_enabled = is_mobile
+        self.set_class(is_mobile, "-mobile")
 
     async def on_unmount(self) -> None:
         for task in (self._gatekeeper_request_task, self._roadmap_runner_task):
@@ -182,6 +215,7 @@ class VibrantApp(App):
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
 
         if not self._project_has_vibrant_state():
             self._set_status("Project not initialized")
@@ -206,6 +240,7 @@ class VibrantApp(App):
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
         self._set_status(f"Initialized Vibrant project in {project_root}")
         self.notify(f"Initialized Vibrant project in {project_root}")
         self.call_after_refresh(self._focus_primary_input)
@@ -637,6 +672,8 @@ class VibrantApp(App):
         return (self._project_root / DEFAULT_CONFIG_DIR).exists()
 
     def _focus_primary_input(self) -> None:
+        if not _should_autofocus_primary_input(is_web=self.is_web, width=self.size.width):
+            return
         with suppress(Exception):
             if self._workspace_screen is not None:
                 self._workspace_screen.focus_primary_input()
@@ -709,6 +746,7 @@ class VibrantApp(App):
         self._todo_exit_message = None
         self._sync_workspace_screen(prefer_chat_history=prefer_chat_history)
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
         self._set_status("Entered vibing phase")
         self._start_automatic_workflow_if_needed()
         return True
