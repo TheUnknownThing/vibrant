@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from typing import Literal
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
-from textual.widgets import Markdown, Static
+from textual.widgets import Static
 
 from ...orchestrator.types import AgentConversationEntry, AgentConversationView, AgentStreamEvent
 
@@ -22,35 +22,19 @@ TOOL_STATUS_LABELS: dict[ToolCallStatus, str] = {
     "success": "done",
     "failed": "failed",
 }
-TEXT_PARTS_PAYLOAD_KEY = "_text_parts"
 
 
-class TextPart(Vertical):
-    """Markdown-capable message part widget."""
+class TextPart(Static):
+    """Plain text message part widget."""
 
     def __init__(self, text: str, **kwargs: object) -> None:
-        super().__init__(classes="conversation-part text-part msg-content", **kwargs)
+        super().__init__("", markup=False, classes="conversation-part text-part msg-content", **kwargs)
         self.styles.height = "auto"
         self.text = text
-        self._content = Markdown("")
-
-    def compose(self) -> ComposeResult:
-        yield self._content
-
-    def on_mount(self) -> None:
         self._refresh()
 
     def _refresh(self) -> None:
-        self._content.update(self.text)
-
-    def _append(self, text: str) -> None:
-        if not text:
-            return
-        append = getattr(self._content, "append", None)
-        if callable(append):
-            append(text)
-            return
-        self._content.update(self.text)
+        self.update(self.text)
 
     def plain_text(self) -> str:
         return self.text
@@ -61,13 +45,6 @@ class TextPart(Vertical):
     def sync_from(self, other: TextPart) -> None:
         if self.text == other.text:
             return
-
-        if other.text.startswith(self.text):
-            suffix = other.text[len(self.text) :]
-            self.text = other.text
-            self._append(suffix)
-            return
-
         self.text = other.text
         self._refresh()
 
@@ -81,7 +58,7 @@ class ReasoningPart(Vertical):
         self.status: ReasoningStatus = status
         self.content = content
         self.content.add_class("reasoning-content")
-        self._label = Static("", markup=True, classes="reasoning-label")
+        self._label = Static("", markup=False, classes="reasoning-label")
         self._refresh()
 
     def compose(self) -> ComposeResult:
@@ -286,11 +263,6 @@ class ConversationView(Static):
         margin-top: 0;
     }
 
-    ConversationView .text-part Markdown {
-        margin: 0;
-        padding: 0;
-    }
-
     ConversationView .msg-tool {
         padding: 0 1;
         margin: 0;
@@ -370,70 +342,11 @@ def _tool_body(entry: AgentConversationEntry) -> str:
     if isinstance(result, str) and result.strip():
         return result.strip()
 
-    text = _entry_full_text(entry).strip()
+    text = entry.text.strip()
     title = _tool_name(entry)
     if text and text != title:
         return text
     return ""
-
-
-def _payload_text_parts(payload: Mapping[str, Any] | None) -> list[str]:
-    if payload is None:
-        return []
-    raw_parts = payload.get(TEXT_PARTS_PAYLOAD_KEY)
-    if not isinstance(raw_parts, list):
-        return []
-    return [part for part in raw_parts if isinstance(part, str)]
-
-
-def _merge_payload(
-    existing: Mapping[str, Any] | None,
-    incoming: Mapping[str, Any] | None,
-) -> dict[str, Any] | None:
-    merged: dict[str, Any] = {}
-    if existing is not None:
-        merged.update(dict(existing))
-    if incoming is not None:
-        merged.update(dict(incoming))
-    return merged or None
-
-
-def _entry_text_parts(entry: AgentConversationEntry) -> list[str]:
-    parts = _payload_text_parts(entry.payload)
-    if parts:
-        return parts
-    if entry.text:
-        return [entry.text]
-    return []
-
-
-def _entry_full_text(entry: AgentConversationEntry) -> str:
-    parts = _entry_text_parts(entry)
-    if parts:
-        return "".join(parts)
-    return ""
-
-
-def _with_text_parts(
-    existing: Mapping[str, Any] | None,
-    incoming: Mapping[str, Any] | None,
-    parts: list[str],
-) -> Mapping[str, Any] | None:
-    merged = _merge_payload(existing, incoming) or {}
-    merged[TEXT_PARTS_PAYLOAD_KEY] = list(parts)
-    return merged
-
-
-def _text_suffix_to_append(current_text: str, incoming_text: str) -> str:
-    if not incoming_text:
-        return ""
-    if not current_text:
-        return incoming_text
-    if incoming_text == current_text or current_text.endswith(incoming_text):
-        return ""
-    if incoming_text.startswith(current_text):
-        return incoming_text[len(current_text) :]
-    return incoming_text
 
 
 def _render_blocks(conversation: AgentConversationView | None) -> list[MessageBlock]:
@@ -508,8 +421,7 @@ def _should_append_to_previous(
 
 
 def _message_parts(entry: AgentConversationEntry) -> list[TextPart | ReasoningPart | ToolCallPart]:
-    full_text = _entry_full_text(entry)
-    stripped_text = full_text.strip()
+    stripped_text = entry.text.strip()
 
     if entry.kind == "thinking":
         return [
@@ -573,7 +485,7 @@ def _clone_conversation(conversation: AgentConversationView | None) -> AgentConv
                 kind=entry.kind,
                 turn_id=entry.turn_id,
                 text=entry.text,
-                payload=dict(entry.payload) if entry.payload is not None else None,
+                payload=entry.payload,
                 started_at=entry.started_at,
                 finished_at=entry.finished_at,
             )
@@ -649,54 +561,41 @@ def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamE
 
     if event.type.endswith(".delta"):
         target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
-        incoming_text = event.text or ""
         if target is None:
-            parts = [incoming_text] if incoming_text else []
             entries.append(
                 AgentConversationEntry(
                     role=role,
                     kind=kind,
                     turn_id=event.turn_id,
-                    text=incoming_text,
-                    payload=_with_text_parts(None, event.payload, parts),
+                    text=event.text or "",
+                    payload=event.payload,
                     started_at=event.created_at,
                     finished_at=None,
                 )
             )
             return
-
-        parts = _entry_text_parts(target)
-        if incoming_text:
-            parts.append(incoming_text)
-        target.text = "".join(parts)
-        target.payload = _with_text_parts(target.payload, event.payload, parts)
+        target.text = f"{target.text}{event.text or ''}"
+        target.payload = event.payload or target.payload
         return
 
     target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
     if target is None:
-        incoming_text = event.text or ""
-        parts = [incoming_text] if incoming_text else []
         entries.append(
             AgentConversationEntry(
                 role=role,
                 kind=kind,
                 turn_id=event.turn_id,
-                text=incoming_text,
-                payload=_with_text_parts(None, event.payload, parts),
+                text=event.text or "",
+                payload=event.payload,
                 started_at=event.created_at,
                 finished_at=event.created_at,
             )
         )
         return
 
-    parts = _entry_text_parts(target)
-    current_text = "".join(parts)
-    incoming_text = event.text or ""
-    suffix = _text_suffix_to_append(current_text, incoming_text)
-    if suffix:
-        parts.append(suffix)
-    target.text = "".join(parts)
-    target.payload = _with_text_parts(target.payload, event.payload, parts)
+    if event.text and not (target.text == event.text or target.text.endswith(event.text)):
+        target.text = f"{target.text}{event.text}"
+    target.payload = event.payload or target.payload
     target.finished_at = event.created_at
 
 

@@ -17,7 +17,6 @@ from vibrant.tui.widgets.conversation_view import (
     ConversationView,
     MessageBlockWidget,
     ReasoningPart,
-    TextPart,
     ToolCallPart,
     _render_blocks,
 )
@@ -390,26 +389,3 @@ def test_render_blocks_groups_assistant_turn_parts_and_omits_turn_status() -> No
     assert isinstance(blocks[1].parts[1], ToolCallPart)
     assert blocks[1].parts[2].plain_text() == "diff --git a/file.py b/file.py"
     assert blocks[1].parts[3].plain_text() == "I found the risky changes."
-
-
-def test_text_part_sync_from_uses_incremental_append_for_suffix_updates() -> None:
-    class _Recorder:
-        def __init__(self) -> None:
-            self.append_calls: list[str] = []
-            self.update_calls: list[str] = []
-
-        def append(self, text: str) -> None:
-            self.append_calls.append(text)
-
-        def update(self, text: str) -> None:
-            self.update_calls.append(text)
-
-    part = TextPart("Plan")
-    recorder = _Recorder()
-    part._content = recorder  # type: ignore[assignment]
-
-    part.sync_from(TextPart("Plan the refactor"))
-
-    assert part.text == "Plan the refactor"
-    assert recorder.append_calls == [" the refactor"]
-    assert recorder.update_calls == []
