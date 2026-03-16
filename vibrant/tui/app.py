@@ -403,7 +403,7 @@ class VibrantApp(App):
                 submission = await self.orchestrator.submit_user_message(text)
             self._sync_gatekeeper_conversation_binding(
                 conversation_id=submission.conversation_id,
-                force=True,
+                force=False,
             )
             self._refresh_gatekeeper_views(rebind_conversation=False)
 
@@ -712,6 +712,28 @@ class VibrantApp(App):
         host.remove_children()
         host.mount(workspace)
         self._workspace_screen = workspace
+
+        # Newly mounted widgets are not immediately queryable in the same frame.
+        # Refresh once more after mount so task and conversation views bind reliably.
+        self.call_after_refresh(self._refresh_workspace_bound_views)
+
+    def _refresh_workspace_bound_views(self) -> None:
+        """Refresh workspace widgets after the mounted tree is available."""
+
+        if self._workspace_screen is None:
+            return
+
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            self._clear_project_dependent_views()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
+            return
+
+        self._refresh_agent_output_registry(snapshot)
+        self._refresh_roadmap_views(snapshot)
+        self._refresh_consensus_views(snapshot)
+        self._refresh_gatekeeper_views()
+
     def _apply_workspace_placeholder(self, placeholder: str) -> None:
         input_bar = self._input_bar()
         if input_bar is None:
