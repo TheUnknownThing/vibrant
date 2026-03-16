@@ -689,7 +689,7 @@ class AgentOutput(Static):
     def _show_active_conversation(self, *, reset_window: bool) -> None:
         if not self.is_mounted:
             return
-        if self.is_showed():
+        if not self.is_showed():
             return
         
         state = self._active_state()
