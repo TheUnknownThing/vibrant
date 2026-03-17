@@ -27,7 +27,7 @@ class ConversationManifest:
 class ConversationStore:
     """Persist conversation manifests and stream frames under `.vibrant/conversations/`."""
 
-    def __init__(self, vibrant_dir: str | Path) -> None:
+    def __init__(self, vibrant_dir: Path) -> None:
         self.vibrant_dir = Path(vibrant_dir)
         self.base_dir = self.vibrant_dir / "conversations"
         self.frames_dir = self.base_dir / "frames"

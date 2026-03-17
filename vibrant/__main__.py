@@ -10,6 +10,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
@@ -17,10 +18,28 @@ import shutil
 import shlex
 import sys
 from collections.abc import Sequence
+from typing import Literal
 
-from .config import find_project_root, load_config
+from .config import VibrantConfig, find_project_root, load_config
 from .project_init import initialize_project
 from .providers.base import ProviderKind
+
+
+@dataclass(slots=True)
+class CliArgs:
+    """Parsed CLI arguments with paths normalized at the boundary."""
+
+    command: Literal["init"] | None = None
+    cwd: Path | None = None
+    model: str | None = None
+    debug: bool = False
+    dev: bool = False
+    serve: bool = False
+    serve_host: str = "0.0.0.0"
+    serve_port: int = 8000
+    serve_public_url: str | None = None
+    textual_client: bool = False
+    init_path: Path = Path(".")
 
 
 def _enable_textual_devtools() -> None:
@@ -111,10 +130,38 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_textual_client_command(args: argparse.Namespace) -> str:
+def _resolve_optional_cli_path(raw_path: str | None) -> Path | None:
+    """Resolve an optional CLI path to an absolute ``Path``."""
+
+    if raw_path is None or not raw_path.strip():
+        return None
+    return Path(raw_path).expanduser().resolve()
+
+
+def _parse_args(argv: Sequence[str] | None = None) -> CliArgs:
+    """Parse CLI arguments into a typed structure."""
+
+    parsed = _build_parser().parse_args(argv)
+    raw_init_path = getattr(parsed, "path", ".")
+    return CliArgs(
+        command=parsed.command,
+        cwd=_resolve_optional_cli_path(parsed.cwd),
+        model=parsed.model,
+        debug=parsed.debug,
+        dev=parsed.dev,
+        serve=parsed.serve,
+        serve_host=parsed.serve_host,
+        serve_port=parsed.serve_port,
+        serve_public_url=parsed.serve_public_url,
+        textual_client=parsed.textual_client,
+        init_path=Path(raw_init_path).expanduser().resolve(),
+    )
+
+
+def _build_textual_client_command(args: CliArgs) -> str:
     command_parts = [sys.executable, "-m", "vibrant", "--textual-client"]
     if args.cwd:
-        command_parts.extend(["--cwd", args.cwd])
+        command_parts.extend(["--cwd", str(args.cwd)])
     if args.model:
         command_parts.extend(["--model", args.model])
     if args.debug:
@@ -122,7 +169,7 @@ def _build_textual_client_command(args: argparse.Namespace) -> str:
     return shlex.join(command_parts)
 
 
-def _serve_app(args: argparse.Namespace) -> None:
+def _serve_app(args: CliArgs) -> None:
     from textual_serve.server import Server
 
     server = Server(
@@ -135,12 +182,54 @@ def _serve_app(args: argparse.Namespace) -> None:
     server.serve(debug=args.debug)
 
 
+def _resolve_provider_binary(config: VibrantConfig) -> str:
+    """Return the executable path stored in app settings after validation."""
+
+    if config.mock_responses:
+        return config.codex_binary
+    if config.provider_kind is ProviderKind.CODEX:
+        resolved_provider_binary = _check_binary(config.codex_binary)
+        if not resolved_provider_binary:
+            print(
+                f"❌ Error: '{config.codex_binary}' CLI not found in PATH.\n"
+                "Install it: npm install -g @openai/codex\n"
+                "Then run: codex auth",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        return resolved_provider_binary
+    if config.claude_cli_path:
+        resolved_provider_binary = _check_binary(config.claude_cli_path)
+        if not resolved_provider_binary:
+            print(
+                f"❌ Error: Claude CLI '{config.claude_cli_path}' was configured but could not be found.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    return config.codex_binary
+
+
+def _configure_logging(debug: bool) -> None:
+    """Configure process logging for the selected CLI mode."""
+
+    if debug:
+        log_dir = Path("~/.vibrant").expanduser()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            filename=str(log_dir / "debug.log"),
+            level=logging.DEBUG,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
+        logging.getLogger("markdown_it").setLevel(logging.INFO)
+        return
+    logging.basicConfig(level=logging.WARNING)
+
+
 def main(argv: Sequence[str] | None = None) -> None:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = _parse_args(argv)
 
     if args.command == "init":
-        vibrant_dir = initialize_project(args.path)
+        vibrant_dir = initialize_project(args.init_path)
         print(f"Initialized Vibrant project in {vibrant_dir}")
         return
 
@@ -151,59 +240,24 @@ def main(argv: Sequence[str] | None = None) -> None:
         _serve_app(args)
         return
 
-    start_path = args.cwd or os.getcwd()
+    start_path = args.cwd or Path.cwd()
     project_root = find_project_root(start_path)
     config = load_config(start_path=start_path)
-    mock_responses_enabled = config.mock_responses
-    provider_binary = config.codex_binary
-    resolved_provider_binary = None
-    if mock_responses_enabled:
-        resolved_provider_binary = None
-    elif config.provider_kind is ProviderKind.CODEX:
-        resolved_provider_binary = _check_binary(config.codex_binary)
-        if not resolved_provider_binary:
-            print(
-                f"❌ Error: '{config.codex_binary}' CLI not found in PATH.\n"
-                "Install it: npm install -g @openai/codex\n"
-                "Then run: codex auth",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        provider_binary = resolved_provider_binary
-    elif config.claude_cli_path:
-        resolved_provider_binary = _check_binary(config.claude_cli_path)
-        if not resolved_provider_binary:
-            print(
-                f"❌ Error: Claude CLI '{config.claude_cli_path}' was configured but could not be found.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    if args.debug:
-        import pathlib
-
-        log_dir = pathlib.Path("~/.vibrant").expanduser()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        logging.basicConfig(
-            filename=str(log_dir / "debug.log"),
-            level=logging.DEBUG,
-            format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        )
-        logging.getLogger("markdown_it").setLevel(logging.INFO)
-    else:
-        logging.basicConfig(level=logging.WARNING)
+    provider_binary = _resolve_provider_binary(config)
+    _configure_logging(args.debug)
 
     from .models.settings import AppSettings
     from .tui.app import VibrantApp
 
+    default_cwd = str(args.cwd) if args.cwd is not None else None
     settings = AppSettings(
         default_model=args.model or config.model,
-        default_cwd=args.cwd,
+        default_cwd=default_cwd,
         codex_binary=provider_binary,
         history_dir=str(config.resolve_conversation_directory(project_root)),
     )
 
-    app = VibrantApp(settings=settings, cwd=args.cwd)
+    app = VibrantApp(settings=settings, cwd=default_cwd)
     app.run()
 
 

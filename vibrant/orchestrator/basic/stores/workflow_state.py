@@ -21,7 +21,7 @@ _UNSET = object()
 class WorkflowStateStore:
     """Persist non-derivable workflow session state in ``.vibrant/state.json``."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
 
     def load(self) -> WorkflowState:

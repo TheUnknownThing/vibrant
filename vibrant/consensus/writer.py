@@ -56,7 +56,7 @@ class ConsensusWriter:
 
     def write(
         self,
-        path: str | Path,
+        path: Path,
         document: ConsensusDocument | ConsensusPool,
         *,
         lock_timeout: float = 5.0,

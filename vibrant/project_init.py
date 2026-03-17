@@ -33,13 +33,10 @@ DIRECTORIES = [
 ]
 
 
-def initialize_project(target_path: str | Path = ".") -> Path:
+def initialize_project(target_path: Path = Path(".")) -> Path:
     """Create the ``.vibrant`` project structure if it does not already exist."""
 
-    project_root = Path(target_path).expanduser().resolve()
-    if project_root.name == DEFAULT_CONFIG_DIR:
-        project_root = project_root.parent
-
+    project_root = _normalize_project_root(target_path)
     vibrant_dir = project_root / DEFAULT_CONFIG_DIR
     vibrant_dir.mkdir(parents=True, exist_ok=True)
 
@@ -55,18 +52,24 @@ def initialize_project(target_path: str | Path = ".") -> Path:
     return vibrant_dir
 
 
-def ensure_project_files(target_path: str | Path = ".") -> Path | None:
+def ensure_project_files(target_path: Path = Path(".")) -> Path | None:
     """Backfill missing files for an already-initialized ``.vibrant`` directory."""
 
-    project_root = Path(target_path).expanduser().resolve()
-    if project_root.name == DEFAULT_CONFIG_DIR:
-        project_root = project_root.parent
-
+    project_root = _normalize_project_root(target_path)
     vibrant_dir = project_root / DEFAULT_CONFIG_DIR
     if not vibrant_dir.exists():
         return None
 
     return initialize_project(project_root)
+
+
+def _normalize_project_root(target_path: Path) -> Path:
+    """Normalize a project path, accepting either the repo root or ``.vibrant``."""
+
+    project_root = target_path.expanduser().resolve()
+    if project_root.name == DEFAULT_CONFIG_DIR:
+        return project_root.parent
+    return project_root
 
 
 def _write_if_missing(path: Path, content: str) -> None:

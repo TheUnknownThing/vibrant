@@ -19,7 +19,7 @@ class JsonMappingRepository(Generic[RecordT]):
 
     def __init__(
         self,
-        path: str | Path,
+        path: Path,
         *,
         parse_record: Callable[[str, object], RecordT | None],
         serialize_record: Callable[[RecordT], object],
@@ -78,7 +78,7 @@ class JsonDataclassMappingRepository(JsonMappingRepository[RecordT]):
 
     def __init__(
         self,
-        path: str | Path,
+        path: Path,
         *,
         record_type: type[RecordT],
         key_for: Callable[[RecordT], str],
@@ -111,7 +111,7 @@ class JsonDirectoryRepository(Generic[RecordT]):
 
     def __init__(
         self,
-        path: str | Path,
+        path: Path,
         *,
         parse_text: Callable[[str], RecordT],
         serialize_record: Callable[[RecordT], str],

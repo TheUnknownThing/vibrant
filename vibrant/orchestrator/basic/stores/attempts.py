@@ -23,7 +23,7 @@ ACTIVE_ATTEMPT_STATUSES = {
 class AttemptStore:
     """Persist attempt-centric execution state in ``.vibrant/attempts.json``."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._repository = JsonDataclassMappingRepository(
             self.path,

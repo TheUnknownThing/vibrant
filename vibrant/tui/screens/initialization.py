@@ -64,7 +64,7 @@ class DirectorySelectionScreen(ModalScreen[Path | None]):
         Binding("enter", "submit", "Initialize", show=False),
     ]
 
-    def __init__(self, initial_path: str | Path) -> None:
+    def __init__(self, initial_path: Path) -> None:
         super().__init__(id="directory-selection-screen")
         self._initial_path = Path(initial_path).expanduser().resolve()
 
@@ -173,7 +173,7 @@ class GitInitializationScreen(ModalScreen[bool]):
         Binding("enter", "confirm", "Initialize Git", show=False),
     ]
 
-    def __init__(self, target_path: str | Path) -> None:
+    def __init__(self, target_path: Path) -> None:
         super().__init__(id="git-initialization-screen")
         self._target_path = Path(target_path).expanduser().resolve()
 
@@ -289,7 +289,7 @@ class InitializationScreen(ModalScreen[None]):
   ╚═══╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   
 """
 
-    def __init__(self, current_directory: str | Path) -> None:
+    def __init__(self, current_directory: Path) -> None:
         super().__init__(id="initialization-screen")
         self._current_directory = Path(current_directory).expanduser().resolve()
         self._pending_initialization_path: Path | None = None

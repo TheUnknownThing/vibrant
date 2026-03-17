@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import enum
-import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -194,54 +193,44 @@ class VibrantConfig(BaseModel):
                 merged[key] = value
         return merged
 
-    def resolve_conversation_directory(self, project_root: str | Path) -> Path:
+    def resolve_conversation_directory(self, project_root: Path) -> Path:
         """Resolve the configured conversation directory against the project root."""
 
         return resolve_project_path(self.conversation_directory, project_root=project_root)
 
 
-def find_project_root(start_path: str | Path | None = None) -> Path:
+def _resolve_start_directory(start_path: Path | None) -> Path:
+    """Return the normalized directory used for project-root discovery."""
+
+    start = (start_path or Path.cwd()).expanduser().resolve()
+    if start.exists() and start.is_file():
+        return start.parent
+    return start
+
+
+def find_project_root(start_path: Path | None = None) -> Path:
     """Best-effort project-root discovery.
 
     Walk upward from ``start_path`` until a directory containing `.vibrant` is found.
     """
-    
-    import os
-    start = Path(start_path or os.getcwd()).expanduser().resolve()
+
+    start = _resolve_start_directory(start_path)
     for parent in [start] + list(start.parents):
         if (parent / DEFAULT_CONFIG_DIR).is_dir():
             return parent
     return start
 
 
-def resolve_config_path(path: str | Path | None = None, start_path: str | Path | None = None) -> Path:
-    """Resolve the config file path.
+def resolve_config_path(start_path: Path | None = None) -> Path:
+    """Return the canonical ``vibrant.toml`` path for the discovered project root."""
 
-    - ``None`` → ``<project-root>/.vibrant/vibrant.toml``
-    - ``/path/to/file.toml`` → that exact file
-    - ``/path/to/project`` → ``/path/to/project/.vibrant/vibrant.toml``
-    - ``/path/to/project/.vibrant`` → ``/path/to/project/.vibrant/vibrant.toml``
-    """
-
-    if path is None:
-        return find_project_root(start_path) / DEFAULT_CONFIG_RELATIVE_PATH
-
-    base_dir = find_project_root(start_path)
-    candidate = Path(path).expanduser()
-    if not candidate.is_absolute():
-        candidate = base_dir / candidate
-
-    if candidate.suffix == ".toml":
-        return candidate.resolve()
-    if candidate.name == DEFAULT_CONFIG_DIR:
-        return (candidate / DEFAULT_CONFIG_FILE).resolve()
-    return (candidate / DEFAULT_CONFIG_RELATIVE_PATH).resolve()
+    return find_project_root(start_path) / DEFAULT_CONFIG_RELATIVE_PATH
 
 
-def resolve_project_path(path: str | Path, *, project_root: str | Path) -> Path:
+def resolve_project_path(path: str | Path, *, project_root: Path) -> Path:
     """Resolve a project-relative path against ``project_root``."""
 
-    root = Path(project_root).expanduser().resolve()
+    root = project_root.expanduser().resolve()
     candidate = Path(path).expanduser()
     if not candidate.is_absolute():
         candidate = root / candidate
@@ -257,9 +246,7 @@ def _read_toml(config_path: Path) -> dict[str, Any]:
 
 
 def load_config(
-    path: str | Path | None = None,
-    *,
-    start_path: str | Path | None = None,
+    start_path: Path | None = None,
     overrides: Mapping[str, Any] | None = None,
 ) -> VibrantConfig:
     """Load ``vibrant.toml`` and return validated configuration.
@@ -267,7 +254,7 @@ def load_config(
     If the file is missing, return a config object with defaults applied.
     """
 
-    config_path = resolve_config_path(path=path, start_path=start_path)
+    config_path = resolve_config_path(start_path=start_path)
     raw_data: dict[str, Any] = {}
 
     if config_path.exists():

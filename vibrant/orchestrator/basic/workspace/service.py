@@ -28,10 +28,10 @@ class WorkspaceService:
     def __init__(
         self,
         *,
-        project_root: str | Path,
-        worktree_root: str | Path,
+        project_root: Path,
+        worktree_root: Path,
         workspace_store: WorkspaceStore,
-        artifacts_root: str | Path,
+        artifacts_root: Path,
     ) -> None:
         self.project_root = Path(project_root).expanduser().resolve()
         candidate_worktree_root = Path(worktree_root).expanduser()

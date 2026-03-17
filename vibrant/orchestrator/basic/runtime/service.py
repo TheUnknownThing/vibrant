@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -61,7 +62,7 @@ class AgentRuntimeService:
         *,
         agent_record: AgentRunRecord,
         prompt: str,
-        cwd: str | None = None,
+        cwd: Path | None = None,
         resume_thread_id: str | None = None,
         on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
         runtime: AgentRuntime | None = None,
@@ -99,7 +100,7 @@ class AgentRuntimeService:
         agent_record: AgentRunRecord,
         prompt: str,
         provider_thread: Any,
-        cwd: str | None = None,
+        cwd: Path | None = None,
         on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
         runtime: AgentRuntime | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,

@@ -13,7 +13,7 @@ from ..repository import JsonDirectoryRepository
 class AgentInstanceStore:
     """Persist one JSON document per stable instance under ``.vibrant/agent-instances/``."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._repository = JsonDirectoryRepository(
             self.path,

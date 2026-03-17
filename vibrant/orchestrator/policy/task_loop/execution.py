@@ -363,8 +363,7 @@ class ExecutionCoordinator:
             worktree=workspace,
             prompt=prompt,
             agent_id=instance.identity.agent_id,
-            role=instance.identity.role,
-            vibrant_dir=self.project_root / DEFAULT_CONFIG_DIR,
+            role=instance.identity.role
         )
 
     def _task_agent_provider_config(self) -> AgentInstanceProviderConfig:

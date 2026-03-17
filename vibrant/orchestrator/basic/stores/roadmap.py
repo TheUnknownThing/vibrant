@@ -16,7 +16,7 @@ _UNSET = object()
 class RoadmapStore:
     """Persist roadmap markdown plus task-definition sidecar metadata."""
 
-    def __init__(self, path: str | Path, *, project_name: str) -> None:
+    def __init__(self, path: Path, *, project_name: str) -> None:
         self.path = Path(path)
         self.project_name = project_name
         self.meta_path = self.path.with_name("roadmap.meta.json")

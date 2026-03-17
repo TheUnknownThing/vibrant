@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
-from argparse import Namespace
+from pathlib import Path
+import sys
+from types import ModuleType
 
 from vibrant import __main__
 
 
 class TestTextualServeCLI:
+    def test_parse_args_normalizes_paths(self, tmp_path: Path) -> None:
+        args = __main__._parse_args(["--cwd", str(tmp_path), "init", str(tmp_path / "demo")])
+
+        assert args.cwd == tmp_path.resolve()
+        assert args.command == "init"
+        assert args.init_path == (tmp_path / "demo").resolve()
+
     def test_build_textual_client_command_includes_forwarded_flags(self) -> None:
-        args = Namespace(cwd="/tmp/project", model="gpt-test", debug=True)
+        args = __main__.CliArgs(cwd=Path("/tmp/project"), model="gpt-test", debug=True)
 
         command = __main__._build_textual_client_command(args)
 
@@ -21,7 +30,7 @@ class TestTextualServeCLI:
     def test_serve_mode_invokes_server(self, monkeypatch) -> None:
         called: dict[str, object] = {}
 
-        def fake_serve_app(args: Namespace) -> None:
+        def fake_serve_app(args: __main__.CliArgs) -> None:
             called["args"] = args
 
         monkeypatch.setattr(__main__, "_serve_app", fake_serve_app)
@@ -29,7 +38,7 @@ class TestTextualServeCLI:
         __main__.main(["--serve", "--serve-host", "127.0.0.1", "--serve-port", "9001"])
 
         args = called["args"]
-        assert isinstance(args, Namespace)
+        assert isinstance(args, __main__.CliArgs)
         assert args.serve is True
         assert args.serve_host == "127.0.0.1"
         assert args.serve_port == 9001
@@ -55,10 +64,14 @@ class TestTextualServeCLI:
             def serve(self, *, debug: bool) -> None:
                 captured["debug"] = debug
 
-        monkeypatch.setattr("textual_serve.server.Server", FakeServer)
+        package = ModuleType("textual_serve")
+        module = ModuleType("textual_serve.server")
+        module.Server = FakeServer
+        monkeypatch.setitem(sys.modules, "textual_serve", package)
+        monkeypatch.setitem(sys.modules, "textual_serve.server", module)
 
-        args = Namespace(
-            cwd="/tmp/project",
+        args = __main__.CliArgs(
+            cwd=Path("/tmp/project"),
             model="gpt-test",
             debug=True,
             serve_host="0.0.0.0",

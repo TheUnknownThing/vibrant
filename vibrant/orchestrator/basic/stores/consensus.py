@@ -12,7 +12,7 @@ from vibrant.models.consensus import ConsensusDocument, ConsensusStatus, DEFAULT
 class ConsensusStore:
     """Persist the human-readable consensus document."""
 
-    def __init__(self, path: str | Path, *, project_name: str) -> None:
+    def __init__(self, path: Path, *, project_name: str) -> None:
         self.path = Path(path)
         self.project_name = project_name
         self.root = self.path.parent

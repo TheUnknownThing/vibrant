@@ -144,7 +144,7 @@ class VibrantApp(App):
         self.sub_title = _display_path(self._active_directory())
         self.orchestrator: Orchestrator | None = None
         self.orchestrator_facade: OrchestratorFacade | None = None
-        self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        self._project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
@@ -203,7 +203,7 @@ class VibrantApp(App):
 
         self._settings = result
         self._refresh_app_bar()
-        self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        self._project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
@@ -216,7 +216,7 @@ class VibrantApp(App):
         self._focus_primary_input()
         self._set_status("Settings updated")
 
-    async def initialize_project_at(self, target_path: str | Path) -> bool:
+    async def initialize_project_at(self, target_path: Path) -> bool:
         try:
             vibrant_dir = initialize_project(target_path)
         except Exception as exc:
@@ -725,7 +725,7 @@ class VibrantApp(App):
 
     def _initialize_project_setup(self) -> None:
         self._close_orchestrator_subscriptions()
-        project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._project_root = project_root
         vibrant_dir = project_root / DEFAULT_CONFIG_DIR
         if not vibrant_dir.exists():

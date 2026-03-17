@@ -18,7 +18,7 @@ _UNSET = _Unset()
 class WorkspaceStore:
     """Persist workspace metadata in ``.vibrant/workspaces.json``."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._repository = JsonDataclassMappingRepository(
             self.path,

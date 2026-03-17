@@ -12,7 +12,7 @@ from ...types import QuestionPriority, QuestionRecord, QuestionStatus, utc_now
 class QuestionStore:
     """Persist Gatekeeper user-decision requests in ``.vibrant/questions.json``."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._repository = JsonDataclassMappingRepository(
             self.path,

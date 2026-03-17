@@ -72,7 +72,7 @@ class Orchestrator:
     @classmethod
     def load(
         cls,
-        project_root: str | Path,
+        project_root: Path,
         *,
         gatekeeper: Gatekeeper | None = None,
         adapter_factory: ProviderAdapterFactory | None = None,
@@ -254,7 +254,7 @@ class Orchestrator:
 
 
 def create_orchestrator(
-    project_root: str | Path,
+    project_root: Path,
     *,
     gatekeeper: Gatekeeper | None = None,
     adapter_factory: ProviderAdapterFactory | None = None,
