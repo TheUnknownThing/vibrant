@@ -6,10 +6,9 @@ import inspect
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any
 from uuid import uuid4
 
-from vibrant.agents.runtime import AgentHandle, AgentRuntime, BaseAgentRuntime
+from vibrant.agents.runtime import AgentHandle, AgentRecordCallback, AgentRuntime, BaseAgentRuntime, ProviderThreadHandle
 from vibrant.models.agent import AgentRunRecord
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.invocation import ProviderInvocationPlan
@@ -64,7 +63,7 @@ class AgentRuntimeService:
         prompt: str,
         cwd: Path | None = None,
         resume_thread_id: str | None = None,
-        on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
+        on_record_updated: AgentRecordCallback | None = None,
         runtime: AgentRuntime | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
@@ -99,9 +98,9 @@ class AgentRuntimeService:
         *,
         agent_record: AgentRunRecord,
         prompt: str,
-        provider_thread: Any,
+        provider_thread: ProviderThreadHandle,
         cwd: Path | None = None,
-        on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
+        on_record_updated: AgentRecordCallback | None = None,
         runtime: AgentRuntime | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
@@ -245,7 +244,7 @@ class AgentRuntimeService:
             live_run.sequence += 1
             sequence = live_run.sequence
 
-        normalized: dict[str, Any] = dict(event)
+        normalized: CanonicalEvent = dict(event)
         normalized.setdefault("agent_id", agent_record.identity.agent_id)
         normalized.setdefault("run_id", agent_record.identity.run_id)
         normalized.setdefault("role", agent_record.identity.role)

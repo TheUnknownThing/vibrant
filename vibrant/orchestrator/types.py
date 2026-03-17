@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from vibrant.agents.runtime import InputRequest
 from vibrant.models.agent import AgentStatus, ProviderResumeHandle
-from vibrant.providers.base import CanonicalEvent
+from vibrant.providers.base import CanonicalEvent, ProviderAdapter
+from vibrant.type_defs import AsyncNone, JSONMapping, JSONObject
 
 if TYPE_CHECKING:
     from vibrant.providers.invocation import MCPAccessDescriptor
@@ -344,7 +345,7 @@ class AgentStreamEvent:
         "conversation.runtime.error",
     ]
     text: str | None
-    payload: Mapping[str, Any] | None
+    payload: JSONMapping | None
     created_at: str
     task_id: str | None = None
 
@@ -355,7 +356,7 @@ class AgentConversationEntry:
     kind: Literal["message", "thinking", "tool_call", "status", "error"]
     turn_id: str | None
     text: str
-    payload: Mapping[str, Any] | None
+    payload: JSONMapping | None
     started_at: str | None
     finished_at: str | None
 
@@ -369,9 +370,9 @@ class AgentConversationView:
     updated_at: str | None
 
 
-AgentStreamCallback = Callable[[AgentStreamEvent], Any]
-CanonicalEventHandler = Callable[[CanonicalEvent], Any]
-ProviderAdapterFactory = Callable[..., Any]
+AgentStreamCallback = Callable[[AgentStreamEvent], AsyncNone]
+CanonicalEventHandler = Callable[[CanonicalEvent], AsyncNone]
+ProviderAdapterFactory = Callable[..., ProviderAdapter]
 
 
 class StreamSubscription(Protocol):
@@ -452,7 +453,7 @@ class AgentProgressItem:
 @dataclass(slots=True)
 class AgentOutputError:
     message: str
-    raw: dict[str, Any] | None = None
+    raw: JSONObject | None = None
     timestamp: datetime | None = None
 
 
@@ -557,7 +558,7 @@ class AgentRunOutcomeSnapshot:
 class AgentRunProviderSnapshot:
     thread_id: str | None = None
     thread_path: str | None = None
-    resume_cursor: dict[str, Any] | None = None
+    resume_cursor: JSONObject | None = None
     native_event_log: str | None = None
     canonical_event_log: str | None = None
 
@@ -580,7 +581,7 @@ class TaskResult:
     worktree_path: str | None = None
 
 
-def dataclass_dict(value: Any) -> Any:
+def dataclass_dict(value: object) -> object:
     """Convert nested dataclass values into plain Python structures."""
 
     if hasattr(value, "__dataclass_fields__"):

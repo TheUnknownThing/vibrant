@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, get_type_hints
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import AuthorizationError
@@ -46,12 +46,31 @@ _WILDCARD_HOSTS = {"0.0.0.0", "::"}
 def _copy_callable_metadata(wrapper: Callable[..., Any], original: Callable[..., Any]) -> None:
     """Preserve signature metadata so FastMCP derives the right schemas."""
 
+    annotations = _resolved_annotations(original)
+    signature = inspect.signature(original)
     wrapper.__name__ = original.__name__
     wrapper.__qualname__ = original.__qualname__
     wrapper.__module__ = original.__module__
     wrapper.__doc__ = original.__doc__
-    wrapper.__annotations__ = dict(getattr(original, "__annotations__", {}))
-    wrapper.__signature__ = inspect.signature(original)
+    wrapper.__annotations__ = annotations
+    wrapper.__signature__ = signature.replace(
+        parameters=[
+            parameter.replace(annotation=annotations.get(parameter.name, parameter.annotation))
+            for parameter in signature.parameters.values()
+        ],
+        return_annotation=annotations.get("return", signature.return_annotation),
+    )
+
+
+def _resolved_annotations(original: Callable[..., Any]) -> dict[str, Any]:
+    """Resolve postponed annotations before FastMCP asks Pydantic for schemas."""
+
+    annotations = dict(getattr(original, "__annotations__", {}))
+    try:
+        annotations.update(get_type_hints(original, include_extras=True))
+    except Exception:
+        return annotations
+    return annotations
 
 
 def _require_binding(binding_registry: MCPBindingRegistry) -> RegisteredMCPBinding:

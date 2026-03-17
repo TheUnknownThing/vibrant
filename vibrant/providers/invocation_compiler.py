@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import re
-from typing import Any
+
+from vibrant.agents.runtime import AgentHandle, AgentRecordCallback, AgentRuntime, ProviderThreadHandle
+from vibrant.models.agent import AgentRecord
+from vibrant.type_defs import JSONMapping, JSONObject, JSONValue, is_json_mapping
 
 from .base import ProviderKind
 from .invocation import MCPAccessDescriptor, ProviderInvocationPlan
@@ -13,7 +16,7 @@ from .registry import normalize_provider_kind
 
 def compile_provider_invocation(
     provider_kind: ProviderKind | str | None,
-    access: MCPAccessDescriptor | Mapping[str, Any] | None = None,
+    access: MCPAccessDescriptor | JSONMapping | None = None,
 ) -> ProviderInvocationPlan:
     """Compile provider-neutral MCP access into provider-native invocation data."""
 
@@ -40,20 +43,20 @@ def compile_provider_invocation(
 class InvocationPlanRuntime:
     """Runtime wrapper that injects a fixed invocation plan into start/resume calls."""
 
-    def __init__(self, runtime: Any, invocation_plan: ProviderInvocationPlan | None) -> None:
+    def __init__(self, runtime: AgentRuntime, invocation_plan: ProviderInvocationPlan | None) -> None:
         self._runtime = runtime
         self.invocation_plan = invocation_plan
 
     async def start(
         self,
         *,
-        agent_record: Any,
+        agent_record: AgentRecord,
         prompt: str,
         cwd: str | None = None,
         resume_thread_id: str | None = None,
-        on_record_updated: Any = None,
+        on_record_updated: AgentRecordCallback | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
-    ) -> Any:
+    ) -> AgentHandle:
         return await self._runtime.start(
             agent_record=agent_record,
             prompt=prompt,
@@ -66,13 +69,13 @@ class InvocationPlanRuntime:
     async def resume_run(
         self,
         *,
-        agent_record: Any,
+        agent_record: AgentRecord,
         prompt: str,
-        provider_thread: Any,
+        provider_thread: ProviderThreadHandle,
         cwd: str | None = None,
-        on_record_updated: Any = None,
+        on_record_updated: AgentRecordCallback | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
-    ) -> Any:
+    ) -> AgentHandle:
         return await self._runtime.resume_run(
             agent_record=agent_record,
             prompt=prompt,
@@ -82,7 +85,7 @@ class InvocationPlanRuntime:
             invocation_plan=invocation_plan or self.invocation_plan,
         )
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         return getattr(self._runtime, name)
 
 
@@ -132,7 +135,7 @@ def _compile_codex_invocation(access: MCPAccessDescriptor) -> ProviderInvocation
     )
 
 
-def _coerce_descriptor(access: MCPAccessDescriptor | Mapping[str, Any] | None) -> MCPAccessDescriptor | None:
+def _coerce_descriptor(access: MCPAccessDescriptor | JSONMapping | None) -> MCPAccessDescriptor | None:
     if access is None:
         return None
     if isinstance(access, MCPAccessDescriptor):
@@ -142,10 +145,11 @@ def _coerce_descriptor(access: MCPAccessDescriptor | Mapping[str, Any] | None) -
         payload["run_id"] = payload.pop("session_id")
     else:
         payload.pop("session_id", None)
+    assert is_json_mapping(payload), "MCP access payload must be JSON-compatible"
     return MCPAccessDescriptor(**payload)
 
 
-def _toml_literal(value: Any) -> str:
+def _toml_literal(value: JSONValue) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from vibrant.agents.gatekeeper import Gatekeeper
 from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
@@ -77,7 +76,7 @@ class Orchestrator:
         gatekeeper: Gatekeeper | None = None,
         adapter_factory: ProviderAdapterFactory | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
-        **_: Any,
+        **_: object,
     ) -> "Orchestrator":
         root = find_project_root(project_root)
         ensure_project_files(root)
@@ -259,7 +258,7 @@ def create_orchestrator(
     gatekeeper: Gatekeeper | None = None,
     adapter_factory: ProviderAdapterFactory | None = None,
     on_canonical_event: CanonicalEventHandler | None = None,
-    **kwargs: Any,
+    **kwargs: object,
 ) -> Orchestrator:
     """Build a fully wired orchestrator for one project."""
 

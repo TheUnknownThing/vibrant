@@ -6,7 +6,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TypeVar
+
+T = TypeVar("T")
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -123,8 +125,8 @@ class TaskStatusView(Static):
     }
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, **widget_kwargs: object) -> None:
+        super().__init__(**widget_kwargs)
         self._facade: object | None = None
         self._is_loading = True
         self._empty_message = "Task status will appear here once the roadmap is ready."
@@ -962,7 +964,7 @@ def _agent_output_thinking_status(output: object | None) -> str:
     return _nested_attr(output, ("thinking", "status")) or "idle"
 
 
-def _nested_attr(instance: object | None, path: tuple[str, ...], default: Any = None) -> Any:
+def _nested_attr(instance: object | None, path: tuple[str, ...], default: T | None = None) -> object | T | None:
     current = instance
     for part in path:
         if current is None:

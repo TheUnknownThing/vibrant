@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Center, Horizontal, Vertical
@@ -107,8 +108,8 @@ class ConsensusView(Static):
     }
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, **widget_kwargs: object) -> None:
+        super().__init__(**widget_kwargs)
         self._document: ConsensusDocument | None = None
         self._is_editing = False
 

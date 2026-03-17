@@ -8,7 +8,9 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
+
+from vibrant.type_defs import JSONValue
 
 
 READ_SCOPE = "orchestrator.read"
@@ -48,7 +50,7 @@ class MCPResourceDefinition:
     name: str
     description: str
     required_scopes: tuple[str, ...]
-    handler: Any
+    handler: object
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +58,7 @@ class MCPToolDefinition:
     name: str
     description: str
     required_scopes: tuple[str, ...]
-    handler: Any
+    handler: object
 
 
 class BackendProtocol(Protocol):
@@ -74,7 +76,7 @@ def require_scopes(principal: MCPPrincipal | None, *required_scopes: str) -> Non
     raise MCPAuthorizationError(f"Missing MCP scopes: {missing}")
 
 
-def resolve_attr(target: Any, dotted_name: str) -> Any | None:
+def resolve_attr(target: object, dotted_name: str) -> object | None:
     """Resolve a dotted attribute path without throwing on missing values."""
 
     current = target
@@ -85,7 +87,7 @@ def resolve_attr(target: Any, dotted_name: str) -> Any | None:
     return current
 
 
-def call_backend(target: Any, names: Sequence[str], /, *args: Any, **kwargs: Any) -> Any:
+def call_backend(target: object, names: Sequence[str], /, *args: object, **kwargs: object) -> object:
     """Call the first matching backend method from a candidate name list."""
 
     for name in names:
@@ -96,13 +98,13 @@ def call_backend(target: Any, names: Sequence[str], /, *args: Any, **kwargs: Any
     raise MCPError(f"Backend does not implement any of: {joined}")
 
 
-def has_backend(target: Any, *names: str) -> bool:
+def has_backend(target: object, *names: str) -> bool:
     """Return whether any candidate backend hook exists."""
 
     return any(callable(resolve_attr(target, name)) for name in names)
 
 
-def serialize_value(value: Any) -> Any:
+def serialize_value(value: object) -> JSONValue:
     """Convert dataclasses, enums, paths, and model-like objects to plain values."""
 
     if hasattr(value, "model_dump"):

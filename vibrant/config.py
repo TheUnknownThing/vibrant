@@ -6,11 +6,11 @@ import enum
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
 from .providers.base import ProviderKind
+from .type_defs import JSONMapping, JSONObject, JSONValue, is_json_object
 
 
 DEFAULT_CONFIG_DIR = ".vibrant"
@@ -172,7 +172,7 @@ class VibrantConfig(BaseModel):
         validation_alias=AliasChoices("test_commands", "test-commands"),
         serialization_alias="test-commands",
     )
-    extra_config: dict[str, Any] = Field(
+    extra_config: dict[str, JsonValue] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("extra_config", "extra-config"),
         serialization_alias="extra-config",
@@ -180,16 +180,21 @@ class VibrantConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def flatten_sections(cls, data: Any) -> Any:
+    def flatten_sections(cls, data: object) -> object:
         """Allow config to be grouped into simple TOML sections."""
         if not isinstance(data, Mapping):
             return data
 
-        merged: dict[str, Any] = {}
+        merged: JSONObject = {}
         for key, value in data.items():
+            assert isinstance(key, str), "Config section keys must be strings"
             if key in {"provider", "runtime", "orchestrator", "validation"} and isinstance(value, Mapping):
+                if not is_json_object(value):
+                    raise TypeError(f"Config section {key!r} must contain TOML-compatible key/value pairs")
                 merged.update(value)
             else:
+                if not isinstance(value, (str, int, float, bool, list, dict)) and value is not None:
+                    raise TypeError(f"Unsupported config value type for key {key!r}: {type(value)!r}")
                 merged[key] = value
         return merged
 
@@ -237,17 +242,20 @@ def resolve_project_path(path: str | Path, *, project_root: Path) -> Path:
     return candidate.resolve()
 
 
-def _read_toml(config_path: Path) -> dict[str, Any]:
+def _read_toml(config_path: Path) -> JSONObject:
     try:
         with config_path.open("rb") as handle:
-            return tomllib.load(handle)
+            payload = tomllib.load(handle)
+            if not is_json_object(payload):
+                raise VibrantConfigError(f"Invalid TOML structure in {config_path}: expected a table at the top level")
+            return payload
     except tomllib.TOMLDecodeError as exc:
         raise VibrantConfigError(f"Invalid TOML in {config_path}: {exc}") from exc
 
 
 def load_config(
     start_path: Path | None = None,
-    overrides: Mapping[str, Any] | None = None,
+    overrides: JSONMapping | None = None,
 ) -> VibrantConfig:
     """Load ``vibrant.toml`` and return validated configuration.
 
@@ -255,7 +263,7 @@ def load_config(
     """
 
     config_path = resolve_config_path(start_path=start_path)
-    raw_data: dict[str, Any] = {}
+    raw_data: JSONObject = {}
 
     if config_path.exists():
         raw_data = _read_toml(config_path)

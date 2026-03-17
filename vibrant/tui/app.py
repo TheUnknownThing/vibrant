@@ -7,7 +7,7 @@ from contextlib import suppress
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
 
 from rich.markup import escape
 from textual import events
@@ -17,7 +17,14 @@ from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary, QuestionStatus, QuestionView, RuntimeExecutionResult
+from vibrant.orchestrator.types import (
+    AgentStreamEvent,
+    ConversationSummary,
+    QuestionStatus,
+    QuestionView,
+    RuntimeExecutionResult,
+    StreamSubscription,
+)
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
@@ -153,9 +160,9 @@ class VibrantApp(App):
         cwd: str | None = None,
         *,
         orchestrator_factory: OrchestratorFactory | None = None,
-        **kwargs: Any,
+        **app_kwargs: object,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(**app_kwargs)
         self._settings = settings or AppSettings()
         if cwd:
             self._settings.default_cwd = cwd
@@ -167,7 +174,7 @@ class VibrantApp(App):
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
-        self._agent_output_conversation_subscriptions: dict[str, Any] = {}
+        self._agent_output_conversation_subscriptions: dict[str, StreamSubscription] = {}
         self._agent_output_loaded_conversation_ids: set[str] = set()
         self._gatekeeper_conversation_id: str | None = None
         self._workspace_screen: WorkspaceScreen | None = None
@@ -1043,7 +1050,7 @@ class VibrantApp(App):
             return {}
         return self.orchestrator_facade.get_task_summaries()
 
-    def _task_id_for_runtime_event(self, event: dict[str, Any]) -> str | None:
+    def _task_id_for_runtime_event(self, event: CanonicalEvent) -> str | None:
         task_id = event.get("task_id")
         if isinstance(task_id, str) and task_id.strip():
             return task_id.strip()
@@ -1415,7 +1422,7 @@ def _display_path(path: Path) -> str:
     return path.as_posix()
 
 
-def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
+def _is_gatekeeper_event(event: CanonicalEvent) -> bool:
     role = event.get("role")
     if isinstance(role, str) and role == "gatekeeper":
         return True
@@ -1426,7 +1433,7 @@ def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
     return isinstance(agent_id, str) and agent_id == "gatekeeper"
 
 
-def _event_subject(event: dict[str, Any]) -> str:
+def _event_subject(event: CanonicalEvent) -> str:
     task_id = event.get("task_id")
     if isinstance(task_id, str) and task_id.strip():
         return task_id.strip()

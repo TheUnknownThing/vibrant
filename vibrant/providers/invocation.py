@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 from .base import ProviderKind
+from vibrant.type_defs import JSONObject
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +24,9 @@ class MCPAccessDescriptor:
     transport_hint: Literal["http", "stdio"] | None = None
     required: bool = True
     static_headers: dict[str, str] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: JSONObject = field(default_factory=dict)
 
-    def to_mapping(self) -> dict[str, Any]:
+    def to_mapping(self) -> JSONObject:
         """Return a plain, serializable representation for persistence/debugging."""
 
         return {
@@ -51,8 +52,8 @@ class ProviderInvocationPlan:
     provider_kind: ProviderKind | None = None
     launch_env: dict[str, str] = field(default_factory=dict)
     launch_args: list[str] = field(default_factory=list)
-    session_options: dict[str, Any] = field(default_factory=dict)
+    session_options: JSONObject = field(default_factory=dict)
     binding_id: str | None = None
     visible_tools: list[str] = field(default_factory=list)
     visible_resources: list[str] = field(default_factory=list)
-    debug_metadata: dict[str, Any] = field(default_factory=dict)
+    debug_metadata: JSONObject = field(default_factory=dict)

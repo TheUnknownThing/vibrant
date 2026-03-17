@@ -16,14 +16,15 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
 from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
-from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.providers.base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 from vibrant.providers.registry import provider_transport, resolve_configured_adapter_factory
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
+from vibrant.type_defs import AsyncNone, JSONValue
 
 from .base import ReadOnlyAgentBase
 from .runtime import AgentHandle, BaseAgentRuntime, NormalizedRunResult
@@ -87,9 +88,9 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         project_root: Path,
         config: VibrantConfig,
         *,
-        adapter_factory: Any,
-        on_canonical_event: Callable[[CanonicalEvent], Any] | None = None,
-        on_agent_record_updated: Callable[[AgentRunRecord], Any] | None = None,
+        adapter_factory: Callable[..., ProviderAdapter],
+        on_canonical_event: CanonicalEventHandler | None = None,
+        on_agent_record_updated: Callable[[AgentRunRecord], None] | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
         super().__init__(
@@ -110,7 +111,7 @@ class GatekeeperAgent(ReadOnlyAgentBase):
     def should_auto_reject_requests(self) -> bool:
         return False
 
-    def get_thread_kwargs(self) -> dict[str, Any]:
+    def get_thread_kwargs(self) -> dict[str, JSONValue]:
         kwargs = super().get_thread_kwargs()
         kwargs["persist_extended_history"] = True
         return kwargs
@@ -184,8 +185,8 @@ class Gatekeeper:
         project_root: Path,
         *,
         config: VibrantConfig | None = None,
-        adapter_factory: Any | None = None,
-        on_canonical_event: Callable[[CanonicalEvent], Any] | None = None,
+        adapter_factory: Callable[..., ProviderAdapter] | None = None,
+        on_canonical_event: CanonicalEventHandler | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
         self.project_root = find_project_root(project_root)
@@ -235,8 +236,8 @@ class Gatekeeper:
         request: GatekeeperRequest,
         *,
         resume_latest_thread: bool | None = None,
-        on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
-        on_result: Callable[[GatekeeperRunResult], Any] | None = None,
+        on_record_updated: Callable[[AgentRunRecord], None] | None = None,
+        on_result: Callable[[GatekeeperRunResult], AsyncNone] | None = None,
     ) -> GatekeeperRunHandle:
         prompt = self.render_prompt(request)
         agent_record = self.build_run_record(request)
@@ -282,8 +283,8 @@ class Gatekeeper:
         question: str,
         answer: str,
         *,
-        on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
-        on_result: Callable[[GatekeeperRunResult], Any] | None = None,
+        on_record_updated: Callable[[AgentRunRecord], None] | None = None,
+        on_result: Callable[[GatekeeperRunResult], AsyncNone] | None = None,
     ) -> GatekeeperRunHandle:
         request = GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
@@ -300,7 +301,7 @@ class Gatekeeper:
     async def _forward_result(
         self,
         handle: GatekeeperRunHandle,
-        callback: Callable[[GatekeeperRunResult], Any],
+        callback: Callable[[GatekeeperRunResult], AsyncNone],
     ) -> None:
         result = await handle.wait()
         callback_result = callback(result)

@@ -9,11 +9,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from vibrant.models.agent import AgentRecord
-from vibrant.providers.base import CanonicalEvent, ProviderAdapter, RuntimeMode
+from vibrant.providers.base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
+from vibrant.type_defs import JSONMapping, JSONObject, JSONValue, RequestId, is_json_mapping
 
 _MARKER_PATTERN = re.compile(r"\[mock:([a-z_, -]+)\]", re.IGNORECASE)
 
@@ -29,20 +29,28 @@ class _MockScenario:
 class MockCodexAdapter(ProviderAdapter):
     """Minimal Codex-like adapter that emits canonical events directly."""
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(kwargs.get("on_canonical_event"))
-        self.cwd = Path(kwargs.get("cwd") or ".").expanduser().resolve()
-        self.agent_record = _coerce_agent_record(kwargs.get("agent_record"))
-        self.provider_thread_id = _coerce_optional_str(kwargs.get("resume_thread_id"))
+    def __init__(
+        self,
+        *,
+        cwd: str | None = None,
+        agent_record: AgentRecord | None = None,
+        resume_thread_id: str | None = None,
+        on_canonical_event: CanonicalEventHandler | None = None,
+        **_ignored: object,
+    ) -> None:
+        super().__init__(on_canonical_event)
+        self.cwd = Path(cwd or ".").expanduser().resolve()
+        self.agent_record = agent_record
+        self.provider_thread_id = resume_thread_id
         self.thread_path: str | None = None
-        self._resolved_request_payload: Any | None = None
+        self._resolved_request_payload: JSONValue | None = None
         self._request_resolved = asyncio.Event()
         self._turn_task: asyncio.Task[None] | None = None
         self._active_turn_id: str | None = None
         process = type("MockProcess", (), {"pid": 4512, "returncode": None})()
         self.client = type("MockClient", (), {"is_running": True, "_process": process})()
 
-    async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+    async def start_session(self, *, cwd: str | None = None, **kwargs: JSONValue) -> JSONObject:
         if cwd is not None:
             self.cwd = Path(cwd).expanduser().resolve()
         await self._emit(
@@ -63,7 +71,7 @@ class MockCodexAdapter(ProviderAdapter):
         self.client.is_running = False
         await self._emit({"type": "session.state.changed", "state": "stopped"})
 
-    async def start_thread(self, **kwargs: Any) -> Any:
+    async def start_thread(self, **kwargs: JSONValue) -> JSONObject:
         self.provider_thread_id = f"mock-thread-{uuid4().hex[:8]}"
         self.thread_path = str(self.cwd / ".vibrant" / "mock" / f"{self.provider_thread_id}.jsonl")
         self._persist_thread_metadata()
@@ -79,7 +87,7 @@ class MockCodexAdapter(ProviderAdapter):
         )
         return {"thread": thread, **kwargs}
 
-    async def resume_thread(self, provider_thread_id: str, **kwargs: Any) -> Any:
+    async def resume_thread(self, provider_thread_id: str, **kwargs: JSONValue) -> JSONObject:
         self.provider_thread_id = provider_thread_id
         self.thread_path = str(self.cwd / ".vibrant" / "mock" / f"{provider_thread_id}.jsonl")
         self._persist_thread_metadata()
@@ -98,11 +106,11 @@ class MockCodexAdapter(ProviderAdapter):
     async def start_turn(
         self,
         *,
-        input_items: Sequence[Mapping[str, Any]],
+        input_items: Sequence[JSONMapping],
         runtime_mode: RuntimeMode,
         approval_policy: str,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: JSONValue,
+    ) -> JSONObject:
         prompt = _prompt_text(input_items)
         turn_id = f"mock-turn-{uuid4().hex[:8]}"
         scenario = _parse_scenario(prompt)
@@ -121,7 +129,7 @@ class MockCodexAdapter(ProviderAdapter):
         )
         return {"turn": {"id": turn_id, "status": "inProgress"}, **kwargs}
 
-    async def interrupt_turn(self, **kwargs: Any) -> Any:
+    async def interrupt_turn(self, **kwargs: JSONValue) -> JSONObject:
         if self._turn_task is not None and not self._turn_task.done():
             self._turn_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -140,18 +148,18 @@ class MockCodexAdapter(ProviderAdapter):
     async def send_request(
         self,
         method: str,
-        params: Mapping[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        params: JSONMapping | None = None,
+        **kwargs: JSONValue,
+    ) -> JSONObject:
         return {"method": method, "params": dict(params or {}), **kwargs}
 
     async def respond_to_request(
         self,
-        request_id: int | str,
+        request_id: RequestId,
         *,
-        result: Any | None = None,
-        error: Mapping[str, Any] | None = None,
-    ) -> Any:
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
+    ) -> JSONObject:
         self._resolved_request_payload = result if error is None else dict(error)
         self._request_resolved.set()
         return {"request_id": str(request_id), "result": result, "error": dict(error or {})}
@@ -315,7 +323,7 @@ class MockCodexAdapter(ProviderAdapter):
             }
         )
 
-    async def _emit(self, event: dict[str, Any]) -> None:
+    async def _emit(self, event: CanonicalEvent) -> None:
         event.setdefault("timestamp", _timestamp_now())
         event.setdefault("origin", "provider")
         event.setdefault("provider", "mock")
@@ -333,17 +341,17 @@ class MockCodexAdapter(ProviderAdapter):
         self.agent_record.provider.resume_cursor = {"threadId": self.provider_thread_id}
 
 
-def _coerce_agent_record(value: Any) -> AgentRecord | None:
+def _coerce_agent_record(value: object) -> AgentRecord | None:
     return value if isinstance(value, AgentRecord) else None
 
 
-def _coerce_optional_str(value: Any) -> str | None:
+def _coerce_optional_str(value: object) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
 
 
-def _prompt_text(input_items: Sequence[Mapping[str, Any]]) -> str:
+def _prompt_text(input_items: Sequence[JSONMapping]) -> str:
     chunks: list[str] = []
     for item in input_items:
         if item.get("type") == "text":
@@ -372,7 +380,7 @@ def _response_text(
     *,
     prompt: str,
     scenario: _MockScenario,
-    resolved_payload: Any | None,
+    resolved_payload: JSONValue | None,
     runtime_mode: RuntimeMode,
     approval_policy: str,
 ) -> str:
