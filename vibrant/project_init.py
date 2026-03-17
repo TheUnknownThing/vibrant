@@ -12,13 +12,7 @@ from .models.consensus import ConsensusDocument, ConsensusStatus
 from .models.state import OrchestratorState, OrchestratorStatus
 
 GITIGNORE_ENTRIES = [
-    "logs/",
-    "conversations/",
-    "agent-instances/*.json",
-    "agent-runs/*.json",
-    "review-diffs/",
-    "state.json",
-    "workspaces.json",
+    "*"
 ]
 
 DIRECTORIES = [
