@@ -8,6 +8,7 @@ from typing import Any
 
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus.roadmap import RoadmapDocument
+from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 
@@ -38,6 +39,7 @@ class OrchestratorSnapshot:
     roles: tuple[RoleSnapshot, ...]
     instances: tuple[AgentInstanceSnapshot, ...]
     runs: tuple[AgentRunSnapshot, ...]
+    agent_records: tuple[AgentRecord, ...]
     execution_mode: RoadmapExecutionMode | None
     user_input_banner: str
 
@@ -154,6 +156,7 @@ class OrchestratorFacade:
             roles=tuple(self.list_roles()),
             instances=tuple(self.list_instances()),
             runs=tuple(self.list_runs()),
+            agent_records=tuple(self._orchestrator._agent_run_store.list()),
             execution_mode=self.get_execution_mode(),
             user_input_banner=self.get_user_input_banner(),
         )
@@ -179,7 +182,7 @@ class OrchestratorFacade:
     def get_consensus_document(self) -> ConsensusDocument | None:
         return self._control_plane.get_consensus_document()
 
-    def get_roadmap(self) -> RoadmapDocument:
+    def get_roadmap(self) -> RoadmapDocument | None:
         return self._control_plane.get_roadmap()
 
     def get_consensus_source_path(self) -> Path | None:

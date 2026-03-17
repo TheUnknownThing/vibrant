@@ -84,7 +84,7 @@ class GatekeeperAgent(ReadOnlyAgentBase):
 
     def __init__(
         self,
-        project_root: str | Path,
+        project_root: Path,
         config: VibrantConfig,
         *,
         adapter_factory: Any,
@@ -181,7 +181,7 @@ class Gatekeeper:
 
     def __init__(
         self,
-        project_root: str | Path,
+        project_root: Path,
         *,
         config: VibrantConfig | None = None,
         adapter_factory: Any | None = None,
@@ -258,7 +258,7 @@ class Gatekeeper:
         handle = await self.runtime.start(
             agent_record=agent_record,
             prompt=prompt,
-            cwd=str(self.project_root),
+            cwd=self.project_root,
             resume_thread_id=resume_thread_id,
             on_record_updated=record_callback,
         )

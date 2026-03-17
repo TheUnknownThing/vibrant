@@ -117,7 +117,6 @@ class TaskStatusPreviewApp(App[None]):
         self.orchestrator_facade = self._facade
         screen = self.query_one(VibingScreen)
         screen.sync_task_views(self._tasks, facade=self._facade, agent_summaries=self._agent_summaries)
-        screen.set_roadmap_loading(False)
         screen.set_input_placeholder("Preview mode. Click a task in the left panel to inspect it.")
         screen.plan_tree.focus()
 

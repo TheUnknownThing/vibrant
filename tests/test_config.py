@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from vibrant.config import (
     DEFAULT_WORKTREE_DIRECTORY,
     RoadmapExecutionMode,
     VibrantConfigError,
+    find_project_root,
     load_config,
     resolve_config_path,
 )
@@ -149,11 +151,20 @@ class TestLoadConfig:
         with pytest.raises(VibrantConfigError, match=r"Invalid TOML in .*vibrant\.toml"):
             load_config(start_path=project_root)
 
-    def test_resolve_config_path_accepts_directory_inputs(self, tmp_path):
-        project_root = tmp_path / "project"
-        project_root.mkdir()
-        (project_root / ".git").mkdir()
 
-        assert resolve_config_path(start_path=project_root) == project_root / ".vibrant" / "vibrant.toml"
-        assert resolve_config_path(project_root, start_path=tmp_path) == project_root / ".vibrant" / "vibrant.toml"
-        assert resolve_config_path(project_root / ".vibrant", start_path=tmp_path) == project_root / ".vibrant" / "vibrant.toml"
+class TestConfigPathResolution:
+    def test_find_project_root_walks_up_from_nested_directory(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        nested_dir = project_root / "src" / "package"
+        (project_root / ".vibrant").mkdir(parents=True)
+        nested_dir.mkdir(parents=True)
+
+        assert find_project_root(nested_dir) == project_root
+
+    def test_resolve_config_path_uses_discovered_project_root(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        nested_dir = project_root / "src"
+        (project_root / ".vibrant").mkdir(parents=True)
+        nested_dir.mkdir(parents=True)
+
+        assert resolve_config_path(nested_dir) == project_root / ".vibrant" / "vibrant.toml"

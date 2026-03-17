@@ -55,7 +55,7 @@ class RoadmapParser:
         self.validate_dependency_graph(tasks)
         return tasks
 
-    def parse_file(self, path: str | Path) -> RoadmapDocument:
+    def parse_file(self, path: Path) -> RoadmapDocument:
         return self.parse(Path(path).read_text(encoding="utf-8"))
 
     def render(self, document: RoadmapDocument) -> str:
@@ -83,12 +83,12 @@ class RoadmapParser:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
-    def write(self, path: str | Path, document: RoadmapDocument) -> None:
+    def write(self, path: Path, document: RoadmapDocument) -> None:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_text(destination, self.render(document))
 
-    def update_task_status(self, path: str | Path, task_id: str, status: TaskStatus) -> RoadmapDocument:
+    def update_task_status(self, path: Path, task_id: str, status: TaskStatus) -> RoadmapDocument:
         document = self.parse_file(path)
         for task in document.tasks:
             if task.id == task_id:

@@ -103,6 +103,12 @@ class InterfaceControlPlane:
     def conversation(self, conversation_id: str):
         return self.backend.queries.conversation(conversation_id)
 
+    def list_conversation_summaries(self):
+        return self.backend.queries.list_conversation_summaries()
+
+    def conversation_frames(self, conversation_id: str):
+        return self.backend.queries.conversation_frames(conversation_id)
+
     def conversation_session(self, conversation_id: str):
         return self.backend.queries.conversation_session(conversation_id)
 

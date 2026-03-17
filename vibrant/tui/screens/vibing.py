@@ -4,18 +4,21 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static, TabbedContent, TabPane
 
 from ...models.task import TaskInfo
 from ...orchestrator.facade import OrchestratorFacade
-from ..widgets.agent_output import AgentOutput
+from ..widgets.agent_log import AgentOutput
 from ..widgets.chat_panel import ChatPanel
 from ..widgets.consensus_view import ConsensusView
 from ..widgets.input_bar import InputBar
 from ..widgets.plan_tree import PlanTree
 from ..widgets.task_status import TaskStatusView
+
+_MOBILE_BREAKPOINT = 110
 
 
 class VibingScreen(Static):
@@ -34,6 +37,27 @@ class VibingScreen(Static):
         width: 34;
         min-width: 24;
         margin-right: 1;
+    }
+
+    VibingScreen.-mobile #vibing-shell {
+        layout: vertical;
+    }
+
+    VibingScreen.-mobile #plan-panel {
+        width: 1fr;
+        min-width: 0;
+        height: 10;
+        margin-right: 0;
+        margin-bottom: 1;
+    }
+
+    VibingScreen.-mobile #workspace-tabs {
+        margin-top: 0;
+    }
+
+    VibingScreen.-mobile #workspace-tabs > ContentTabs,
+    VibingScreen.-mobile #workspace-tabs Tabs {
+        height: auto;
     }
 
     VibingScreen #vibing-main {
@@ -91,6 +115,7 @@ class VibingScreen(Static):
         self._initial_tab = initial_tab if initial_tab in self._VALID_TABS else "task-status"
         self._active_tab = self._initial_tab
         self._selected_task_id: str | None = None
+        self._is_mobile_layout: bool | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="vibing-shell"):
@@ -107,7 +132,7 @@ class VibingScreen(Static):
                                 markup=True,
                             )
                             yield ChatPanel(id="conversation-panel")
-                    with TabPane("Consensus File", id="consensus"):
+                    with TabPane("Consensus", id="consensus"):
                         yield ConsensusView(id="consensus-panel")
                     with TabPane("Agent Logs", id="agent-logs"):
                         yield AgentOutput(id="agent-output-panel")
@@ -115,7 +140,18 @@ class VibingScreen(Static):
 
     def on_mount(self) -> None:
         self.set_active_tab(self._initial_tab)
-        self.set_roadmap_loading(True)
+        self._apply_responsive_layout()
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._apply_responsive_layout()
+
+    def _apply_responsive_layout(self) -> None:
+        is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        if self._is_mobile_layout == is_mobile:
+            return
+        self._is_mobile_layout = is_mobile
+        self.set_class(is_mobile, "-mobile")
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         if event.control.id != "workspace-tabs":
@@ -123,6 +159,8 @@ class VibingScreen(Static):
         tab_id = event.pane.id or ""
         if tab_id in self._VALID_TABS:
             self._active_tab = tab_id
+            if tab_id == "agent-logs":
+                self._request_agent_output_history()
 
     @property
     def active_tab(self) -> str:
@@ -140,13 +178,13 @@ class VibingScreen(Static):
 
         self._active_tab = tab_id
         self.query_one("#workspace-tabs", TabbedContent).active = tab_id
+        if tab_id == "agent-logs":
+            self._request_agent_output_history()
 
-    def set_roadmap_loading(self, is_loading: bool) -> None:
-        self.query_one(TaskStatusView).set_generating_roadmap(is_loading)
-        chat_notice = self.query_one("#chat-roadmap-status", Static)
-        chat_panel = self.query_one(ChatPanel)
-        chat_notice.display = is_loading
-        chat_panel.display = not is_loading
+    def _request_agent_output_history(self) -> None:
+        ensure_agent_output_loaded = getattr(self.app, "ensure_agent_output_loaded", None)
+        if callable(ensure_agent_output_loaded):
+            self.call_after_refresh(ensure_agent_output_loaded)
 
     def sync_task_views(
         self,

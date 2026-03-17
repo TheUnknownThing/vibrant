@@ -9,20 +9,22 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from rich.markup import escape
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
 from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.types import QuestionRecord, QuestionStatus, RuntimeExecutionResult, WorkflowStatus
+from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary, QuestionStatus, QuestionView, RuntimeExecutionResult, WorkflowStatus
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
 from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..models import AppSettings
-from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT
-from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, create_orchestrator
+from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT, ConsensusDocument
+from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, OrchestratorSnapshot, create_orchestrator
 from ..project_init import ensure_project_files, initialize_project
 from .screens import HelpScreen, InitializationScreen, PlanningScreen, VibingScreen
 from .widgets.chat_panel import ChatPanel
@@ -33,6 +35,8 @@ from .widgets.settings_panel import SettingsPanel
 logger = logging.getLogger(__name__)
 OrchestratorFactory = Callable[..., Orchestrator]
 WorkspaceScreen = PlanningScreen | VibingScreen
+_MOBILE_BREAKPOINT = 80
+
 _STREAM_ONLY_EVENT_TYPES = {
     "assistant.message.delta",
     "assistant.thinking.delta",
@@ -40,6 +44,13 @@ _STREAM_ONLY_EVENT_TYPES = {
     "reasoning.summary.delta",
     "tool.call.delta",
 }
+
+
+def _should_autofocus_primary_input(*, is_web: bool, width: int) -> bool:
+    """Avoid opening the mobile browser keyboard during initial app bootstrap."""
+
+    return not is_web or width >= _MOBILE_BREAKPOINT
+
 
 class VibrantApp(App):
     """Terminal UI for managing roadmap execution and Gatekeeper conversations."""
@@ -67,6 +78,15 @@ class VibrantApp(App):
         padding: 0 1;
         color: $text-muted;
     }
+
+    VibrantApp.-mobile Header,
+    VibrantApp.-mobile Footer {
+        display: none;
+    }
+
+    VibrantApp.-mobile #status-bar {
+        height: auto;
+    }
     """
 
     BINDINGS = [
@@ -82,13 +102,34 @@ class VibrantApp(App):
         Binding("ctrl+c", "quit_app", "Quit", show=True),
     ]
 
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: str = "information",
+        timeout: float | None = None,
+        markup: bool = True,
+    ) -> None:
+        """Send notifications without letting arbitrary text break Textual markup parsing."""
+
+        safe_message = escape(message) if markup else message
+        safe_title = escape(title) if markup else title
+        super().notify(
+            safe_message,
+            title=safe_title,
+            severity=severity,
+            timeout=timeout,
+            markup=markup,
+        )
+
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         current_screen = self.screen
         if isinstance(current_screen, (HelpScreen, InitializationScreen)):
             return False
 
         planning_screen = self._planning_screen()
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
 
         if action in {"open_help", "quit_app", "open_settings"}:
             return planning_screen is not None or vibing_screen is not None
@@ -119,14 +160,16 @@ class VibrantApp(App):
         if cwd:
             self._settings.default_cwd = cwd
 
-        self._orchestrator_root: Orchestrator | None = None
+        self.sub_title = _display_path(self._active_directory())
+        self.orchestrator: Orchestrator | None = None
         self.orchestrator_facade: OrchestratorFacade | None = None
-        self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        self._project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
+        self._agent_output_conversation_subscriptions: dict[str, Any] = {}
+        self._agent_output_loaded_conversation_ids: set[str] = set()
         self._gatekeeper_conversation_id: str | None = None
-        self._pending_runtime_bootstrap_events: list[dict[str, Any]] = []
         self._workspace_screen: WorkspaceScreen | None = None
         self._task_execution_in_progress = False
         self._task_refresh_loop: asyncio.Task[None] | None = None
@@ -136,6 +179,7 @@ class VibrantApp(App):
         self._paused_return_status: WorkflowStatus | None = None
         self._banner_text: str | None = None
         self._todo_exit_message: str | None = None
+        self._mobile_chrome_enabled: bool | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -151,6 +195,7 @@ class VibrantApp(App):
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
 
         if not self._project_has_vibrant_state():
             self._set_status("Project not initialized")
@@ -158,6 +203,18 @@ class VibrantApp(App):
             return
 
         self.call_after_refresh(self._focus_primary_input)
+
+
+    def on_resize(self, event: events.Resize) -> None:
+        del event
+        self._apply_mobile_chrome()
+
+    def _apply_mobile_chrome(self) -> None:
+        is_mobile = self.size.width < _MOBILE_BREAKPOINT
+        if self._mobile_chrome_enabled == is_mobile:
+            return
+        self._mobile_chrome_enabled = is_mobile
+        self.set_class(is_mobile, "-mobile")
 
     async def on_unmount(self) -> None:
         for task in (self._gatekeeper_request_task, self._roadmap_runner_task):
@@ -170,16 +227,20 @@ class VibrantApp(App):
         await self._stop_project_refresh_loop()
         self._close_orchestrator_subscriptions()
 
-    async def action_open_settings(self) -> None:
-        result = await self.push_screen_wait(SettingsPanel(self._settings))
-        if not result:
+    def action_open_settings(self) -> None:
+        self.push_screen(SettingsPanel(self._settings), self._handle_settings_dismissed)
+
+    def _handle_settings_dismissed(self, result: AppSettings | None) -> None:
+        if result is None:
             return
 
         self._settings = result
-        self._project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        self._refresh_app_bar()
+        self._project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
 
         if not self._project_has_vibrant_state():
             self._set_status("Project not initialized")
@@ -189,7 +250,7 @@ class VibrantApp(App):
         self._focus_primary_input()
         self._set_status("Settings updated")
 
-    async def initialize_project_at(self, target_path: str | Path) -> bool:
+    async def initialize_project_at(self, target_path: Path) -> bool:
         try:
             vibrant_dir = initialize_project(target_path)
         except Exception as exc:
@@ -200,10 +261,12 @@ class VibrantApp(App):
 
         project_root = vibrant_dir.parent
         self._settings.default_cwd = str(project_root)
+        self._refresh_app_bar()
         self._project_root = project_root
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
         self._set_status(f"Initialized Vibrant project in {project_root}")
         self.notify(f"Initialized Vibrant project in {project_root}")
         self.call_after_refresh(self._focus_primary_input)
@@ -254,14 +317,14 @@ class VibrantApp(App):
             self._start_automatic_workflow_if_needed()
 
     def action_cycle_agent_output(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Agent logs are only available in the vibing screen.", severity="warning")
             return
         vibing_screen.agent_output.action_cycle_agent()
 
     def action_show_task_status(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Task status is only available in the vibing screen.", severity="warning")
             return
@@ -275,7 +338,7 @@ class VibrantApp(App):
             self._set_status(f"Consensus panel {state}")
             return
 
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Consensus view is not available on this screen.", severity="warning")
             return
@@ -283,7 +346,7 @@ class VibrantApp(App):
         self._set_status("Opened Consensus tab")
 
     def action_show_chat_history(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Chat history is only available in the vibing screen.", severity="warning")
             return
@@ -291,7 +354,7 @@ class VibrantApp(App):
         self._set_status("Opened Gatekeeper chat history")
 
     def action_show_agent_logs(self) -> None:
-        vibing_screen = self._vibing_screen()
+        vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             self.notify("Agent logs are only available in the vibing screen.", severity="warning")
             return
@@ -330,7 +393,7 @@ class VibrantApp(App):
         self._task_execution_in_progress = True
         self._set_status("Running roadmap workflow…" if automatic else "Running next roadmap task…")
         self._start_project_refresh_loop()
-        self._refresh_project_views()
+        self._refresh_execution_views(include_consensus=False)
 
         try:
             if automatic:
@@ -353,7 +416,7 @@ class VibrantApp(App):
             self._task_execution_in_progress = False
             self._roadmap_runner_task = None
             await self._stop_project_refresh_loop()
-            self._refresh_project_views()
+            self._refresh_execution_views(include_consensus=True)
 
     def _start_automatic_workflow_if_needed(self) -> None:
         orchestrator = self.orchestrator_facade
@@ -402,15 +465,11 @@ class VibrantApp(App):
                 submission = await self.orchestrator_facade.submit_user_message(text)
             self._sync_gatekeeper_conversation_binding(
                 conversation_id=submission.conversation_id,
-                force=True,
+                force=False,
             )
-            self._refresh_gatekeeper_state()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
 
-            result = await self.orchestrator_facade.wait_for_gatekeeper_submission(submission)
-            self._refresh_project_views()
-            if _extract_planning_completion_request(result):
-                self._transition_to_vibing(prefer_chat_history=True)
-                return
+            self._refresh_post_gatekeeper_submission()
             if self._maybe_sync_post_planning_transition():
                 return
             self.notify("Message sent to Gatekeeper.")
@@ -421,7 +480,7 @@ class VibrantApp(App):
             self._set_status(f"Gatekeeper request failed: {exc}")
         finally:
             self._gatekeeper_request_task = None
-            self._refresh_gatekeeper_state()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
 
     def _roadmap_execution_mode(self) -> RoadmapExecutionMode:
         if self.orchestrator_facade is None:
@@ -452,7 +511,6 @@ class VibrantApp(App):
             self.notify("Gatekeeper is already running.", severity="warning")
             return
 
-        self._record_command_history_entry(event.text)
         input_bar.set_enabled(False)
         input_bar.set_context("gatekeeper", "sending…")
         self._set_status("Sending message to Gatekeeper…")
@@ -469,7 +527,7 @@ class VibrantApp(App):
             else:
                 self.notify(f"Current model: {self._settings.default_model}")
         elif cmd == "settings":
-            await self.action_open_settings()
+            self.action_open_settings()
         elif cmd == "vibe":
             self._transition_to_vibing(prefer_chat_history=True)
         elif cmd in {"run", "next", "task"}:
@@ -478,14 +536,14 @@ class VibrantApp(App):
             self._refresh_project_views()
             self._set_status("Refreshed project views")
         elif cmd == "history":
-            vibing_screen = self._vibing_screen()
+            vibing_screen = self.vibing_screen()
             if vibing_screen is None:
                 self.notify("Gatekeeper chat is already visible.")
                 return
             vibing_screen.show_chat_history()
             self._set_status("Opened Gatekeeper chat history")
         elif cmd == "logs":
-            vibing_screen = self._vibing_screen()
+            vibing_screen = self.vibing_screen()
             if vibing_screen is None:
                 self.notify("Agent logs are only available in the vibing screen.", severity="warning")
                 return
@@ -520,7 +578,8 @@ class VibrantApp(App):
                 self._set_status(f"Consensus save failed: {exc}")
                 return
 
-        self._refresh_project_views()
+        snapshot = self._project_snapshot()
+        self._refresh_consensus_views(snapshot)
         self.notify("Consensus updated.")
         self._set_status("Saved consensus edits")
 
@@ -537,17 +596,10 @@ class VibrantApp(App):
     def _on_runtime_event(self, event: CanonicalEvent) -> None:
         self.call_after_refresh(self._handle_runtime_event, dict(event))
 
-    def _handle_runtime_event(self, event: dict[str, Any]) -> None:
-        task_id = self._task_id_for_runtime_event(event)
-        if task_id and not event.get("task_id"):
-            event["task_id"] = task_id
-        vibing_screen = self._vibing_screen()
-        if vibing_screen is not None:
-            with suppress(Exception):
-                vibing_screen.agent_output.ingest_canonical_event(event)
-
+    def _handle_runtime_event(self, event: CanonicalEvent) -> None:
         event_type = str(event.get("type") or "")
-        if _is_gatekeeper_event(event):
+        gatekeeper_event = _is_gatekeeper_event(event)
+        if gatekeeper_event:
             self._sync_gatekeeper_conversation_binding()
             if event_type in {"content.delta", "assistant.message.delta", "assistant.thinking.delta"}:
                 self._set_status("Gatekeeper is responding…")
@@ -558,11 +610,43 @@ class VibrantApp(App):
             self._set_status(f"Completed {_event_subject(event)}")
         elif event_type == "runtime.error":
             self._set_status(_error_text_from_event(event) or "Task failed")
-        elif event_type in {"user-input.requested", "request.opened"}:
-            self._refresh_gatekeeper_state(force_flash=True)
 
-        if event_type not in _STREAM_ONLY_EVENT_TYPES:
-            self._refresh_project_views()
+        if event_type in _STREAM_ONLY_EVENT_TYPES:
+            return
+
+        if event_type in {"user-input.requested", "request.opened"}:
+            self._refresh_gatekeeper_views(force_flash=True)
+            return
+
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            self._clear_project_dependent_views()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
+            return
+
+        if event_type == "task.progress":
+            self._refresh_roadmap_views(snapshot)
+            if not gatekeeper_event:
+                self._refresh_agent_output_registry(snapshot)
+            return
+
+        if event_type == "turn.started":
+            if gatekeeper_event:
+                self._refresh_gatekeeper_views()
+            else:
+                self._refresh_agent_output_registry(snapshot)
+                self._refresh_roadmap_views(snapshot)
+            return
+
+        if event_type in {"turn.completed", "task.completed", "runtime.error"}:
+            if not gatekeeper_event:
+                self._refresh_agent_output_registry(snapshot)
+                self._refresh_roadmap_views(snapshot)
+            self._refresh_consensus_views(snapshot)
+            self._refresh_gatekeeper_views()
+            return
+
+        self._refresh_project_views()
 
     def _on_gatekeeper_conversation_event(self, event) -> None:
         self.call_after_refresh(self._apply_gatekeeper_conversation_event, event)
@@ -589,49 +673,129 @@ class VibrantApp(App):
         elif event.type in {"conversation.assistant.message.delta", "conversation.assistant.thinking.delta"}:
             self._set_status("Gatekeeper is responding…")
 
+    def _on_agent_output_conversation_event(self, event: AgentStreamEvent) -> None:
+        self.call_after_refresh(self._apply_agent_output_conversation_event, event)
+
+    def _apply_agent_output_conversation_event(self, event: AgentStreamEvent) -> None:
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is None:
+            return
+        with suppress(Exception):
+            vibing_screen.agent_output.ingest_stream_event(event)
+
+    def _sync_agent_output_conversation_bindings(self, summaries: list[ConversationSummary]) -> None:
+        if self.orchestrator is None:
+            for subscription in self._agent_output_conversation_subscriptions.values():
+                with suppress(Exception):
+                    subscription.close()
+            self._agent_output_conversation_subscriptions = {}
+            self._agent_output_loaded_conversation_ids.clear()
+            return
+
+        desired_ids = {summary.conversation_id for summary in summaries}
+        for conversation_id, subscription in list(self._agent_output_conversation_subscriptions.items()):
+            if conversation_id in desired_ids:
+                continue
+            with suppress(Exception):
+                subscription.close()
+            self._agent_output_conversation_subscriptions.pop(conversation_id, None)
+
+        self._agent_output_loaded_conversation_ids.intersection_update(desired_ids)
+
+    def ensure_agent_output_loaded(self) -> None:
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            return
+        self._refresh_agent_output_registry(snapshot, hydrate=True)
+
+    def _hydrate_agent_output_conversations(self, summaries: list[ConversationSummary]) -> None:
+        control_plane = self._orchestrator_control_plane()
+        if control_plane is None:
+            return
+
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is None:
+            return
+
+        agent_output = vibing_screen.agent_output
+        for summary in summaries:
+            conversation_id = summary.conversation_id
+            if conversation_id in self._agent_output_conversation_subscriptions:
+                continue
+            replay = conversation_id not in self._agent_output_loaded_conversation_ids
+            self._agent_output_conversation_subscriptions[conversation_id] = (
+                control_plane.subscribe_conversation(
+                    conversation_id,
+                    self._on_agent_output_conversation_event,
+                    replay=replay,
+                )
+            )
+            if replay:
+                self._agent_output_loaded_conversation_ids.add(conversation_id)
+
     def _close_orchestrator_subscriptions(self) -> None:
         for subscription in (self._runtime_event_subscription, self._gatekeeper_conversation_subscription):
             if subscription is None:
                 continue
             with suppress(Exception):
                 subscription.close()
+        for subscription in self._agent_output_conversation_subscriptions.values():
+            with suppress(Exception):
+                subscription.close()
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
+        self._agent_output_conversation_subscriptions = {}
+        self._agent_output_loaded_conversation_ids.clear()
         self._gatekeeper_conversation_id = None
-        self._pending_runtime_bootstrap_events = []
 
     def _attach_orchestrator_subscriptions(self) -> None:
         self._close_orchestrator_subscriptions()
         if self.orchestrator_facade is None:
             return
-        self._pending_runtime_bootstrap_events = self.orchestrator_facade.list_recent_events(limit=200)
         self._runtime_event_subscription = self.orchestrator_facade.subscribe_runtime_events(self._on_runtime_event)
 
     def _initialize_project_setup(self) -> None:
         self._close_orchestrator_subscriptions()
-        project_root = find_project_root(self._settings.default_cwd or os.getcwd())
+        project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._project_root = project_root
         vibrant_dir = project_root / DEFAULT_CONFIG_DIR
         if not vibrant_dir.exists():
-            self._orchestrator_root = None
+            self.orchestrator = None
             self.orchestrator_facade = None
             return
 
         try:
             ensure_project_files(project_root)
-            self._orchestrator_root = self._orchestrator_factory(project_root)
-            self.orchestrator_facade = OrchestratorFacade(self._orchestrator_root)
+            self.orchestrator = self._orchestrator_factory(project_root)
+            self.orchestrator_facade = OrchestratorFacade(self.orchestrator)
             self._attach_orchestrator_subscriptions()
         except Exception as exc:
             logger.exception("Failed to initialize project lifecycle")
-            self._orchestrator_root = None
+            self.orchestrator = None
             self.orchestrator_facade = None
             self.notify(f"Failed to load project state: {exc}", severity="error")
+
+    def _active_directory(self) -> Path:
+        return Path(self._settings.default_cwd or os.getcwd()).expanduser().resolve(strict=False)
+
+    def _refresh_app_bar(self) -> None:
+        self.sub_title = _display_path(self._active_directory())
+
+    def _orchestrator_control_plane(self) -> Any | None:
+        orchestrator = self.orchestrator
+        if orchestrator is None:
+            return None
+        control_plane = getattr(orchestrator, "control_plane", None)
+        if control_plane is not None:
+            return control_plane
+        return getattr(orchestrator, "_control_plane", None)
 
     def _project_has_vibrant_state(self) -> bool:
         return (self._project_root / DEFAULT_CONFIG_DIR).exists()
 
     def _focus_primary_input(self) -> None:
+        if not _should_autofocus_primary_input(is_web=self.is_web, width=self.size.width):
+            return
         with suppress(Exception):
             if self._workspace_screen is not None:
                 self._workspace_screen.focus_primary_input()
@@ -644,6 +808,28 @@ class VibrantApp(App):
         host.remove_children()
         host.mount(workspace)
         self._workspace_screen = workspace
+
+        # Newly mounted widgets are not immediately queryable in the same frame.
+        # Refresh once more after mount so task and conversation views bind reliably.
+        self.call_after_refresh(self._refresh_workspace_bound_views)
+
+    def _refresh_workspace_bound_views(self) -> None:
+        """Refresh workspace widgets after the mounted tree is available."""
+
+        if self._workspace_screen is None:
+            return
+
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            self._clear_project_dependent_views()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
+            return
+
+        self._refresh_agent_output_registry(snapshot)
+        self._refresh_roadmap_views(snapshot)
+        self._refresh_consensus_views(snapshot)
+        self._refresh_gatekeeper_views()
+
     def _apply_workspace_placeholder(self, placeholder: str) -> None:
         input_bar = self._input_bar()
         if input_bar is None:
@@ -678,6 +864,9 @@ class VibrantApp(App):
         self.call_after_refresh(self._apply_workspace_placeholder, placeholder)
         self.refresh_bindings()
 
+    def _refresh_workspace_shell(self, *, prefer_chat_history: bool = False) -> None:
+        self._sync_workspace_screen(prefer_chat_history=prefer_chat_history)
+
     def _transition_to_vibing(self, *, prefer_chat_history: bool) -> bool:
         orchestrator = self.orchestrator_facade
         if orchestrator is None:
@@ -704,90 +893,162 @@ class VibrantApp(App):
         self._todo_exit_message = None
         self._sync_workspace_screen(prefer_chat_history=prefer_chat_history)
         self.call_after_refresh(self._refresh_project_views)
+        self._apply_mobile_chrome()
         self._set_status("Entered vibing phase")
         self._start_automatic_workflow_if_needed()
         return True
 
     def _refresh_project_views(self) -> None:
-        self._sync_workspace_screen()
-        vibing_screen = self._vibing_screen()
-        self._sync_gatekeeper_conversation_binding()
-        orchestrator = self.orchestrator_facade
-        agent_output = None
-        plan_tree = None
-        consensus_view = None
-        if vibing_screen is not None:
-            with suppress(Exception):
-                agent_output = vibing_screen.agent_output
-            with suppress(Exception):
-                plan_tree = vibing_screen.plan_tree
-            with suppress(Exception):
-                consensus_view = vibing_screen.consensus_view
-        if orchestrator is None:
-            chat_panel = self._chat_panel()
-            if chat_panel is not None:
-                chat_panel.clear_conversation()
-            if vibing_screen is not None:
-                if plan_tree is not None:
-                    plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
-                if agent_output is not None:
-                    agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
-                if consensus_view is not None:
-                    self._clear_consensus_view(
-                        consensus_view
-                    )
-                with suppress(Exception):
-                    vibing_screen.set_roadmap_loading(True)
-            self._refresh_gatekeeper_state()
+        self._refresh_workspace_shell()
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            self._clear_project_dependent_views()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
             return
 
-        snapshot = orchestrator.snapshot()
-        if agent_output is not None:
-            agent_output.sync_agents(
-                getattr(snapshot, "runs", ()),
-                task_ids_by_run=orchestrator.get_run_task_ids(),
-            )
-            for event in self._pending_runtime_bootstrap_events:
-                task_id = self._task_id_for_runtime_event(event)
-                if task_id and not event.get("task_id"):
-                    event["task_id"] = task_id
-                agent_output.ingest_canonical_event(event)
-            self._pending_runtime_bootstrap_events = []
+        self._refresh_agent_output_registry(snapshot)
+        self._refresh_roadmap_views(snapshot)
+        self._refresh_consensus_views(snapshot)
+        self._refresh_gatekeeper_views()
 
-        roadmap = snapshot.roadmap
-        roadmap_tasks = roadmap.tasks if roadmap is not None else []
-        consensus_document = snapshot.consensus
-        consensus_path = snapshot.consensus_path
+    def _project_snapshot(self) -> OrchestratorSnapshot | None:
+        if self.orchestrator_facade is None:
+            return None
+        return self.orchestrator_facade.snapshot()
 
-        if vibing_screen is not None:
-            sync_task_views = getattr(vibing_screen, "sync_task_views", None)
-            if callable(sync_task_views):
-                sync_task_views(
-                    roadmap_tasks,
-                    facade=orchestrator,
-                    agent_summaries=self._collect_task_summaries(),
-                )
-            elif plan_tree is not None:
-                plan_tree.update_tasks(
-                    roadmap_tasks,
-                    agent_summaries=self._collect_task_summaries(),
-                )
+    def _clear_gatekeeper_conversation_binding(self) -> None:
+        chat_panel = self._chat_panel()
+        if self._gatekeeper_conversation_subscription is not None:
             with suppress(Exception):
-                vibing_screen.set_roadmap_loading(not bool(roadmap_tasks))
+                self._gatekeeper_conversation_subscription.close()
+        self._gatekeeper_conversation_subscription = None
+        self._gatekeeper_conversation_id = None
+        if chat_panel is not None:
+            chat_panel.clear_conversation()
 
-        if consensus_view is not None:
-            self._update_consensus_view(
-                consensus_view,
-                consensus_document,
-                tasks=roadmap_tasks,
-                source_path=consensus_path,
-            )
+    def _clear_project_dependent_views(self) -> None:
+        self._clear_gatekeeper_conversation_binding()
+        self._sync_agent_output_conversation_bindings([])
+
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is not None:
+            with suppress(Exception):
+                vibing_screen.plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+            with suppress(Exception):
+                vibing_screen.agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
+            with suppress(Exception):
+                self._clear_consensus_view(vibing_screen.consensus_view)
 
         planning_screen = self._planning_screen()
-        if planning_screen is not None and self._should_auto_reveal_consensus(consensus_document):
-            planning_screen.reveal_consensus_once()
+        if planning_screen is not None:
+            with suppress(Exception):
+                self._clear_consensus_view(planning_screen.consensus_view)
 
-        self._refresh_gatekeeper_state()
+    def _refresh_gatekeeper_views(
+        self,
+        *,
+        force_flash: bool = False,
+        rebind_conversation: bool = True,
+    ) -> None:
+        if rebind_conversation:
+            if self.orchestrator is None:
+                self._clear_gatekeeper_conversation_binding()
+            else:
+                self._sync_gatekeeper_conversation_binding()
+        self._refresh_gatekeeper_state(force_flash=force_flash)
+
+    def _refresh_roadmap_views(self, snapshot: OrchestratorSnapshot | None) -> None:
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is None:
+            return
+
+        if snapshot is None:
+            with suppress(Exception):
+                vibing_screen.plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+            with suppress(Exception):
+                vibing_screen.task_status.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+            return
+
+        roadmap = snapshot.roadmap
+        if roadmap is None:
+            with suppress(Exception):
+                vibing_screen.plan_tree.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+            with suppress(Exception):
+                vibing_screen.task_status.clear_tasks("No `.vibrant/roadmap.md` found for this workspace.")
+            return
+        roadmap_tasks = roadmap.tasks
+        task_summaries = self._collect_task_summaries()
+        vibing_screen.sync_task_views(
+            roadmap_tasks,
+            facade=self.orchestrator_facade,
+            agent_summaries=task_summaries,
+        )
+
+    def _refresh_agent_output_registry(
+        self,
+        snapshot: OrchestratorSnapshot | None,
+        *,
+        hydrate: bool | None = None,
+    ) -> None:
+        control_plane = self._orchestrator_control_plane()
+        if snapshot is None or control_plane is None:
+            self._sync_agent_output_conversation_bindings([])
+            vibing_screen = self.vibing_screen()
+            if vibing_screen is not None:
+                with suppress(Exception):
+                    vibing_screen.agent_output.clear_agents("No `.vibrant/roadmap.md` found for this workspace.")
+            return
+
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is None:
+            return
+
+        with suppress(Exception):
+            conversation_summaries = control_plane.list_conversation_summaries()
+            vibing_screen.agent_output.sync_conversations(conversation_summaries, snapshot.agent_records)
+            self._sync_agent_output_conversation_bindings(conversation_summaries)
+            should_hydrate = hydrate if hydrate is not None else vibing_screen.active_tab == "agent-logs"
+            if should_hydrate:
+                self._hydrate_agent_output_conversations(conversation_summaries)
+
+    def _refresh_consensus_views(self, snapshot: OrchestratorSnapshot | None) -> None:
+        consensus_document = snapshot.consensus if snapshot is not None else None
+
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is not None:
+            with suppress(Exception):
+                self._update_consensus_view(vibing_screen.consensus_view, consensus_document)
+
+        planning_screen = self._planning_screen()
+        if planning_screen is not None:
+            with suppress(Exception):
+                self._update_consensus_view(planning_screen.consensus_view, consensus_document)
+            if self._should_auto_reveal_consensus(consensus_document):
+                planning_screen.reveal_consensus_once()
+
+    def _refresh_execution_views(self, *, include_consensus: bool) -> None:
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            self._clear_project_dependent_views()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
+            return
+
+        self._refresh_agent_output_registry(snapshot)
+        self._refresh_roadmap_views(snapshot)
+        if include_consensus:
+            self._refresh_consensus_views(snapshot)
+        self._refresh_gatekeeper_views()
+
+    def _refresh_post_gatekeeper_submission(self) -> None:
+        self._refresh_workspace_shell()
+        snapshot = self._project_snapshot()
+        if snapshot is None:
+            self._clear_project_dependent_views()
+            self._refresh_gatekeeper_views(rebind_conversation=False)
+            return
+        self._refresh_roadmap_views(snapshot)
+        self._refresh_consensus_views(snapshot)
+        self._refresh_gatekeeper_views(rebind_conversation=False)
 
     def _collect_task_summaries(self) -> dict[str, str]:
         if self.orchestrator_facade is None:
@@ -811,22 +1072,10 @@ class VibrantApp(App):
     def _update_consensus_view(
         self,
         consensus_view: ConsensusView,
-        document,
-        *,
-        tasks: list[TaskInfo],
-        source_path,
+        document: ConsensusDocument | None,
     ) -> None:
-        try:
-            consensus_view.update_consensus(
-                document,
-                tasks=tasks,
-                source_path=source_path,
-            )
-        except TypeError:
-            consensus_view.update_consensus(
-                document,
-                tasks=tasks,
-            )
+        consensus_view.update_consensus(document)
+
 
     def _clear_consensus_view(self, consensus_view: ConsensusView) -> None:
         consensus_view.clear_summary()
@@ -938,13 +1187,13 @@ class VibrantApp(App):
         pending = self._pending_question_records()
         return pending[0] if pending else None
 
-    def _list_question_records(self) -> list[QuestionRecord]:
+    def _list_question_records(self) -> list[QuestionView]:
         facade = self.orchestrator_facade
         if facade is None:
             return []
         return list(facade.list_question_records())
 
-    def _pending_question_records(self) -> list[QuestionRecord]:
+    def _pending_question_records(self) -> list[QuestionView]:
         facade = self.orchestrator_facade
         if facade is None:
             return []
@@ -1067,7 +1316,7 @@ class VibrantApp(App):
         normalized = document.context.strip()
         return bool(normalized and normalized != DEFAULT_CONSENSUS_CONTEXT.strip())
 
-    def _vibing_screen(self) -> VibingScreen | None:
+    def vibing_screen(self) -> VibingScreen | None:
         if isinstance(self._workspace_screen, VibingScreen):
             return self._workspace_screen
         return None
@@ -1125,7 +1374,7 @@ class VibrantApp(App):
     async def _project_refresh_loop(self) -> None:
         try:
             while self._task_execution_in_progress:
-                self._refresh_project_views()
+                self._refresh_execution_views(include_consensus=False)
                 await asyncio.sleep(0.2)
         except asyncio.CancelledError:
             raise
@@ -1162,12 +1411,31 @@ def _normalize_workflow_status(status: object) -> WorkflowStatus | None:
     return None
 
 
+def _display_path(path: Path) -> str:
+    try:
+        home = Path.home().resolve()
+    except Exception:
+        home = None
+
+    if home is not None:
+        try:
+            relative_to_home = path.relative_to(home)
+        except ValueError:
+            pass
+        else:
+            return "~" if not relative_to_home.parts else f"~/{relative_to_home.as_posix()}"
+
+    return path.as_posix()
+
+
 def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
     role = event.get("role")
     if isinstance(role, str) and role == "gatekeeper":
         return True
 
     agent_id = event.get("agent_id")
+    if isinstance(agent_id, str) and (agent_id == "gatekeeper" or agent_id.startswith("gatekeeper-")):
+        return True
     return isinstance(agent_id, str) and agent_id == "gatekeeper"
 
 
@@ -1191,7 +1459,7 @@ def _event_subject(event: dict[str, Any]) -> str:
     return "run"
 
 
-def _error_text_from_event(event: dict[str, Any]) -> str:
+def _error_text_from_event(event: CanonicalEvent) -> str:
     error_message = event.get("error_message")
     if isinstance(error_message, str) and error_message.strip():
         return error_message.strip()
@@ -1199,27 +1467,3 @@ def _error_text_from_event(event: dict[str, Any]) -> str:
     if isinstance(error, dict):
         return str(error.get("message") or error)
     return str(error or "").strip()
-
-
-def _extract_planning_completion_request(result: RuntimeExecutionResult) -> str | None:
-    events = result.events
-    if isinstance(events, list):
-        for event in events:
-            if _event_requests_planning_completion(event):
-                return PLANNING_COMPLETE_MCP_TOOL
-
-    return None
-
-
-def _event_requests_planning_completion(event: object) -> bool:
-    if not isinstance(event, dict):
-        return False
-
-    candidates = [
-        event.get("tool_name"),
-        event.get("tool"),
-        event.get("name"),
-        event.get("endpoint"),
-        event.get("method"),
-    ]
-    return any(isinstance(candidate, str) and candidate.strip() == PLANNING_COMPLETE_MCP_TOOL for candidate in candidates)

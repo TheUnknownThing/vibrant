@@ -435,7 +435,6 @@ class ExecutionCoordinator:
             agent_id=instance.identity.agent_id,
             role=instance.identity.role,
             run_id=run_id,
-            vibrant_dir=self.project_root / DEFAULT_CONFIG_DIR,
         )
 
     def _task_agent_provider_config(self) -> AgentInstanceProviderConfig:

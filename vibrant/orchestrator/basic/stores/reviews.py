@@ -12,7 +12,7 @@ from ...types import ReviewResolutionRecord, ReviewTicket, ReviewTicketStatus, u
 class ReviewTicketStore:
     """Persist attempt-scoped review tickets in ``.vibrant/reviews.json``."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._repository = JsonDataclassMappingRepository(
             self.path,

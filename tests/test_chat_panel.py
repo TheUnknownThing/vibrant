@@ -12,8 +12,15 @@ from vibrant.orchestrator.types import (
     QuestionView,
 )
 from vibrant.tui.widgets.chat_panel import ChatPanel
-from vibrant.tui.widgets.conversation_renderer import ConversationRegion, MessageBlockWidget, ReasoningPart, ToolCallPart
-from vibrant.tui.widgets.conversation_view import ConversationView
+from vibrant.tui.widgets.conversation_view import (
+    ConversationRegion,
+    ConversationView,
+    MessageBlockWidget,
+    ReasoningPart,
+    TextPart,
+    ToolCallPart,
+    _render_blocks,
+)
 
 
 class ChatPanelHarness(App[None]):
@@ -222,6 +229,43 @@ def test_chat_panel_summary_shows_recent_withdrawn_questions() -> None:
     assert "Status: no longer needed" in summary
 
 
+
+
+@pytest.mark.asyncio
+async def test_chat_panel_replays_bound_conversation_after_mount() -> None:
+    panel = ChatPanel()
+    conversation = AgentConversationView(
+        conversation_id="gatekeeper-pre-mount",
+        agent_ids=["gatekeeper-agent"],
+        task_ids=[],
+        active_turn_id=None,
+        entries=[
+            AgentConversationEntry(
+                role="user",
+                kind="message",
+                turn_id=None,
+                text="Hello before mount",
+                payload={"role": "user"},
+                started_at="2026-03-13T00:00:00Z",
+                finished_at="2026-03-13T00:00:00Z",
+            )
+        ],
+        updated_at="2026-03-13T00:00:00Z",
+    )
+    panel.bind_conversation(conversation)
+
+    class _Harness(App[None]):
+        def compose(self) -> ComposeResult:
+            yield panel
+
+    app = _Harness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        mounted_panel = app.query_one(ChatPanel)
+        assert mounted_panel.current_conversation_id == "gatekeeper-pre-mount"
+        assert mounted_panel.query_one(ConversationView).entry_count == 1
+
+
 @pytest.mark.asyncio
 async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
     conversation = AgentConversationView(
@@ -256,8 +300,17 @@ async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
                 started_at="2026-03-13T00:00:02Z",
                 finished_at="2026-03-13T00:00:03Z",
             ),
+            AgentConversationEntry(
+                role="assistant",
+                kind="message",
+                turn_id="turn-1",
+                text="I found the **risky** changes.",
+                payload=None,
+                started_at="2026-03-13T00:00:04Z",
+                finished_at="2026-03-13T00:00:04Z",
+            ),
         ],
-        updated_at="2026-03-13T00:00:03Z",
+        updated_at="2026-03-13T00:00:04Z",
     )
 
     app = ChatPanelHarness()
@@ -271,9 +324,85 @@ async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
         region = panel.query_one(ConversationRegion)
         blocks = list(region.query(MessageBlockWidget))
 
-        assert len(blocks) == 3
+        assert len(blocks) == 2
         assert blocks[0].has_class("user-msg") is True
         assert blocks[1].has_class("assistant-msg") is True
-        assert blocks[2].has_class("system-msg") is True
         assert blocks[1].query_one(ReasoningPart).plain_text().startswith("Reasoning...")
-        assert blocks[2].query_one(ToolCallPart).plain_text() == "Tool · git diff · done"
+        assert blocks[1].query_one(ToolCallPart).plain_text() == "Tool · git diff · done"
+        assert list(blocks[1].query(TextPart))[-1].source == "I found the **risky** changes."
+
+
+def test_render_blocks_groups_assistant_turn_parts_and_omits_turn_status() -> None:
+    conversation = AgentConversationView(
+        conversation_id="gatekeeper-1",
+        run_ids=["gatekeeper-run-1"],
+        active_turn_id="turn-1",
+        entries=[
+            AgentConversationEntry(
+                role="user",
+                kind="message",
+                turn_id="turn-1",
+                text="Plan the refactor",
+                payload={"role": "user"},
+                started_at="2026-03-13T00:00:00Z",
+                finished_at="2026-03-13T00:00:00Z",
+            ),
+            AgentConversationEntry(
+                role="system",
+                kind="status",
+                turn_id="turn-1",
+                text="Turn started",
+                payload=None,
+                started_at="2026-03-13T00:00:00Z",
+                finished_at="2026-03-13T00:00:00Z",
+            ),
+            AgentConversationEntry(
+                role="assistant",
+                kind="thinking",
+                turn_id="turn-1",
+                text="Comparing both branches before I merge.",
+                payload=None,
+                started_at="2026-03-13T00:00:01Z",
+                finished_at=None,
+            ),
+            AgentConversationEntry(
+                role="tool",
+                kind="tool_call",
+                turn_id="turn-1",
+                text="git diff",
+                payload={"tool_name": "git diff", "result": "diff --git a/file.py b/file.py"},
+                started_at="2026-03-13T00:00:02Z",
+                finished_at="2026-03-13T00:00:03Z",
+            ),
+            AgentConversationEntry(
+                role="assistant",
+                kind="message",
+                turn_id="turn-1",
+                text="I found the risky changes.",
+                payload=None,
+                started_at="2026-03-13T00:00:04Z",
+                finished_at="2026-03-13T00:00:04Z",
+            ),
+            AgentConversationEntry(
+                role="system",
+                kind="status",
+                turn_id="turn-1",
+                text="Turn completed",
+                payload=None,
+                started_at="2026-03-13T00:00:05Z",
+                finished_at="2026-03-13T00:00:05Z",
+            ),
+        ],
+        updated_at="2026-03-13T00:00:05Z",
+    )
+
+    blocks = _render_blocks(conversation)
+
+    assert len(blocks) == 2
+    assert blocks[0].role == "user"
+    assert blocks[1].role == "assistant"
+    assert len(blocks[1].parts) == 4
+    assert isinstance(blocks[1].parts[0], ReasoningPart)
+    assert isinstance(blocks[1].parts[1], ToolCallPart)
+    assert blocks[1].parts[2].plain_text() == "diff --git a/file.py b/file.py"
+    assert blocks[1].parts[3].plain_text() == "I found the risky changes."

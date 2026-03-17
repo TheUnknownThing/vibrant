@@ -63,7 +63,7 @@ class AgentBase(ABC):
 
     def __init__(
         self,
-        project_root: str | Path,
+        project_root: Path,
         config: VibrantConfig,
         *,
         adapter_factory: Any,
@@ -71,7 +71,7 @@ class AgentBase(ABC):
         on_agent_record_updated: Callable[[AgentRecord], Any] | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
-        self.project_root = Path(project_root)
+        self.project_root = project_root
         self.config = config
         self.adapter_factory = adapter_factory
         self.on_canonical_event = on_canonical_event
@@ -156,7 +156,7 @@ class AgentBase(ABC):
         *,
         prompt: str,
         agent_record: AgentRecord,
-        cwd: str | Path | None = None,
+        cwd: Path | None = None,
         resume_thread_id: str | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentRunResult:

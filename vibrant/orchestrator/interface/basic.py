@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from ..basic.artifacts import build_workflow_snapshot
+from ..basic.conversation import ConversationStore
 from ..basic.events import EventLogService
 from ..basic.runtime import AgentRuntimeService
 from ..basic.stores import (
@@ -23,6 +24,7 @@ from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.workflow import WorkflowSessionResource
 from ..policy.task_loop.roles import DEFAULT_TASK_AGENT_ROLE
 from ..policy.task_loop import TaskLoop
+from ..types import ConversationSummary
 from ..types import (
     AgentInstanceIdentitySnapshot,
     AgentInstanceProviderSnapshot,
@@ -57,6 +59,7 @@ class BasicQueryAdapter:
     roadmap_store: RoadmapStore
     agent_instance_store: AgentInstanceStore
     agent_run_store: AgentRunStore
+    conversation_store: ConversationStore
     runtime_service: AgentRuntimeService
     event_log: EventLogService
     gatekeeper_loop: GatekeeperUserLoop
@@ -97,6 +100,23 @@ class BasicQueryAdapter:
 
     def conversation(self, conversation_id: str):
         return self.gatekeeper_loop.conversation(conversation_id)
+
+    def list_conversation_summaries(self) -> list[ConversationSummary]:
+        return [
+            ConversationSummary(
+                conversation_id=manifest.conversation_id,
+                agent_ids=list(manifest.agent_ids),
+                task_ids=list(manifest.task_ids),
+                provider_thread_id=manifest.provider_thread_id,
+                active_turn_id=manifest.active_turn_id,
+                latest_run_id=manifest.latest_run_id,
+                updated_at=manifest.updated_at,
+            )
+            for manifest in self.conversation_store.list_manifests()
+        ]
+
+    def conversation_frames(self, conversation_id: str):
+        return self.conversation_store.load_frames(conversation_id)
 
     def conversation_session(self, conversation_id: str):
         return self.gatekeeper_loop.conversation(conversation_id)

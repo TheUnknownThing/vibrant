@@ -42,7 +42,7 @@ class GatekeeperLifecycleService:
 
     def __init__(
         self,
-        project_root: str | Path,
+        project_root: Path,
         *,
         runtime_service: AgentRuntimeService,
         conversation_service: ConversationStreamService,
@@ -54,7 +54,7 @@ class GatekeeperLifecycleService:
         session_loader: Callable[[], GatekeeperSessionSnapshot] | None = None,
         session_saver: Callable[[GatekeeperSessionSnapshot], Any] | None = None,
     ) -> None:
-        self.project_root = Path(project_root)
+        self.project_root = project_root
         self.runtime_service = runtime_service
         self.conversation_service = conversation_service
         self.gatekeeper = gatekeeper or Gatekeeper(self.project_root)
@@ -186,7 +186,7 @@ class GatekeeperLifecycleService:
                     agent_record=agent_record,
                     prompt=prompt,
                     provider_thread=provider_thread,
-                    cwd=str(self.project_root),
+                    cwd=self.project_root,
                     runtime=self.gatekeeper.runtime,
                     on_record_updated=self._persist_run,
                     invocation_plan=invocation_plan,
@@ -195,7 +195,7 @@ class GatekeeperLifecycleService:
                 handle = await self.runtime_service.start_run(
                     agent_record=agent_record,
                     prompt=prompt,
-                    cwd=str(self.project_root),
+                    cwd=self.project_root,
                     runtime=self.gatekeeper.runtime,
                     on_record_updated=self._persist_run,
                     invocation_plan=invocation_plan,

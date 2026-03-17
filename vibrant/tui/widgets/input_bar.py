@@ -162,7 +162,7 @@ class InputBar(Static):
     def __init__(
         self,
         *,
-        base_path: str | Path | None = None,
+        base_path: Path | None = None,
         max_suggestions: int = 8,
         **kwargs,
     ) -> None:
@@ -227,7 +227,7 @@ class InputBar(Static):
         if self._input is not None:
             self._input.placeholder = text
 
-    def set_completion_base_path(self, base_path: str | Path) -> None:
+    def set_completion_base_path(self, base_path: Path) -> None:
         """Update the base path used for `@path` autocompletion."""
 
         self._completion_base_path = Path(base_path).expanduser().resolve()

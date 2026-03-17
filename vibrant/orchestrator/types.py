@@ -285,6 +285,17 @@ class QuestionRecord:
 
 
 @dataclass(slots=True)
+class ConversationSummary:
+    conversation_id: str
+    agent_ids: list[str]
+    task_ids: list[str]
+    provider_thread_id: str | None = None
+    active_turn_id: str | None = None
+    latest_run_id: str | None = None
+    updated_at: str = field(default_factory=utc_now)
+
+
+@dataclass(slots=True)
 class QuestionView:
     question_id: str
     text: str
@@ -328,6 +339,7 @@ class AgentStreamEvent:
         "conversation.tool_call.started",
         "conversation.tool_call.delta",
         "conversation.tool_call.completed",
+        "conversation.progress",
         "conversation.request.opened",
         "conversation.request.resolved",
         "conversation.turn.started",
@@ -337,6 +349,7 @@ class AgentStreamEvent:
     text: str | None
     payload: Mapping[str, Any] | None
     created_at: str
+    task_id: str | None = None
 
 
 @dataclass(slots=True)

@@ -42,6 +42,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from vibrant.agents.base import AgentBase
@@ -281,7 +282,7 @@ class AgentRuntime(Protocol):
         *,
         agent_record: AgentRecord,
         prompt: str,
-        cwd: str | None = None,
+        cwd: Path | None = None,
         resume_thread_id: str | None = None,
         on_record_updated: AgentRecordCallback | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
@@ -314,7 +315,7 @@ class AgentRuntime(Protocol):
         agent_record: AgentRecord,
         prompt: str,
         provider_thread: ProviderThreadHandle,
-        cwd: str | None = None,
+        cwd: Path | None = None,
         on_record_updated: AgentRecordCallback | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
@@ -370,7 +371,7 @@ class BaseAgentRuntime:
         *,
         agent_record: AgentRecord,
         prompt: str,
-        cwd: str | None = None,
+        cwd: Path | None = None,
         resume_thread_id: str | None = None,
         on_record_updated: AgentRecordCallback | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
@@ -390,7 +391,7 @@ class BaseAgentRuntime:
         agent_record: AgentRecord,
         prompt: str,
         provider_thread: ProviderThreadHandle,
-        cwd: str | None = None,
+        cwd: Path | None = None,
         on_record_updated: AgentRecordCallback | None = None,
         invocation_plan: ProviderInvocationPlan | None = None,
     ) -> AgentHandle:
@@ -416,7 +417,7 @@ class BaseAgentRuntime:
         *,
         agent_record: AgentRecord,
         prompt: str,
-        cwd: str | None,
+        cwd: Path | None,
         resume_thread_id: str | None,
         on_record_updated: AgentRecordCallback | None,
         invocation_plan: ProviderInvocationPlan | None,

@@ -13,7 +13,7 @@ from ..session import authoritative_resume_handle
 class AgentRunStore:
     """Persist one JSON document per run under ``.vibrant/agent-runs/``."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._repository = JsonDirectoryRepository(
             self.path,

@@ -67,7 +67,7 @@ class PathAutocomplete(Static):
         value: str = "",
         *,
         placeholder: str = "",
-        base_path: str | Path | None = None,
+        base_path: Path | None = None,
         directories_only: bool = False,
         max_suggestions: int = 8,
         **kwargs,

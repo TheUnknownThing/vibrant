@@ -75,7 +75,7 @@ class Orchestrator:
     @classmethod
     def load(
         cls,
-        project_root: str | Path,
+        project_root: Path,
         *,
         gatekeeper: Gatekeeper | None = None,
         adapter_factory: ProviderAdapterFactory | None = None,
@@ -175,6 +175,7 @@ class Orchestrator:
             roadmap_store=roadmap_store,
             agent_instance_store=agent_instance_store,
             agent_run_store=agent_run_store,
+            conversation_store=conversation_store,
             runtime_service=runtime_service,
             event_log=event_log,
             gatekeeper_loop=gatekeeper_loop,
@@ -241,7 +242,7 @@ class Orchestrator:
 
 
 def create_orchestrator(
-    project_root: str | Path,
+    project_root: Path,
     *,
     gatekeeper: Gatekeeper | None = None,
     adapter_factory: ProviderAdapterFactory | None = None,

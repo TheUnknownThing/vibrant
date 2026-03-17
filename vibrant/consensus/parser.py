@@ -31,7 +31,7 @@ class ConsensusParser:
             context=context,
         )
 
-    def parse_file(self, path: str | Path) -> ConsensusDocument:
+    def parse_file(self, path: Path) -> ConsensusDocument:
         return self.parse(Path(path).read_text(encoding="utf-8"))
 
     def _parse_meta(self, match: re.Match[str]) -> dict[str, str]:
