@@ -305,6 +305,10 @@ class ExecutionCoordinator:
             mcp_access = invocation_plan.debug_metadata.get("mcp_access")
             if isinstance(mcp_access, dict) and not mcp_access.get("endpoint_url"):
                 mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
+            elif isinstance(mcp_access, list):
+                for descriptor in mcp_access:
+                    if isinstance(descriptor, dict) and not descriptor.get("endpoint_url"):
+                        descriptor["endpoint_url"] = "http://127.0.0.1/mcp"
 
         handle = None
         if provider_thread is not None and provider_thread.resumable:

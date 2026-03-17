@@ -539,14 +539,20 @@ class FixtureProviderAdapter(ProviderAdapter):
     def _can_use_mcp(self) -> bool:
         if self._invocation_plan is None:
             return False
-        debug_access = self._invocation_plan.debug_metadata.get("mcp_access")
-        if not isinstance(debug_access, dict):
-            return False
-        endpoint_url = _coerce_optional_str(debug_access.get("endpoint_url"))
-        binding_id = _coerce_optional_str(self._invocation_plan.binding_id or debug_access.get("binding_id"))
-        return endpoint_url is not None and binding_id is not None and any(
-            resource_name in _READ_ONLY_RESOURCE_URIS for resource_name in self._invocation_plan.visible_resources
-        )
+        for descriptor in self._mcp_access_descriptors():
+            endpoint_url = _coerce_optional_str(descriptor.get("endpoint_url"))
+            binding_id = _coerce_optional_str(self._invocation_plan.binding_id or descriptor.get("binding_id"))
+            if endpoint_url is None or binding_id is None:
+                continue
+            visible_resources = descriptor.get("visible_resources")
+            if not isinstance(visible_resources, list):
+                continue
+            if any(
+                isinstance(resource_name, str) and resource_name in _READ_ONLY_RESOURCE_URIS
+                for resource_name in visible_resources
+            ):
+                return True
+        return False
 
     def _should_use_mcp(self, *, prompt: str, scenario: FixtureScenario) -> bool:
         return self._can_use_mcp() and not scenario.ask_question and _prompt_requests_mcp(prompt)
@@ -554,33 +560,61 @@ class FixtureProviderAdapter(ProviderAdapter):
     def _require_mcp_resource_interaction(self, *, prompt: str) -> MCPResourceInteraction:
         if self._invocation_plan is None:
             raise RuntimeError("Fixture MCP interaction requested without an invocation plan.")
-        debug_access = self._invocation_plan.debug_metadata.get("mcp_access")
-        if not isinstance(debug_access, dict):
+        descriptors = self._mcp_access_descriptors()
+        if not descriptors:
             raise RuntimeError("Fixture MCP interaction requested without bound MCP access metadata.")
-        endpoint_url = _coerce_optional_str(debug_access.get("endpoint_url"))
-        binding_id = _coerce_optional_str(self._invocation_plan.binding_id or debug_access.get("binding_id"))
-        if endpoint_url is None or binding_id is None:
-            raise RuntimeError("Fixture MCP interaction requested without a live MCP endpoint or binding id.")
-        visible_resources = [
-            resource_name
-            for resource_name in self._invocation_plan.visible_resources
-            if resource_name in _READ_ONLY_RESOURCE_URIS
-        ]
-        if not visible_resources:
+        preferred_resources = _mcp_resource_preferences(prompt)
+        readable_descriptors: list[tuple[str, str, list[str]]] = []
+        for descriptor in descriptors:
+            endpoint_url = _coerce_optional_str(descriptor.get("endpoint_url"))
+            binding_id = _coerce_optional_str(self._invocation_plan.binding_id or descriptor.get("binding_id"))
+            if endpoint_url is None or binding_id is None:
+                continue
+            raw_visible_resources = descriptor.get("visible_resources")
+            if not isinstance(raw_visible_resources, list):
+                continue
+            visible_resources = [
+                resource_name
+                for resource_name in raw_visible_resources
+                if isinstance(resource_name, str) and resource_name in _READ_ONLY_RESOURCE_URIS
+            ]
+            if not visible_resources:
+                continue
+            readable_descriptors.append((endpoint_url, binding_id, visible_resources))
+        if not readable_descriptors:
             raise RuntimeError("Fixture MCP interaction requested but no readable MCP resources are available.")
-
-        preferred_resources = [
-            name
-            for name in _mcp_resource_preferences(prompt)
-            if name in visible_resources
-        ]
-        resource_name = preferred_resources[0] if preferred_resources else visible_resources[0]
+        endpoint_url, binding_id, visible_resources = readable_descriptors[0]
+        resource_name = visible_resources[0]
+        for preferred_name in preferred_resources:
+            matching_descriptor = next(
+                (
+                    descriptor
+                    for descriptor in readable_descriptors
+                    if preferred_name in descriptor[2]
+                ),
+                None,
+            )
+            if matching_descriptor is None:
+                continue
+            endpoint_url, binding_id, visible_resources = matching_descriptor
+            resource_name = preferred_name
+            break
         return MCPResourceInteraction(
             endpoint_url=endpoint_url,
             binding_id=binding_id,
             resource_name=resource_name,
             resource_uri=_READ_ONLY_RESOURCE_URIS[resource_name],
         )
+
+    def _mcp_access_descriptors(self) -> list[dict[str, Any]]:
+        if self._invocation_plan is None:
+            return []
+        debug_access = self._invocation_plan.debug_metadata.get("mcp_access")
+        if isinstance(debug_access, dict):
+            return [debug_access]
+        if isinstance(debug_access, list):
+            return [descriptor for descriptor in debug_access if isinstance(descriptor, dict)]
+        return []
 
     async def _read_mcp_resource(self, interaction: MCPResourceInteraction) -> str:
         asgi_app = None if self._invocation_plan is None else self._invocation_plan.debug_metadata.get("mcp_asgi_app")

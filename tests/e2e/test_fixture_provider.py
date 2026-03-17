@@ -117,6 +117,10 @@ async def test_fixture_provider_reads_orchestrator_mcp_resource_via_invocation_p
     mcp_access = invocation_plan.debug_metadata.get("mcp_access")
     if isinstance(mcp_access, dict):
         mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
+    elif isinstance(mcp_access, list):
+        for descriptor in mcp_access:
+            if isinstance(descriptor, dict):
+                descriptor["endpoint_url"] = "http://127.0.0.1/mcp"
     adapter = FixtureProviderAdapter(
         cwd=str(e2e_project.project_root),
         agent_record=agent_record,
