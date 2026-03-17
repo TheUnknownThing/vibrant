@@ -524,6 +524,12 @@ class ExecutionCoordinator:
                     ):
                         descriptor["endpoint_url"] = "http://127.0.0.1/mcp"
 
+        self.attempt_store.update(
+            attempt.attempt_id,
+            status=AttemptStatus.VALIDATING,
+            validation_run_ids=[test_record.identity.run_id],
+        )
+
         try:
             await self.runtime_service.start_run(
                 agent_record=test_record,

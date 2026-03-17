@@ -394,6 +394,80 @@ async def test_execution_coordinator_converts_worker_awaiting_input_to_failed_co
 
 
 @pytest.mark.asyncio
+async def test_execution_coordinator_marks_attempt_validating_before_waiting_for_test_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-1",
+        conversation_id="attempt-conv-1",
+    )
+
+    class _FakeBindingService:
+        mcp_server = object()
+
+        def bind_preset(self, *, preset, run_id, conversation_id):
+            del preset, conversation_id
+            return SimpleNamespace(access={"mode": "test"}, run_id=run_id)
+
+    class _FakeMCPHost:
+        async def ensure_started(self):
+            return None
+
+        def register_binding(self, bound_capabilities):
+            del bound_capabilities
+            return SimpleNamespace(binding_id="binding-1")
+
+        def unregister_binding(self, binding_id):
+            del binding_id
+
+        def http_app(self):
+            return object()
+
+    orchestrator._execution_coordinator.attach_mcp_bridge(
+        binding_service=_FakeBindingService(),
+        mcp_host=_FakeMCPHost(),
+    )
+
+    async def fake_start_run(**kwargs):
+        del kwargs
+
+    async def fake_wait_for_run(run_id: str):
+        if run_id == "run-1":
+            return SimpleNamespace(
+                awaiting_input=False,
+                error=None,
+                summary="Implementation finished",
+                provider_events_ref=None,
+            )
+        persisted = orchestrator._attempt_store.get(attempt.attempt_id)
+        assert persisted is not None
+        assert persisted.status is AttemptStatus.VALIDATING
+        assert persisted.validation_run_ids == [run_id]
+        return SimpleNamespace(
+            awaiting_input=False,
+            error=None,
+            summary="Tests passed",
+            provider_events_ref=None,
+        )
+
+    monkeypatch.setattr(orchestrator._runtime_service, "start_run", fake_start_run)
+    monkeypatch.setattr(orchestrator._runtime_service, "wait_for_run", fake_wait_for_run)
+
+    completion = await orchestrator._execution_coordinator.await_attempt_completion(attempt.attempt_id)
+
+    assert completion.status == "succeeded"
+    assert completion.validation is not None
+    assert completion.validation.run_ids
+
+
+@pytest.mark.asyncio
 async def test_reconcile_active_sessions_marks_stale_awaiting_input_attempt_failed(tmp_path: Path) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
