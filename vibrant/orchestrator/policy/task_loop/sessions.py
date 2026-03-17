@@ -113,7 +113,6 @@ class AttemptExecutionSessionResource:
                 run_id=run_id,
                 conversation_id=conversation_id or snapshot.conversation_id,
                 status=status or snapshot.status,
-                incarnation_id=None,
                 live=False,
                 awaiting_input=False,
                 input_requests=[],
@@ -314,11 +313,6 @@ def _project_snapshot(
         workspace_path=workspace_path,
         conversation_id=attempt.conversation_id,
         run_id=run_id,
-        incarnation_id=(
-            runtime_snapshot.incarnation_id
-            if runtime_snapshot is not None
-            else (run_record.identity.incarnation_id if run_record is not None else None)
-        ),
         run_status=run_record.lifecycle.status.value if run_record is not None else None,
         run_stop_reason=run_record.lifecycle.stop_reason if run_record is not None else None,
         provider_resume_handle=resume_handle,
@@ -343,7 +337,6 @@ def _view(snapshot: AttemptExecutionSnapshot) -> AttemptExecutionView:
         workspace_id=snapshot.workspace_id,
         conversation_id=snapshot.conversation_id,
         run_id=snapshot.run_id,
-        incarnation_id=snapshot.incarnation_id,
         run_status=snapshot.run_status,
         run_stop_reason=snapshot.run_stop_reason,
         provider_thread_id=snapshot.provider_thread_id,
@@ -361,7 +354,6 @@ def _recovery(snapshot: AttemptExecutionSnapshot) -> AttemptRecoveryState:
         task_id=snapshot.task_id,
         status=snapshot.status,
         run_id=snapshot.run_id,
-        incarnation_id=snapshot.incarnation_id,
         run_status=snapshot.run_status,
         run_stop_reason=snapshot.run_stop_reason,
         workspace_path=snapshot.workspace_path,

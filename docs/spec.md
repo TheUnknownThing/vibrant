@@ -513,6 +513,11 @@ Every canonical event must carry:
 - `agent_id`
 - `run_id`
 
+`run_id` is the stable logical identity. If a provider-backed execution is
+resumed, it continues the same logical run. Per-execution incarnation tokens
+may exist internally for runtime bookkeeping, but they are not part of the
+stable control-plane contract and must not affect logical workflow semantics.
+
 Routing fields may include:
 
 - `origin`

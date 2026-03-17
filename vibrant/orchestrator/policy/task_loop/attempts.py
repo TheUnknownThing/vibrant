@@ -312,6 +312,7 @@ async def run_until_blocked(loop: TaskLoop) -> list[TaskResult]:
 
 
 async def resume_attempt(loop: TaskLoop, attempt_id: str) -> AttemptRecord:
+    _require_attempt_resume_allowed(loop)
     attempt = loop.attempt_store.get(attempt_id)
     if attempt is None:
         raise KeyError(f"Attempt not found: {attempt_id}")
@@ -339,6 +340,7 @@ async def resume_attempt(loop: TaskLoop, attempt_id: str) -> AttemptRecord:
 
 
 async def resume_active_attempt(loop: TaskLoop) -> AttemptRecord | None:
+    _require_attempt_resume_allowed(loop)
     session = loop.execution.next_attempt_to_recover()
     if session is None:
         return None
@@ -468,3 +470,12 @@ def _pending_review_question(loop: TaskLoop, *, task_id: str):
         if question.blocking_scope == "review":
             return question
     return None
+
+
+def _require_attempt_resume_allowed(loop: TaskLoop) -> None:
+    workflow = loop.workflow_snapshot()
+    reason = dispatch.task_execution_block_reason(loop, workflow)
+    if reason is not None:
+        raise RuntimeError(reason)
+    if workflow.status is not WorkflowStatus.EXECUTING:
+        raise RuntimeError(f"Workflow is not executing: {workflow.status.value}")

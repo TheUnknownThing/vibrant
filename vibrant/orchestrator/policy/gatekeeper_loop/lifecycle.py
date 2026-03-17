@@ -18,6 +18,7 @@ from vibrant.agents.runtime import NormalizedRunResult
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.invocation_compiler import compile_provider_invocation
 
+from ...basic.session import carry_forward_resume_handle
 from ...basic.stores import AgentInstanceStore, AgentRunStore
 from ...basic.stores.gatekeeper_session import project_gatekeeper_session
 from ...basic.conversation import ConversationStreamService
@@ -118,11 +119,16 @@ class GatekeeperLifecycleService:
         if resume:
             provider_thread = self._resolve_resume_handle(session=session)
         logical_run_id = session.run_id if resume and session.run_id else None
+        previous_record = self.run_store.get(logical_run_id) if logical_run_id is not None else None
         agent_record = self.gatekeeper.build_run_record(
             request,
             agent_id=GATEKEEPER_ROLE,
             role=GATEKEEPER_ROLE,
             run_id=logical_run_id,
+        )
+        carry_forward_resume_handle(
+            agent_record.provider,
+            previous_record.provider if previous_record is not None else None,
         )
         agent_record.context.prompt_used = prompt
         instance = ensure_gatekeeper_instance(
@@ -143,7 +149,6 @@ class GatekeeperLifecycleService:
 
         self._session.agent_id = instance.identity.agent_id
         self._session.run_id = agent_record.identity.run_id
-        self._session.incarnation_id = agent_record.identity.incarnation_id
         self._session.conversation_id = conversation_id
         self._session.lifecycle_state = GatekeeperLifecycleStatus.STARTING
         self._session.last_error = None
@@ -222,7 +227,6 @@ class GatekeeperLifecycleService:
             self._active_handle = None
         self._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
         self._session.run_id = None
-        self._session.incarnation_id = None
         self._session.active_turn_id = None
         self._session.updated_at = utc_now()
         self._persist()
@@ -265,7 +269,6 @@ class GatekeeperLifecycleService:
         return RuntimeHandleSnapshot(
             agent_id=self._session.agent_id or run_id,
             run_id=run_id,
-            incarnation_id=self._session.incarnation_id,
             state=handle.state.value,
             provider_thread_id=handle.provider_thread.thread_id,
             awaiting_input=handle.awaiting_input,
@@ -276,7 +279,6 @@ class GatekeeperLifecycleService:
         await self.stop_session()
         self._session.agent_id = None
         self._session.run_id = None
-        self._session.incarnation_id = None
         self._session.provider_thread_id = None
         self._session.resumable = False
         self._session.lifecycle_state = GatekeeperLifecycleStatus.NOT_STARTED
@@ -291,7 +293,6 @@ class GatekeeperLifecycleService:
             GatekeeperSessionSnapshot(
                 agent_id=self._session.agent_id,
                 run_id=self._session.run_id,
-                incarnation_id=self._session.incarnation_id,
                 conversation_id=self._session.conversation_id,
                 lifecycle_state=self._session.lifecycle_state,
                 provider_thread_id=self._session.provider_thread_id,
@@ -320,7 +321,6 @@ class GatekeeperLifecycleService:
         self._session.provider_thread_id = result.provider_thread.thread_id
         self._session.resumable = result.provider_thread.resumable
         self._session.run_id = result.run_id
-        self._session.incarnation_id = result.incarnation_id
         self._session.updated_at = utc_now()
         if self._is_paused_run(run_id):
             self._session.lifecycle_state = GatekeeperLifecycleStatus.STOPPED
@@ -389,7 +389,6 @@ class GatekeeperLifecycleService:
         return GatekeeperSessionSnapshot(
             agent_id=projected.agent_id,
             run_id=projected.run_id,
-            incarnation_id=projected.incarnation_id,
             conversation_id=projected.conversation_id,
             lifecycle_state=projected.lifecycle_state,
             provider_thread_id=projected.provider_thread_id,

@@ -91,7 +91,6 @@ class NormalizedRunResult:
     role: str
     status: AgentStatus
     state: RunState
-    incarnation_id: str | None = None
     transcript: str = ""
     summary: str | None = None
     events: list[CanonicalEvent] = field(default_factory=list)
@@ -494,7 +493,6 @@ class BaseAgentRuntime:
 
                 return NormalizedRunResult(
                     run_id=agent_record.identity.run_id,
-                    incarnation_id=agent_record.identity.incarnation_id,
                     agent_id=agent_record.identity.agent_id,
                     role=agent_record.identity.role,
                     status=agent_record.lifecycle.status,
@@ -515,7 +513,6 @@ class BaseAgentRuntime:
             except Exception as exc:
                 return NormalizedRunResult(
                     run_id=agent_record.identity.run_id,
-                    incarnation_id=agent_record.identity.incarnation_id,
                     agent_id=agent_record.identity.agent_id,
                     role=agent_record.identity.role,
                     status=agent_record.lifecycle.status,

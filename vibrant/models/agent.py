@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
-from uuid import uuid4
 from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
@@ -248,7 +247,6 @@ class AgentRunIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
-    incarnation_id: str | None = None
     agent_id: str
     role: str
     type: AgentType | None = None
@@ -259,13 +257,6 @@ class AgentRunIdentity(BaseModel):
         if isinstance(value, str):
             return _normalize_role(value)
         return value
-
-    @model_validator(mode="after")
-    def ensure_incarnation_id(self) -> "AgentRunIdentity":
-        if self.incarnation_id is None:
-            self.incarnation_id = self.run_id
-        return self
-
 
 class AgentRunRecord(BaseModel):
     """Durable record describing one run and its provider state."""
@@ -344,13 +335,6 @@ class AgentRunRecord(BaseModel):
 
         if next_status in self.TERMINAL_STATUSES:
             self.lifecycle.finished_at = finished_at or self.lifecycle.finished_at or datetime.now(timezone.utc)
-
-
-def next_incarnation_id() -> str:
-    """Return a new opaque execution incarnation id."""
-
-    return f"inc-{uuid4().hex[:12]}"
-
 
 # Temporary alias while the run/instance split propagates through lower layers.
 AgentRecord = AgentRunRecord

@@ -572,8 +572,62 @@ async def test_execution_coordinator_recover_attempt_resumes_existing_provider_t
     assert captured["provider_thread"].thread_id == "thread-existing"
     assert session is not None
     assert session.run_id == recovered.code_run_id
-    assert session.incarnation_id is not None
-    assert session.resumable is False
+    assert session.resumable is True
+
+
+@pytest.mark.asyncio
+async def test_execution_coordinator_failed_resume_preserves_previous_provider_handle(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-old",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator._agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-old",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.KILLED, "stop_reason": "paused"},
+            context={
+                "worktree_path": workspace.path,
+                "prompt_used": "Resume the coding task.",
+            },
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+
+    async def fake_resume_run(**kwargs):
+        raise RuntimeError("resume failed")
+
+    monkeypatch.setattr(orchestrator._runtime_service, "resume_run", fake_resume_run)
+
+    task = orchestrator._roadmap_store.get_task("task-1")
+    assert task is not None
+    prepared = PreparedTaskExecution(
+        lease=DispatchLease(task_id="task-1", lease_id="lease-1", task_definition_version=1, branch_hint=task.branch),
+        task=task,
+        prompt="Fresh prompt should be ignored in favor of persisted prompt.",
+    )
+
+    with pytest.raises(RuntimeError, match="resume failed"):
+        await orchestrator._execution_coordinator.recover_attempt(attempt.attempt_id, prepared=prepared)
+
+    persisted = orchestrator._agent_run_store.get("run-old")
+
+    assert persisted is not None
+    assert persisted.provider.provider_thread_id == "thread-existing"
+    assert persisted.provider.resume_cursor == {"threadId": "thread-existing"}
 
 
 @pytest.mark.asyncio
@@ -646,7 +700,6 @@ def test_execution_coordinator_treats_paused_run_as_recoverable(tmp_path: Path) 
         AgentRecord(
             identity={
                 "run_id": "run-paused",
-                "incarnation_id": "inc-paused",
                 "agent_id": "agent-task-1",
                 "role": AgentType.CODE.value,
                 "type": AgentType.CODE,
@@ -689,7 +742,6 @@ async def test_resume_attempt_command_recovers_without_waiting_for_dispatch_tick
         AgentRecord(
             identity={
                 "run_id": "run-paused",
-                "incarnation_id": "inc-paused",
                 "agent_id": "agent-task-1",
                 "role": AgentType.CODE.value,
                 "type": AgentType.CODE,
@@ -720,8 +772,51 @@ async def test_resume_attempt_command_recovers_without_waiting_for_dispatch_tick
     assert captured["provider_thread"].thread_id == "thread-existing"
     assert session is not None
     assert session.run_id == "run-paused"
-    assert session.incarnation_id is not None
-    assert session.incarnation_id != "inc-paused"
+
+
+@pytest.mark.asyncio
+async def test_resume_attempt_rejects_when_workflow_is_paused(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-paused",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator._workflow_state_store.update_workflow_status(WorkflowStatus.PAUSED)
+
+    with pytest.raises(RuntimeError, match="Workflow is not executing: paused"):
+        await orchestrator._task_loop.resume_attempt(attempt.attempt_id)
+
+
+@pytest.mark.asyncio
+async def test_resume_attempt_rejects_when_gatekeeper_input_blocks_execution(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-paused",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator._question_store.create(
+        text="Need a workflow-level decision first.",
+        priority=QuestionPriority.BLOCKING,
+        source_role="gatekeeper",
+        source_agent_id=None,
+        source_conversation_id=None,
+        source_turn_id=None,
+        blocking_scope="workflow",
+        task_id=None,
+    )
+
+    with pytest.raises(RuntimeError, match="Pending user input blocks task execution."):
+        await orchestrator._task_loop.resume_attempt(attempt.attempt_id)
 
 
 @pytest.mark.asyncio

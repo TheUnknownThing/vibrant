@@ -127,7 +127,6 @@ class WorkflowStateStore:
         return GatekeeperSessionSnapshot(
             agent_id=_as_non_empty_string(raw.get("agent_id")),
             run_id=_as_non_empty_string(raw.get("run_id")),
-            incarnation_id=_as_non_empty_string(raw.get("incarnation_id")),
             conversation_id=_as_non_empty_string(raw.get("conversation_id")),
             lifecycle_state=lifecycle,
             provider_thread_id=None,

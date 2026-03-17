@@ -136,10 +136,8 @@ class AgentRuntimeService:
     async def wait_for_run(
         self,
         run_id: str,
-        *,
-        incarnation_id: str | None = None,
     ) -> RuntimeExecutionResult:
-        live_run = self._resolve_live_run(run_id, incarnation_id=incarnation_id)
+        live_run = self._resolve_live_run(run_id)
         result = await live_run.handle.wait()
         provider_thread = result.provider_thread
         execution_result = RuntimeExecutionResult(
@@ -147,7 +145,6 @@ class AgentRuntimeService:
             agent_id=result.agent_id,
             role=result.role,
             status=result.status,
-            incarnation_id=result.incarnation_id,
             summary=result.summary,
             error=result.error,
             awaiting_input=result.awaiting_input,
@@ -175,7 +172,6 @@ class AgentRuntimeService:
         return RuntimeHandleSnapshot(
             agent_id=live_run.agent_record.identity.agent_id,
             run_id=run_id,
-            incarnation_id=live_run.agent_record.identity.incarnation_id,
             state=live_run.handle.state.value,
             provider_thread_id=provider_thread.thread_id,
             awaiting_input=live_run.handle.awaiting_input,
@@ -264,7 +260,6 @@ class AgentRuntimeService:
         normalized: dict[str, Any] = dict(event)
         normalized.setdefault("agent_id", agent_record.identity.agent_id)
         normalized.setdefault("run_id", agent_record.identity.run_id)
-        normalized.setdefault("incarnation_id", agent_record.identity.incarnation_id)
         normalized.setdefault("role", agent_record.identity.role)
         normalized.setdefault("provider", agent_record.provider.kind)
         normalized.setdefault("origin", "provider")
@@ -300,11 +295,9 @@ class AgentRuntimeService:
         if self._active_runs_by_agent_id.get(agent_id) == run_id:
             self._active_runs_by_agent_id.pop(agent_id, None)
 
-    def _resolve_live_run(self, run_id: str, *, incarnation_id: str | None = None) -> _LiveRun:
+    def _resolve_live_run(self, run_id: str) -> _LiveRun:
         try:
             live_run = self._runs[run_id]
         except KeyError as exc:
             raise KeyError(run_id) from exc
-        if incarnation_id is not None and live_run.agent_record.identity.incarnation_id != incarnation_id:
-            raise KeyError(f"{run_id}@{incarnation_id}")
         return live_run

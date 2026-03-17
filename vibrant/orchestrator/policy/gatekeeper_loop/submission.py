@@ -56,7 +56,6 @@ async def submit_user_input(
         conversation_id=conversation_id,
         agent_id=getattr(identity, "agent_id", snapshot.agent_id),
         run_id=getattr(identity, "run_id", snapshot.run_id),
-        incarnation_id=getattr(identity, "incarnation_id", snapshot.incarnation_id),
         accepted=True,
         active_turn_id=snapshot.active_turn_id,
         question_id=pending_question.question_id if pending_question is not None else None,
@@ -106,7 +105,6 @@ async def submit_review(
         conversation_id=conversation_id,
         agent_id=getattr(identity, "agent_id", snapshot.agent_id),
         run_id=getattr(identity, "run_id", snapshot.run_id),
-        incarnation_id=getattr(identity, "incarnation_id", snapshot.incarnation_id),
         accepted=True,
         active_turn_id=snapshot.active_turn_id,
     )
@@ -116,15 +114,7 @@ async def wait_for_submission(loop: GatekeeperUserLoop, submission: GatekeeperSu
     if not submission.run_id:
         raise RuntimeError("Gatekeeper submission did not produce a run id")
     wait_for_run = loop.runtime_service.wait_for_run
-    try:
-        result = await wait_for_run(
-            submission.run_id,
-            incarnation_id=submission.incarnation_id,
-        )
-    except TypeError as exc:
-        if "incarnation_id" not in str(exc):
-            raise
-        result = await wait_for_run(submission.run_id)
+    result = await wait_for_run(submission.run_id)
     result_error = getattr(result, "error", None)
     if result_error:
         loop._last_error = result_error

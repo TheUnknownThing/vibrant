@@ -98,7 +98,6 @@ class WorkspaceStatus(str, Enum):
 class GatekeeperSessionSnapshot:
     agent_id: str | None = None
     run_id: str | None = None
-    incarnation_id: str | None = None
     conversation_id: str | None = None
     lifecycle_state: GatekeeperLifecycleStatus = GatekeeperLifecycleStatus.NOT_STARTED
     provider_thread_id: str | None = None
@@ -143,7 +142,6 @@ class AttemptRecoveryState:
     task_id: str
     status: AttemptStatus
     run_id: str | None
-    incarnation_id: str | None
     run_status: str | None
     run_stop_reason: str | None
     workspace_path: str | None
@@ -158,7 +156,6 @@ class AttemptExecutionView:
     workspace_id: str
     conversation_id: str | None
     run_id: str | None
-    incarnation_id: str | None
     run_status: str | None
     run_stop_reason: str | None = None
     provider_thread_id: str | None = None
@@ -178,7 +175,6 @@ class AttemptExecutionSnapshot:
     workspace_path: str | None
     conversation_id: str | None
     run_id: str | None
-    incarnation_id: str | None
     run_status: str | None
     run_stop_reason: str | None = None
     provider_resume_handle: ProviderResumeHandle | None = None
@@ -321,7 +317,6 @@ class AgentStreamEvent:
     sequence: int
     agent_id: str | None
     run_id: str | None
-    incarnation_id: str | None
     turn_id: str | None
     item_id: str | None
     type: Literal[
@@ -410,7 +405,6 @@ class WorkflowSnapshot:
 class RuntimeHandleSnapshot:
     agent_id: str
     run_id: str
-    incarnation_id: str | None
     state: str
     provider_thread_id: str | None
     awaiting_input: bool
@@ -423,7 +417,6 @@ class RuntimeExecutionResult:
     agent_id: str
     role: str
     status: AgentStatus
-    incarnation_id: str | None = None
     summary: str | None = None
     error: str | None = None
     awaiting_input: bool = False
@@ -521,7 +514,6 @@ class AgentRunIdentitySnapshot:
     agent_id: str
     run_id: str
     role: str
-    incarnation_id: str | None = None
 
 
 @dataclass(slots=True)

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType, next_incarnation_id
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.registry import provider_transport
 
 from .base import AgentBase
@@ -35,7 +35,6 @@ class CodeAgent(AgentBase):
         agent_id: str | None = None,
         role: str | None = None,
         run_id: str | None = None,
-        incarnation_id: str | None = None,
         vibrant_dir: str | Path | None = None,
     ) -> AgentRunRecord:
         """Create an AgentRunRecord for one code-agent execution."""
@@ -55,7 +54,6 @@ class CodeAgent(AgentBase):
         return AgentRunRecord(
             identity={
                 "run_id": resolved_run_id,
-                "incarnation_id": incarnation_id or next_incarnation_id(),
                 "agent_id": resolved_agent_id,
                 "role": resolved_role,
                 "type": AgentType.CODE,

@@ -308,7 +308,6 @@ class BasicQueryAdapter:
                 agent_id=record.identity.agent_id,
                 run_id=record.identity.run_id,
                 role=record.identity.role,
-                incarnation_id=record.identity.incarnation_id,
             ),
             runtime=AgentRunRuntimeSnapshot(
                 status=record.lifecycle.status.value,

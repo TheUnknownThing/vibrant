@@ -17,6 +17,7 @@ from vibrant.providers.registry import provider_transport
 
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
+from ...basic.session import carry_forward_resume_handle
 from ...basic.stores import AgentInstanceStore, AgentRunStore, AttemptStore
 from ...basic.workspace import WorkspaceService
 from ...types import (
@@ -205,19 +206,8 @@ class ExecutionCoordinator:
             raise KeyError(f"Attempt not found: {attempt_id}")
         if attempt.code_run_id is None:
             raise ValueError(f"Attempt has no code run: {attempt_id}")
-        session = self.execution_session.get(attempt_id)
-        incarnation_id = session.incarnation_id if session is not None else None
 
-        wait_for_run = self.runtime_service.wait_for_run
-        try:
-            runtime_result = await wait_for_run(
-                attempt.code_run_id,
-                incarnation_id=incarnation_id,
-            )
-        except TypeError as exc:
-            if "incarnation_id" not in str(exc):
-                raise
-            runtime_result = await wait_for_run(attempt.code_run_id)
+        runtime_result = await self.runtime_service.wait_for_run(attempt.code_run_id)
         if runtime_result.awaiting_input:
             error = runtime_result.error or WORKER_INPUT_UNSUPPORTED_ERROR
             return AttemptCompletion(
@@ -380,6 +370,10 @@ class ExecutionCoordinator:
             prompt=prompt,
             run_id=session.run_id or attempt.code_run_id,
         )
+        carry_forward_resume_handle(
+            agent_record.provider,
+            existing_run_record.provider if existing_run_record is not None else None,
+        )
         self._persist_run(agent_record)
 
         conversation_id = attempt.conversation_id or f"attempt-{attempt.attempt_id}"
@@ -397,7 +391,6 @@ class ExecutionCoordinator:
         return replace(
             session,
             run_id=agent_record.identity.run_id,
-            incarnation_id=agent_record.identity.incarnation_id,
             conversation_id=conversation_id,
             status=AttemptStatus.RUNNING,
             live=False,

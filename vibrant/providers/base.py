@@ -82,7 +82,6 @@ class CanonicalEventEnvelope(TypedDict, total=False):
     provider: NotRequired[str]
     agent_id: NotRequired[str]
     run_id: NotRequired[str]
-    incarnation_id: NotRequired[str]
     role: NotRequired[str]
     provider_thread_id: NotRequired[str]
     provider_payload: NotRequired[CanonicalPayload]

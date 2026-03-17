@@ -10,6 +10,20 @@ This document is intentionally narrow. It does not define the internal control
 plane, MCP implementation details, durable store layout, or other internal
 orchestrator wiring.
 
+## Logical Run Identity
+
+Stable facade consumers should treat `run_id` as the only run identity that
+matters.
+
+- a resumed run is the same logical run
+- stable facade reads and receipts are defined in terms of logical run
+  continuity
+- implementation-level execution incarnations are internal runtime bookkeeping
+  and are not part of the stable API contract
+
+This means stable consumers must not depend on any per-incarnation token to
+wait for, inspect, or control a resumed logical run.
+
 ## Scope
 
 The following are promised as stable:

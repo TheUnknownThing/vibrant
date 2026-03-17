@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType, next_incarnation_id
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.registry import provider_transport
 
 from .base import ReadOnlyAgentBase
@@ -27,7 +27,6 @@ class ValidationAgent(ReadOnlyAgentBase):
         agent_id: str | None = None,
         role: str | None = None,
         run_id: str | None = None,
-        incarnation_id: str | None = None,
         vibrant_dir: str | Path | None = None,
     ) -> AgentRunRecord:
         resolved_agent_id = agent_id or f"test-{task_id}"
@@ -45,7 +44,6 @@ class ValidationAgent(ReadOnlyAgentBase):
         return AgentRunRecord(
             identity={
                 "run_id": resolved_run_id,
-                "incarnation_id": incarnation_id or next_incarnation_id(),
                 "agent_id": resolved_agent_id,
                 "role": resolved_role,
                 "type": AgentType.TEST,

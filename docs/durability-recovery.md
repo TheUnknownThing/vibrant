@@ -428,9 +428,7 @@ internal boundaries for:
 In this model:
 
 - `run_id` is host-owned and stable
-- `incarnation_id` is host-owned and changes across resume/materialization
-  borders
-- provider thread/session id may remain stable across multiple incarnations of
+- provider thread/session id may remain stable across multiple resumptions of
   one `run_id`
 
 This intentionally avoids using provider identity as the primary meaning of a
@@ -443,7 +441,6 @@ run.
 Each run should have a durable checkpoint that records:
 
 - `run_id`
-- `incarnation_id`
 - `agent_id`
 - `role`
 - `attempt_id` or Gatekeeper session binding if applicable

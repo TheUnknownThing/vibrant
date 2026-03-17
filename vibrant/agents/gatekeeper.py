@@ -20,7 +20,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
-from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType, next_incarnation_id
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.registry import provider_transport, resolve_configured_adapter_factory
 from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
@@ -122,7 +122,6 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         agent_id: str | None = None,
         role: str = AgentType.GATEKEEPER.value,
         run_id: str | None = None,
-        incarnation_id: str | None = None,
     ) -> AgentRunRecord:
         resolved_agent_id = agent_id or AgentType.GATEKEEPER.value
         resolved_run_id = run_id or f"gatekeeper-{request.trigger.value}-{uuid4().hex[:8]}"
@@ -132,7 +131,6 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         return AgentRunRecord(
             identity={
                 "run_id": resolved_run_id,
-                "incarnation_id": incarnation_id or next_incarnation_id(),
                 "agent_id": resolved_agent_id,
                 "role": role,
                 "type": AgentType.GATEKEEPER,
@@ -214,14 +212,12 @@ class Gatekeeper:
         agent_id: str | None = None,
         role: str = AgentType.GATEKEEPER.value,
         run_id: str | None = None,
-        incarnation_id: str | None = None,
     ) -> AgentRunRecord:
         return self.agent.build_run_record(
             request,
             agent_id=agent_id,
             role=role,
             run_id=run_id,
-            incarnation_id=incarnation_id,
         )
 
     def build_agent_record(self, request: GatekeeperRequest) -> AgentRunRecord:
