@@ -61,6 +61,9 @@ class ReviewTicketStore:
     def list_pending(self) -> list[ReviewTicket]:
         return [ticket for ticket in self._load_tickets().values() if ticket.status is ReviewTicketStatus.PENDING]
 
+    def list_all(self) -> list[ReviewTicket]:
+        return self._repository.list()
+
     def list_by_task(self, task_id: str) -> list[ReviewTicket]:
         return [ticket for ticket in self._load_tickets().values() if ticket.task_id == task_id]
 

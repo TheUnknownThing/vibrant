@@ -101,7 +101,7 @@ def test_conversation_view_records_request_events_as_status_entries():
             item_id=None,
             type="conversation.request.opened",
             text=None,
-            payload=None,
+            payload={"request_kind": "approval"},
             created_at="2026-03-13T00:00:03Z",
         )
     )
@@ -111,7 +111,7 @@ def test_conversation_view_records_request_events_as_status_entries():
     assert view._conversation is not None
     assert view._conversation.entries[0].role == "system"
     assert view._conversation.entries[0].kind == "status"
-    assert view._conversation.entries[0].text == "User input requested"
+    assert view._conversation.entries[0].text == "Approval requested"
 
 
 def test_conversation_view_splits_staggered_thinking_around_tool_output():

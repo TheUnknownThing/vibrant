@@ -136,6 +136,12 @@ class ConsensusView(Static):
         return self._is_editing
 
     @property
+    def facade_available(self) -> bool:
+        """Return whether the app currently exposes an orchestrator facade."""
+
+        return self._orchestrator_facade is not None
+
+    @property
     def has_unsaved_changes(self) -> bool:
         """Return whether the editor differs from the saved baseline."""
 

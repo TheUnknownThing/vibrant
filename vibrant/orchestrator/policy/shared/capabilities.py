@@ -63,6 +63,16 @@ def worker_binding_preset(mcp_server, agent_id: str, role: str) -> BindingPreset
     )
 
 
+def validator_binding_preset(mcp_server, agent_id: str, role: str = "test") -> BindingPreset:
+    principal = worker_principal(role=role, principal_id=f"{role}:{agent_id}")
+    return BindingPreset(
+        role=role,
+        principal=principal,
+        tools=visible_tool_names(mcp_server.tool_definitions, principal=principal),
+        resources=visible_resource_names(mcp_server.resource_definitions, principal=principal),
+    )
+
+
 def visible_tool_names(
     definitions: Mapping[str, MCPToolDefinition],
     *,

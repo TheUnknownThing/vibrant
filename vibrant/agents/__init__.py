@@ -1,7 +1,7 @@
 """Agent hierarchy for Vibrant orchestration.
 
 Exports the AgentBase class hierarchy, runtime protocol, and supporting
-types used by the orchestrator to run code, merge, and (future) test agents.
+types used by the orchestrator to run code, test, merge, and gatekeeper agents.
 """
 
 from .base import AgentBase, AgentRunResult, ReadOnlyAgentBase
@@ -28,6 +28,7 @@ from .gatekeeper import (
     WITHDRAW_QUESTION_MCP_TOOL,
 )
 from .merge_agent import MergeAgent
+from .validation_agent import ValidationAgent
 from .runtime import (
     AgentHandle,
     AgentRecordCallback,
@@ -71,6 +72,7 @@ __all__ = [
     "RESUME_WORKFLOW_MCP_TOOL",
     "RETRY_REVIEW_TICKET_MCP_TOOL",
     "RunState",
+    "ValidationAgent",
     "UPDATE_CONSENSUS_MCP_TOOL",
     "UPDATE_TASK_DEFINITION_MCP_TOOL",
     "WITHDRAW_QUESTION_MCP_TOOL",

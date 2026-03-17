@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ...basic.artifacts import build_workflow_snapshot
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, ReviewTicketStore, RoadmapStore, WorkflowStateStore
 from ...basic.workspace import WorkspaceService
-from ...types import ReviewResolutionRecord, ReviewTicket, TaskResult, WorkflowSnapshot
+from ...types import ReviewResolutionRecord, ReviewTicket, ReviewTicketStatus, TaskResult, WorkflowSnapshot
 from . import attempts, dispatch, reviews, task_projection
 from .execution import ExecutionCoordinator
 from .models import DispatchLease, TaskLoopSnapshot, TaskLoopStage
+
+if TYPE_CHECKING:
+    from ..gatekeeper_loop import GatekeeperUserLoop
 
 
 @dataclass(slots=True)
@@ -26,6 +30,7 @@ class TaskLoop:
     review_ticket_store: ReviewTicketStore
     workspace_service: WorkspaceService
     execution: ExecutionCoordinator
+    gatekeeper_loop: GatekeeperUserLoop | None = None
     _leased_task_ids: set[str] = field(default_factory=set, repr=False)
     _snapshot: TaskLoopSnapshot = field(default_factory=TaskLoopSnapshot, repr=False)
 
@@ -61,11 +66,28 @@ class TaskLoop:
     async def run_until_blocked(self) -> list[TaskResult]:
         return await attempts.run_until_blocked(self)
 
+    async def pause_active_execution(self):
+        return await self.execution.pause_active_attempts()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await attempts.resume_attempt(self, attempt_id)
+
+    async def resume_active_execution(self):
+        return await attempts.resume_active_attempt(self)
+
     def get_review_ticket(self, ticket_id: str) -> ReviewTicket | None:
         return reviews.get_review_ticket(self, ticket_id)
 
     def list_pending_review_tickets(self) -> list[ReviewTicket]:
         return reviews.list_pending_review_tickets(self)
+
+    def list_review_tickets(
+        self,
+        *,
+        task_id: str | None = None,
+        status: ReviewTicketStatus | None = None,
+    ) -> list[ReviewTicket]:
+        return reviews.list_review_tickets(self, task_id=task_id, status=status)
 
     def accept_review_ticket(self, ticket_id: str) -> ReviewResolutionRecord:
         return reviews.accept_review_ticket(self, ticket_id)

@@ -30,6 +30,7 @@ class _LiveRun:
     agent_record: AgentRunRecord
     runtime: AgentRuntime
     handle: AgentHandle
+    on_record_updated: Callable[[AgentRunRecord], Any] | None = None
     sequence: int = 0
 
 
@@ -90,6 +91,7 @@ class AgentRuntimeService:
                 agent_record=agent_record,
                 runtime=resolved_runtime,
                 handle=handle,
+                on_record_updated=on_record_updated,
             ),
         )
         return handle
@@ -127,11 +129,15 @@ class AgentRuntimeService:
                 agent_record=agent_record,
                 runtime=resolved_runtime,
                 handle=handle,
+                on_record_updated=on_record_updated,
             ),
         )
         return handle
 
-    async def wait_for_run(self, run_id: str) -> RuntimeExecutionResult:
+    async def wait_for_run(
+        self,
+        run_id: str,
+    ) -> RuntimeExecutionResult:
         live_run = self._resolve_live_run(run_id)
         result = await live_run.handle.wait()
         provider_thread = result.provider_thread
@@ -172,6 +178,13 @@ class AgentRuntimeService:
             awaiting_input=live_run.handle.awaiting_input,
             input_requests=live_run.handle.input_requests,
         )
+
+    def annotate_run(self, run_id: str, *, stop_reason: str | None = None) -> None:
+        live_run = self._resolve_live_run(run_id)
+        live_run.agent_record.lifecycle.stop_reason = stop_reason
+        callback = live_run.on_record_updated
+        if callback is not None:
+            callback(live_run.agent_record)
 
     def live_run_ids(self) -> set[str]:
         return {
@@ -285,6 +298,7 @@ class AgentRuntimeService:
 
     def _resolve_live_run(self, run_id: str) -> _LiveRun:
         try:
-            return self._runs[run_id]
+            live_run = self._runs[run_id]
         except KeyError as exc:
             raise KeyError(run_id) from exc
+        return live_run

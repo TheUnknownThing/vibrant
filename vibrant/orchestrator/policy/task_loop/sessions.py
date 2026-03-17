@@ -116,6 +116,7 @@ class AttemptExecutionSessionResource:
                 live=False,
                 awaiting_input=False,
                 input_requests=[],
+                run_stop_reason=None,
                 provider_resume_handle=None,
                 provider_thread_id=None,
                 resumable=False,
@@ -178,7 +179,10 @@ class AttemptExecutionSessionResource:
             return None
 
         status = run_record.lifecycle.status
+        stop_reason = run_record.lifecycle.stop_reason
         completion_error = run_record.outcome.error
+        if stop_reason == "paused":
+            return None
         if status.value == "awaiting_input":
             completion_status = "failed"
             completion_error = completion_error or WORKER_INPUT_UNSUPPORTED_ERROR
@@ -245,6 +249,8 @@ class AttemptExecutionSessionResource:
             return replace(snapshot, status=AttemptStatus.FAILED)
         if snapshot.status is AttemptStatus.RUNNING and snapshot.run_status == "awaiting_input":
             return replace(snapshot, status=AttemptStatus.FAILED)
+        if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_stop_reason == "paused":
+            return snapshot
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_status == "failed":
             return replace(snapshot, status=AttemptStatus.FAILED)
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_status == "killed":
@@ -257,7 +263,7 @@ def attempt_needs_recovery(snapshot: AttemptRecoveryState | AttemptExecutionSnap
 
     return (
         snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES
-        and snapshot.run_status not in _NON_RECOVERABLE_RUN_STATUSES
+        and (snapshot.run_stop_reason == "paused" or snapshot.run_status not in _NON_RECOVERABLE_RUN_STATUSES)
         and not snapshot.live
         and snapshot.workspace_path is not None
     )
@@ -308,6 +314,7 @@ def _project_snapshot(
         conversation_id=attempt.conversation_id,
         run_id=run_id,
         run_status=run_record.lifecycle.status.value if run_record is not None else None,
+        run_stop_reason=run_record.lifecycle.stop_reason if run_record is not None else None,
         provider_resume_handle=resume_handle,
         provider_thread_id=(
             runtime_snapshot.provider_thread_id
@@ -331,6 +338,7 @@ def _view(snapshot: AttemptExecutionSnapshot) -> AttemptExecutionView:
         conversation_id=snapshot.conversation_id,
         run_id=snapshot.run_id,
         run_status=snapshot.run_status,
+        run_stop_reason=snapshot.run_stop_reason,
         provider_thread_id=snapshot.provider_thread_id,
         resumable=snapshot.resumable,
         live=snapshot.live,
@@ -347,6 +355,7 @@ def _recovery(snapshot: AttemptExecutionSnapshot) -> AttemptRecoveryState:
         status=snapshot.status,
         run_id=snapshot.run_id,
         run_status=snapshot.run_status,
+        run_stop_reason=snapshot.run_stop_reason,
         workspace_path=snapshot.workspace_path,
         live=snapshot.live,
     )

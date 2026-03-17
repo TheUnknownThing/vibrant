@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ...types import AttemptStatus, MergeOutcome, ReviewResolutionRecord, ReviewTicket, WorkflowStatus
+from ...types import AttemptStatus, MergeOutcome, ReviewResolutionRecord, ReviewTicket, ReviewTicketStatus, WorkflowStatus
 from . import task_projection
 from .models import ReviewResolutionCommand, TaskLoopStage, TaskState
 from .prompting import retry_definition_patch
@@ -19,6 +19,22 @@ def get_review_ticket(loop: TaskLoop, ticket_id: str) -> ReviewTicket | None:
 
 def list_pending_review_tickets(loop: TaskLoop) -> list[ReviewTicket]:
     return loop.review_ticket_store.list_pending()
+
+
+def list_review_tickets(
+    loop: TaskLoop,
+    *,
+    task_id: str | None = None,
+    status: ReviewTicketStatus | None = None,
+) -> list[ReviewTicket]:
+    tickets = (
+        loop.review_ticket_store.list_by_task(task_id)
+        if task_id is not None
+        else loop.review_ticket_store.list_all()
+    )
+    if status is None:
+        return tickets
+    return [ticket for ticket in tickets if ticket.status is status]
 
 
 def accept_review_ticket(loop: TaskLoop, ticket_id: str) -> ReviewResolutionRecord:

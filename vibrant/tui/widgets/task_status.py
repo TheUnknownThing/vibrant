@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -15,6 +16,9 @@ from textual.widgets import ProgressBar, Static
 from ...agents.utils import extract_error_message, extract_text_from_progress_item
 from ...models.task import TaskInfo, TaskStatus
 from ...providers.base import CanonicalEvent
+
+if TYPE_CHECKING:
+    from ...orchestrator import OrchestratorFacade
 
 
 @dataclass(slots=True)
@@ -125,7 +129,7 @@ class TaskStatusView(Static):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._facade: object | None = None
+        self._facade: OrchestratorFacade | None = None
         self._is_loading = True
         self._empty_message = "Task status will appear here once the roadmap is ready."
         self._tasks: tuple[TaskInfo, ...] = ()
@@ -161,7 +165,7 @@ class TaskStatusView(Static):
 
         return self._selected_task_id
 
-    def bind(self, facade: object | None) -> None:
+    def bind(self, facade: OrchestratorFacade | None) -> None:
         """Bind the panel to the current orchestrator facade."""
 
         self._facade = facade
@@ -323,27 +327,13 @@ class TaskStatusView(Static):
         if facade is None:
             return None
 
-        if hasattr(facade, "instances"):
-            try:
-                active_instances = facade.instances.active()
-            except Exception:
-                active_instances = []
-            for instance in active_instances:
-                task_id = _instance_task_id(instance)
-                if task_id in self._tasks_by_id:
-                    return task_id
-            return None
-
-        list_active_agents = getattr(facade, "list_active_agents", None)
-        if not callable(list_active_agents):
-            return None
         try:
-            active_agents = list_active_agents()
+            active_instances = facade.list_instances(active_only=True)
         except Exception:
             return None
 
-        for agent in active_agents:
-            task_id = _instance_task_id(agent)
+        for instance in active_instances:
+            task_id = _instance_task_id(instance)
             if task_id in self._tasks_by_id:
                 return task_id
         return None
@@ -406,13 +396,7 @@ class TaskStatusView(Static):
             ):
                 return cached.events
 
-        events: list[CanonicalEvent] = []
-        if hasattr(facade, "runs") and run_id is not None:
-            try:
-                raw_events = facade.runs.events(run_id)
-                events = [event for event in raw_events if isinstance(event, dict)]
-            except Exception:
-                events = []
+        events = _read_canonical_event_log(canonical_event_log) if canonical_event_log else []
 
         if file_stats is not None and canonical_event_log and run_id is not None:
             self._run_event_cache[run_id] = _RunEventCacheEntry(
@@ -434,34 +418,20 @@ class TaskStatusView(Static):
         return stats.st_size, stats.st_mtime_ns
 
 
-def _list_task_instances(facade: object, task_id: str) -> list[object]:
-    if hasattr(facade, "instances"):
-        try:
-            instances = facade.instances.list(task_id=task_id, include_completed=True)
-        except Exception:
-            return []
-        return list(instances)
-
-    list_agents = getattr(facade, "list_agents", None)
-    if not callable(list_agents):
-        return []
+def _list_task_instances(facade: OrchestratorFacade, task_id: str) -> list[object]:
     try:
-        agents = list_agents(task_id=task_id, include_completed=True)
+        instances = facade.list_instances()
     except Exception:
         return []
-    return list(agents)
+    return [instance for instance in instances if _instance_task_id(instance) == task_id]
 
 
-def _latest_run_for_task(facade: object, task_id: str) -> object | None:
-    if not hasattr(facade, "runs"):
-        return None
-    latest_for_task = getattr(facade.runs, "latest_for_task", None)
-    if not callable(latest_for_task):
-        return None
+def _latest_run_for_task(facade: OrchestratorFacade, task_id: str) -> object | None:
     try:
-        return latest_for_task(task_id)
+        runs = facade.list_runs(task_id=task_id)
     except Exception:
         return None
+    return runs[-1] if runs else None
 
 
 def _resolve_agent_output(
@@ -718,6 +688,15 @@ def _recent_activity_from_events(events: Sequence[CanonicalEvent]) -> list[str]:
     return deduped
 
 
+def _request_activity_label(event: CanonicalEvent) -> str:
+    request_kind = str(event.get("request_kind") or "request").strip().lower()
+    if request_kind == "approval":
+        return "Approval requested"
+    if request_kind == "user-input":
+        return "User input requested"
+    return "Request opened"
+
+
 def _activity_lines_from_event(event: CanonicalEvent) -> list[str]:
     event_type = str(event.get("type") or "")
     if event_type == "turn.started":
@@ -726,8 +705,8 @@ def _activity_lines_from_event(event: CanonicalEvent) -> list[str]:
         return ["Turn completed"]
     if event_type == "task.completed":
         return ["Task completed"]
-    if event_type == "user-input.requested":
-        return ["User input requested"]
+    if event_type in {"request.opened", "user-input.requested"}:
+        return [_request_activity_label(event)]
     if event_type == "runtime.error":
         return [f"Error: {extract_error_message(event)}"]
     if event_type != "task.progress":
@@ -960,6 +939,35 @@ def _agent_output_thinking(output: object | None) -> str | None:
 
 def _agent_output_thinking_status(output: object | None) -> str:
     return _nested_attr(output, ("thinking", "status")) or "idle"
+
+
+def _read_canonical_event_log(path: str) -> list[CanonicalEvent]:
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    events: list[CanonicalEvent] = []
+    for line in lines:
+        normalized = line.strip()
+        if not normalized:
+            continue
+        try:
+            payload = json.loads(normalized)
+        except json.JSONDecodeError:
+            continue
+        event_type = str(payload.get("event") or "").strip()
+        if not event_type:
+            continue
+        event: dict[str, Any] = {"type": event_type}
+        timestamp = payload.get("timestamp")
+        if isinstance(timestamp, str) and timestamp:
+            event["timestamp"] = timestamp
+        data = payload.get("data")
+        if isinstance(data, dict):
+            event.update(data)
+        events.append(event)
+    return events
 
 
 def _nested_attr(instance: object | None, path: tuple[str, ...], default: Any = None) -> Any:

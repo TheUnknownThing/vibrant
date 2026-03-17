@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from vibrant.agents.gatekeeper import GatekeeperRequest, GatekeeperTrigger
 from vibrant.prompts import build_user_answer_trigger_description
 
-from ...types import QuestionRecord
+from ...types import QuestionRecord, ReviewTicket, ValidationOutcome
 from .models import GatekeeperMessageKind
 
 
@@ -58,4 +58,38 @@ def build_user_submission_request(text: str, pending_question: QuestionRecord | 
             ),
         ),
         related_question_id=pending_question.question_id,
+    )
+
+
+def build_review_submission_request(
+    ticket: ReviewTicket,
+    *,
+    validation: ValidationOutcome | None,
+    code_summary: str | None,
+) -> GatekeeperSubmissionRequest:
+    validation_status = validation.status if validation is not None else "skipped"
+    if validation is None:
+        validation_summary = "Validation not configured."
+    else:
+        validation_summary = validation.summary or "Validation summary unavailable."
+    trigger_description = "\n".join(
+        [
+            f"Review ticket: {ticket.ticket_id}",
+            f"Task ID: {ticket.task_id}",
+            f"Attempt ID: {ticket.attempt_id}",
+            f"Review kind: {ticket.review_kind}",
+            f"Validation status: {validation_status}",
+            f"Validation summary: {validation_summary}",
+            f"Code summary: {code_summary or ticket.summary or 'No implementation summary was captured.'}",
+            "Inspect the review ticket via MCP resources, then explicitly accept, retry, escalate, or request user input.",
+        ]
+    )
+    return GatekeeperSubmissionRequest(
+        message_kind=GatekeeperMessageKind.REVIEW,
+        request=build_request(
+            message_kind=GatekeeperMessageKind.REVIEW,
+            text=trigger_description,
+            trigger_description=trigger_description,
+            agent_summary=code_summary or ticket.summary or validation_summary,
+        ),
     )

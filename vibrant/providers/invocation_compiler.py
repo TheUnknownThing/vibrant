@@ -2,36 +2,38 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 from .base import ProviderKind
 from .invocation import MCPAccessDescriptor, ProviderInvocationPlan
 from .registry import normalize_provider_kind
 
+MCPAccessInput: TypeAlias = MCPAccessDescriptor | Mapping[str, Any]
+
 
 def compile_provider_invocation(
     provider_kind: ProviderKind | str | None,
-    access: MCPAccessDescriptor | Mapping[str, Any] | None = None,
+    access: MCPAccessInput | Sequence[MCPAccessInput] | None = None,
 ) -> ProviderInvocationPlan:
     """Compile provider-neutral MCP access into provider-native invocation data."""
 
     normalized_kind = normalize_provider_kind(provider_kind) if provider_kind is not None else None
-    descriptor = _coerce_descriptor(access)
-    if descriptor is None:
+    descriptors = _coerce_descriptors(access)
+    if not descriptors:
         return ProviderInvocationPlan(provider_kind=normalized_kind)
 
     if normalized_kind is ProviderKind.CODEX:
-        return _compile_codex_invocation(descriptor)
+        return _compile_codex_invocation(descriptors)
 
     return ProviderInvocationPlan(
         provider_kind=normalized_kind,
-        binding_id=descriptor.binding_id,
-        visible_tools=list(descriptor.visible_tools),
-        visible_resources=list(descriptor.visible_resources),
+        binding_id=_resolve_binding_id(descriptors),
+        visible_tools=_merge_visible_values(descriptors, "visible_tools"),
+        visible_resources=_merge_visible_values(descriptors, "visible_resources"),
         debug_metadata={
-            "mcp_access": descriptor.to_mapping(),
+            "mcp_access": _serialize_descriptors(descriptors),
             "mcp_runtime_supported": False,
         },
     )
@@ -86,55 +88,63 @@ class InvocationPlanRuntime:
         return getattr(self._runtime, name)
 
 
-def _compile_codex_invocation(access: MCPAccessDescriptor) -> ProviderInvocationPlan:
-    debug_metadata = {"mcp_access": access.to_mapping()}
-    if not access.endpoint_url or not access.server_id:
-        debug_metadata["mcp_transport_ready"] = False
-        return ProviderInvocationPlan(
-            provider_kind=ProviderKind.CODEX,
-            binding_id=access.binding_id,
-            visible_tools=list(access.visible_tools),
-            visible_resources=list(access.visible_resources),
-            debug_metadata=debug_metadata,
-        )
+def _compile_codex_invocation(accesses: Sequence[MCPAccessDescriptor]) -> ProviderInvocationPlan:
+    _validate_codex_server_ids(accesses)
+    overrides: list[str] = []
+    ready_bindings: list[str] = []
+    pending_bindings: list[str] = []
+    for access in accesses:
+        if not access.endpoint_url or not access.server_id:
+            pending_bindings.append(access.binding_id)
+            continue
 
-    overrides = [
-        f"mcp_servers.{access.server_id}.enabled={_toml_literal(True)}",
-        f"mcp_servers.{access.server_id}.url={_toml_literal(access.endpoint_url)}",
-        f"mcp_servers.{access.server_id}.required={_toml_literal(access.required)}",
-    ]
-    if access.visible_tools:
-        overrides.append(
-            f"mcp_servers.{access.server_id}.enabled_tools={_toml_literal(access.visible_tools)}"
+        ready_bindings.append(access.binding_id)
+        overrides.extend(
+            [
+                f"mcp_servers.{access.server_id}.enabled={_toml_literal(True)}",
+                f"mcp_servers.{access.server_id}.url={_toml_literal(access.endpoint_url)}",
+                f"mcp_servers.{access.server_id}.required={_toml_literal(access.required)}",
+            ]
         )
-    if access.static_headers:
-        overrides.append(
-            f"mcp_servers.{access.server_id}.http_headers={_toml_literal(access.static_headers)}"
-        )
+        if access.visible_tools:
+            overrides.append(
+                f"mcp_servers.{access.server_id}.enabled_tools={_toml_literal(access.visible_tools)}"
+            )
+        if access.static_headers:
+            overrides.append(
+                f"mcp_servers.{access.server_id}.http_headers={_toml_literal(access.static_headers)}"
+            )
 
+    debug_metadata = {
+        "mcp_access": _serialize_descriptors(accesses),
+        "mcp_transport_ready": bool(ready_bindings),
+        "mcp_ready_bindings": ready_bindings,
+        "mcp_pending_bindings": pending_bindings,
+    }
     launch_args: list[str] = []
     for override in overrides:
         launch_args.extend(["--config", override])
 
-    debug_metadata.update(
-        {
-            "mcp_transport_ready": True,
-            "codex_config_overrides": list(overrides),
-        }
-    )
+    debug_metadata["codex_config_overrides"] = list(overrides)
     return ProviderInvocationPlan(
         provider_kind=ProviderKind.CODEX,
         launch_args=launch_args,
-        binding_id=access.binding_id,
-        visible_tools=list(access.visible_tools),
-        visible_resources=list(access.visible_resources),
+        binding_id=_resolve_binding_id(accesses),
+        visible_tools=_merge_visible_values(accesses, "visible_tools"),
+        visible_resources=_merge_visible_values(accesses, "visible_resources"),
         debug_metadata=debug_metadata,
     )
 
 
-def _coerce_descriptor(access: MCPAccessDescriptor | Mapping[str, Any] | None) -> MCPAccessDescriptor | None:
+def _coerce_descriptors(access: MCPAccessInput | Sequence[MCPAccessInput] | None) -> list[MCPAccessDescriptor]:
     if access is None:
-        return None
+        return []
+    if isinstance(access, Sequence) and not isinstance(access, (str, bytes, bytearray, Mapping, MCPAccessDescriptor)):
+        return [_coerce_descriptor(item) for item in access]
+    return [_coerce_descriptor(access)]
+
+
+def _coerce_descriptor(access: MCPAccessInput) -> MCPAccessDescriptor:
     if isinstance(access, MCPAccessDescriptor):
         return access
     payload = dict(access)
@@ -143,6 +153,51 @@ def _coerce_descriptor(access: MCPAccessDescriptor | Mapping[str, Any] | None) -
     else:
         payload.pop("session_id", None)
     return MCPAccessDescriptor(**payload)
+
+
+def _merge_visible_values(
+    descriptors: Iterable[MCPAccessDescriptor],
+    field_name: str,
+) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for descriptor in descriptors:
+        for value in getattr(descriptor, field_name):
+            if value in seen:
+                continue
+            seen.add(value)
+            merged.append(value)
+    return merged
+
+
+def _resolve_binding_id(descriptors: Sequence[MCPAccessDescriptor]) -> str | None:
+    if len(descriptors) == 1:
+        return descriptors[0].binding_id
+    return None
+
+
+def _serialize_descriptors(
+    descriptors: Sequence[MCPAccessDescriptor],
+) -> dict[str, Any] | list[dict[str, Any]]:
+    serialized = [descriptor.to_mapping() for descriptor in descriptors]
+    if len(serialized) == 1:
+        return serialized[0]
+    return serialized
+
+
+def _validate_codex_server_ids(accesses: Sequence[MCPAccessDescriptor]) -> None:
+    seen_server_ids: set[str] = set()
+    duplicate_server_ids: set[str] = set()
+    for access in accesses:
+        if not access.server_id:
+            continue
+        if access.server_id in seen_server_ids:
+            duplicate_server_ids.add(access.server_id)
+            continue
+        seen_server_ids.add(access.server_id)
+    if duplicate_server_ids:
+        joined = ", ".join(sorted(duplicate_server_ids))
+        raise ValueError(f"Duplicate MCP server_id values are not allowed: {joined}")
 
 
 def _toml_literal(value: Any) -> str:

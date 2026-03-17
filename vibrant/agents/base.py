@@ -327,7 +327,7 @@ class AgentBase(ABC):
 class ReadOnlyAgentBase(AgentBase):
     """Agent base that locks runtime modes to READ_ONLY.
 
-    Suitable for agents that should never modify the workspace (e.g., TestAgent).
+    Suitable for agents that should never modify the workspace (e.g., ValidationAgent).
     """
 
     def get_thread_runtime_mode(self) -> RuntimeMode:

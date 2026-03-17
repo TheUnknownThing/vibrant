@@ -10,7 +10,7 @@ from pathlib import Path
 
 from vibrant.config import DEFAULT_CONVERSATION_DIRECTORY, RoadmapExecutionMode, load_config
 from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
-from vibrant.models.state import OrchestratorState, OrchestratorStatus
+from vibrant.orchestrator.basic.stores import WorkflowStateStore
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.base import ProviderKind
 
@@ -107,9 +107,9 @@ class TestVibrantInit:
         )
         assert 'model-provider = "' not in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
 
-        state = OrchestratorState.model_validate_json((tmp_path / ".vibrant/state.json").read_text(encoding="utf-8"))
-        assert state.status is OrchestratorStatus.INIT
-        assert state.last_consensus_version == 0
+        state = WorkflowStateStore(tmp_path / ".vibrant/state.json").load()
+        assert state.workflow_status.value == "init"
+        assert state.total_agent_spawns == 0
 
         consensus = _parse_consensus_meta(tmp_path / ".vibrant/consensus.md")
         assert consensus.version == 0

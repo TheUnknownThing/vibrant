@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from ...basic.artifacts import build_workflow_snapshot
-from ...types import QuestionStatus, QuestionView, WorkflowSnapshot
+from ...types import QuestionStatus, QuestionView, ReviewTicket, ValidationOutcome, WorkflowSnapshot
 from .models import GatekeeperLoopState, GatekeeperSubmission
 from .questions import current_pending_question, require_pending_question
-from .requests import build_user_submission_request
+from .requests import build_review_submission_request, build_user_submission_request
 
 if TYPE_CHECKING:
     from .loop import GatekeeperUserLoop
@@ -63,10 +63,58 @@ async def submit_user_input(
     )
 
 
+async def submit_review(
+    loop: GatekeeperUserLoop,
+    ticket: ReviewTicket,
+    *,
+    validation: ValidationOutcome | None = None,
+    code_summary: str | None = None,
+) -> GatekeeperSubmission:
+    session = await loop.lifecycle.resume_or_start()
+    conversation_id = session.conversation_id or f"gatekeeper-{uuid4().hex[:12]}"
+    prepared = build_review_submission_request(
+        ticket,
+        validation=validation,
+        code_summary=code_summary,
+    )
+
+    loop.conversation_service.record_host_message(
+        conversation_id=conversation_id,
+        role="system",
+        text=f"Review requested for ticket {ticket.ticket_id} on task {ticket.task_id}.",
+    )
+    submission_id = f"submission-{uuid4()}"
+    loop._last_submission_id = submission_id
+
+    try:
+        handle = await loop.lifecycle.submit(
+            request=prepared.request,
+            submission_id=submission_id,
+            resume=True,
+        )
+    except Exception as exc:
+        loop._last_error = str(exc)
+        raise
+
+    loop._last_error = None
+    snapshot = loop.lifecycle.snapshot()
+    identity = getattr(getattr(handle, "agent_record", None), "identity", None)
+    return GatekeeperSubmission(
+        submission_id=submission_id,
+        session=snapshot,
+        conversation_id=conversation_id,
+        agent_id=getattr(identity, "agent_id", snapshot.agent_id),
+        run_id=getattr(identity, "run_id", snapshot.run_id),
+        accepted=True,
+        active_turn_id=snapshot.active_turn_id,
+    )
+
+
 async def wait_for_submission(loop: GatekeeperUserLoop, submission: GatekeeperSubmission):
     if not submission.run_id:
         raise RuntimeError("Gatekeeper submission did not produce a run id")
-    result = await loop.runtime_service.wait_for_run(submission.run_id)
+    wait_for_run = loop.runtime_service.wait_for_run
+    result = await wait_for_run(submission.run_id)
     result_error = getattr(result, "error", None)
     if result_error:
         loop._last_error = result_error

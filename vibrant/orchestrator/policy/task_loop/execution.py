@@ -17,6 +17,7 @@ from vibrant.providers.registry import provider_transport
 
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
+from ...basic.session import carry_forward_resume_handle
 from ...basic.stores import AgentInstanceStore, AgentRunStore, AttemptStore
 from ...basic.workspace import WorkspaceService
 from ...types import (
@@ -136,6 +137,27 @@ class ExecutionCoordinator:
     def list_active_attempt_executions(self) -> list[AttemptExecutionView]:
         return self.execution_session.list_active_views()
 
+    def list_attempt_executions(
+        self,
+        *,
+        task_id: str | None = None,
+        status: AttemptStatus | None = None,
+    ) -> list[AttemptExecutionView]:
+        records = (
+            self.attempt_store.list_by_task(task_id)
+            if task_id is not None
+            else self.attempt_store.list_all()
+        )
+        views: list[AttemptExecutionView] = []
+        for record in records:
+            view = self.execution_session.get_view(record.attempt_id)
+            if view is None:
+                continue
+            if status is not None and view.status is not status:
+                continue
+            views.append(view)
+        return views
+
     def attempt_recovery_state(self, attempt_id: str) -> AttemptRecoveryState | None:
         return self.execution_session.get_recovery_state(attempt_id)
 
@@ -159,6 +181,24 @@ class ExecutionCoordinator:
         if recovered is None:
             raise KeyError(f"Attempt not found after resume: {attempt_id}")
         return recovered
+
+    async def resume_attempt(
+        self,
+        attempt_id: str,
+        *,
+        prepared: PreparedTaskExecution,
+    ) -> AttemptRecord:
+        session = self.execution_session.get(attempt_id)
+        if session is None:
+            raise KeyError(f"Attempt not found: {attempt_id}")
+        if session.live:
+            attempt = self.attempt_store.get(attempt_id)
+            if attempt is None:
+                raise KeyError(f"Attempt not found: {attempt_id}")
+            return attempt
+        if not session.workspace_path:
+            raise RuntimeError(f"Attempt is not resumable: {attempt_id}")
+        return await self.recover_attempt(attempt_id, prepared=prepared)
 
     async def await_attempt_completion(self, attempt_id: str) -> AttemptCompletion:
         attempt = self.attempt_store.get(attempt_id)
@@ -207,6 +247,18 @@ class ExecutionCoordinator:
     def reconcile_active_sessions(self) -> list[AttemptExecutionSnapshot]:
         return self.execution_session.reconcile_active()
 
+    async def pause_active_attempts(self) -> list[AttemptExecutionSnapshot]:
+        paused: list[AttemptExecutionSnapshot] = []
+        for session in self.execution_session.list_active():
+            if not session.live or session.run_id is None:
+                continue
+            self.runtime_service.annotate_run(session.run_id, stop_reason="paused")
+            await self.runtime_service.kill_run(session.run_id)
+            refreshed = self.execution_session.get(session.attempt_id)
+            if refreshed is not None:
+                paused.append(refreshed)
+        return paused
+
     def _persist_run(self, run_record: AgentRunRecord) -> None:
         self.agent_run_store.upsert(run_record)
         instance = self.agent_instance_store.get(run_record.identity.agent_id)
@@ -230,7 +282,9 @@ class ExecutionCoordinator:
     ) -> None:
         runtime = BaseAgentRuntime(self._build_code_agent())
         binding_service, mcp_host = self._require_mcp_bridge()
-        await mcp_host.ensure_started()
+        use_inprocess_mcp = bool(getattr(self.adapter_factory, "supports_inprocess_mcp", False))
+        if not use_inprocess_mcp:
+            await mcp_host.ensure_started()
         bound_capabilities = binding_service.bind_preset(
             preset=worker_binding_preset(
                 binding_service.mcp_server,
@@ -246,6 +300,15 @@ class ExecutionCoordinator:
             agent_record.provider.kind,
             bound_capabilities.access,
         )
+        invocation_plan.debug_metadata["mcp_asgi_app"] = mcp_host.http_app()
+        if use_inprocess_mcp:
+            mcp_access = invocation_plan.debug_metadata.get("mcp_access")
+            if isinstance(mcp_access, dict) and not mcp_access.get("endpoint_url"):
+                mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
+            elif isinstance(mcp_access, list):
+                for descriptor in mcp_access:
+                    if isinstance(descriptor, dict) and not descriptor.get("endpoint_url"):
+                        descriptor["endpoint_url"] = "http://127.0.0.1/mcp"
 
         handle = None
         if provider_thread is not None and provider_thread.resumable:
@@ -309,6 +372,11 @@ class ExecutionCoordinator:
             task=prepared.task,
             workspace=workspace,
             prompt=prompt,
+            run_id=session.run_id or attempt.code_run_id,
+        )
+        carry_forward_resume_handle(
+            agent_record.provider,
+            existing_run_record.provider if existing_run_record is not None else None,
         )
         self._persist_run(agent_record)
 
@@ -332,6 +400,7 @@ class ExecutionCoordinator:
             live=False,
             awaiting_input=False,
             input_requests=[],
+            run_stop_reason=None,
             provider_resume_handle=None,
             provider_thread_id=None,
             resumable=False,
@@ -352,6 +421,7 @@ class ExecutionCoordinator:
         task: TaskInfo,
         workspace: WorkspaceHandle,
         prompt: str,
+        run_id: str | None = None,
     ) -> AgentRunRecord:
         instance = ensure_task_agent_instance(
             self.agent_instance_store,
@@ -363,7 +433,8 @@ class ExecutionCoordinator:
             worktree=workspace,
             prompt=prompt,
             agent_id=instance.identity.agent_id,
-            role=instance.identity.role
+            role=instance.identity.role,
+            run_id=run_id,
         )
 
     def _task_agent_provider_config(self) -> AgentInstanceProviderConfig:

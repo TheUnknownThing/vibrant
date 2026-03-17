@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from vibrant.agents.gatekeeper import Gatekeeper
-from vibrant.config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
+from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
 from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.registry import resolve_configured_adapter_factory
@@ -29,7 +29,10 @@ from .basic.stores import (
 )
 from .basic.stores.gatekeeper_session import project_gatekeeper_session
 from .basic.workspace import WorkspaceService
-from .interface import BasicQueryAdapter, InterfaceControlPlane, OrchestratorBackend, PolicyCommandAdapter
+from .interface.backend import OrchestratorBackend
+from .interface.basic import BasicQueryAdapter
+from .interface.control_plane import InterfaceControlPlane
+from .interface.policy import PolicyCommandAdapter
 from .interface.mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
 from .policy.gatekeeper_loop import GatekeeperLifecycleService, GatekeeperUserLoop
 from .policy.task_loop import ExecutionCoordinator, TaskLoop
@@ -42,32 +45,32 @@ class Orchestrator:
 
     project_root: Path
     vibrant_dir: Path
-    config: VibrantConfig
-    workflow_state_store: WorkflowStateStore
-    attempt_store: AttemptStore
-    question_store: QuestionStore
-    consensus_store: ConsensusStore
-    roadmap_store: RoadmapStore
-    review_ticket_store: ReviewTicketStore
-    workspace_store: WorkspaceStore
-    agent_instance_store: AgentInstanceStore
-    agent_run_store: AgentRunStore
-    conversation_store: ConversationStore
-    conversation_stream: ConversationStreamService
-    runtime_service: AgentRuntimeService
-    workspace_service: WorkspaceService
-    binding_service: AgentSessionBindingService
-    event_log: EventLogService
-    gatekeeper_lifecycle: GatekeeperLifecycleService
-    execution_coordinator: ExecutionCoordinator
-    gatekeeper_loop: GatekeeperUserLoop
-    task_loop: TaskLoop
-    backend: OrchestratorBackend
-    control_plane: InterfaceControlPlane
+    _config: VibrantConfig
+    _workflow_state_store: WorkflowStateStore
+    _attempt_store: AttemptStore
+    _question_store: QuestionStore
+    _consensus_store: ConsensusStore
+    _roadmap_store: RoadmapStore
+    _review_ticket_store: ReviewTicketStore
+    _workspace_store: WorkspaceStore
+    _agent_instance_store: AgentInstanceStore
+    _agent_run_store: AgentRunStore
+    _conversation_store: ConversationStore
+    _conversation_stream: ConversationStreamService
+    _runtime_service: AgentRuntimeService
+    _workspace_service: WorkspaceService
+    _binding_service: AgentSessionBindingService
+    _event_log: EventLogService
+    _gatekeeper_lifecycle: GatekeeperLifecycleService
+    _execution_coordinator: ExecutionCoordinator
+    _gatekeeper_loop: GatekeeperUserLoop
+    _task_loop: TaskLoop
+    _backend: OrchestratorBackend
+    _control_plane: InterfaceControlPlane
     mcp_server: OrchestratorMCPServer
     mcp_host: OrchestratorFastMCPHost
-    gatekeeper: Gatekeeper
-    adapter_factory: ProviderAdapterFactory
+    _gatekeeper: Gatekeeper
+    _adapter_factory: ProviderAdapterFactory
 
     @classmethod
     def load(
@@ -157,6 +160,7 @@ class Orchestrator:
             review_ticket_store=review_ticket_store,
             workspace_service=workspace_service,
             execution=execution_coordinator,
+            gatekeeper_loop=gatekeeper_loop,
         )
 
         commands = PolicyCommandAdapter(
@@ -197,57 +201,41 @@ class Orchestrator:
         orchestrator = cls(
             project_root=root,
             vibrant_dir=vibrant_dir,
-            config=config,
-            workflow_state_store=workflow_state_store,
-            attempt_store=attempt_store,
-            question_store=question_store,
-            consensus_store=consensus_store,
-            roadmap_store=roadmap_store,
-            review_ticket_store=review_ticket_store,
-            workspace_store=workspace_store,
-            agent_instance_store=agent_instance_store,
-            agent_run_store=agent_run_store,
-            conversation_store=conversation_store,
-            conversation_stream=conversation_stream,
-            runtime_service=runtime_service,
-            workspace_service=workspace_service,
-            binding_service=session_binding,
-            event_log=event_log,
-            gatekeeper_lifecycle=gatekeeper_lifecycle,
-            execution_coordinator=execution_coordinator,
-            gatekeeper_loop=gatekeeper_loop,
-            task_loop=task_loop,
-            backend=backend,
-            control_plane=control_plane,
+            _config=config,
+            _workflow_state_store=workflow_state_store,
+            _attempt_store=attempt_store,
+            _question_store=question_store,
+            _consensus_store=consensus_store,
+            _roadmap_store=roadmap_store,
+            _review_ticket_store=review_ticket_store,
+            _workspace_store=workspace_store,
+            _agent_instance_store=agent_instance_store,
+            _agent_run_store=agent_run_store,
+            _conversation_store=conversation_store,
+            _conversation_stream=conversation_stream,
+            _runtime_service=runtime_service,
+            _workspace_service=workspace_service,
+            _binding_service=session_binding,
+            _event_log=event_log,
+            _gatekeeper_lifecycle=gatekeeper_lifecycle,
+            _execution_coordinator=execution_coordinator,
+            _gatekeeper_loop=gatekeeper_loop,
+            _task_loop=task_loop,
+            _backend=backend,
+            _control_plane=control_plane,
             mcp_server=mcp_server,
             mcp_host=mcp_host,
-            gatekeeper=resolved_gatekeeper,
-            adapter_factory=resolved_adapter_factory,
+            _gatekeeper=resolved_gatekeeper,
+            _adapter_factory=resolved_adapter_factory,
         )
-        runtime_service.subscribe_canonical_events(orchestrator.event_log.record_runtime_event)
+        runtime_service.subscribe_canonical_events(orchestrator._event_log.record_runtime_event)
         runtime_service.subscribe_canonical_events(conversation_stream.ingest_canonical)
-        orchestrator.refresh()
+        orchestrator._refresh()
         return orchestrator
 
-    @property
-    def roadmap_path(self) -> Path:
-        return self.roadmap_store.path
-
-    @property
-    def consensus_path(self) -> Path:
-        return self.consensus_store.path
-
-    @property
-    def execution_mode(self) -> RoadmapExecutionMode:
-        return self.config.execution_mode
-
-    @property
-    def gatekeeper_busy(self) -> bool:
-        return self.control_plane.gatekeeper_busy()
-
-    def refresh(self) -> RoadmapDocument:
-        self.config = load_config(start_path=self.project_root)
-        return self.roadmap_store.load()
+    def _refresh(self) -> RoadmapDocument:
+        self._config = load_config(start_path=self.project_root)
+        return self._roadmap_store.load()
 
     async def shutdown(self) -> None:
         await self.mcp_host.stop()

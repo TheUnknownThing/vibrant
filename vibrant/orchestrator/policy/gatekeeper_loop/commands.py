@@ -5,14 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
+from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 
+from ..workflow import WorkflowPolicy
 from ...types import QuestionPriority, WorkflowSnapshot, WorkflowStatus
 from .questions import normalize_question_scope
+from .transitions import begin_planning as begin_planning_transition
 from .transitions import end_planning as end_planning_transition
 from .transitions import resume_workflow as resume_workflow_transition
-from .transitions import set_workflow_status
 
 if TYPE_CHECKING:
     from .loop import GatekeeperUserLoop
@@ -47,13 +48,23 @@ def withdraw_question(loop: GatekeeperUserLoop, question_id: str, *, reason: str
 
 
 def transition_workflow(loop: GatekeeperUserLoop, status: WorkflowStatus) -> WorkflowSnapshot:
-    return set_workflow_status(
+    return WorkflowPolicy(
+        workflow_state_store=loop.workflow_state_store,
+        agent_run_store=loop.agent_run_store,
+        consensus_store=loop.consensus_store,
+        roadmap_store=loop.roadmap_store,
+        question_store=loop.question_store,
+        attempt_store=loop.attempt_store,
+    ).set_status(status)
+
+
+def begin_planning(loop: GatekeeperUserLoop) -> WorkflowSnapshot:
+    return begin_planning_transition(
         workflow_state_store=loop.workflow_state_store,
         agent_run_store=loop.agent_run_store,
         consensus_store=loop.consensus_store,
         question_store=loop.question_store,
         attempt_store=loop.attempt_store,
-        status=status,
     )
 
 
@@ -106,14 +117,29 @@ def replace_roadmap(
 def update_consensus(
     loop: GatekeeperUserLoop,
     *,
-    status: ConsensusStatus | str | None = None,
     context: str | None = None,
 ) -> ConsensusDocument:
     document = loop.consensus_store.load() or ConsensusDocument(project=loop.project_name)
     if context is not None:
         document.context = context
-    if status is not None:
-        document.status = status if isinstance(status, ConsensusStatus) else ConsensusStatus(str(status).upper())
-    return loop.consensus_store.write(document)
+    policy = WorkflowPolicy(
+        workflow_state_store=loop.workflow_state_store,
+        agent_run_store=loop.agent_run_store,
+        consensus_store=loop.consensus_store,
+        roadmap_store=loop.roadmap_store,
+        question_store=loop.question_store,
+        attempt_store=loop.attempt_store,
+    )
+    return loop.consensus_store.write(policy.project_consensus_document(document))
+
+
 def write_consensus_document(loop: GatekeeperUserLoop, document: ConsensusDocument) -> ConsensusDocument:
-    return loop.consensus_store.write(document)
+    policy = WorkflowPolicy(
+        workflow_state_store=loop.workflow_state_store,
+        agent_run_store=loop.agent_run_store,
+        consensus_store=loop.consensus_store,
+        roadmap_store=loop.roadmap_store,
+        question_store=loop.question_store,
+        attempt_store=loop.attempt_store,
+    )
+    return loop.consensus_store.write(policy.project_consensus_document(document))

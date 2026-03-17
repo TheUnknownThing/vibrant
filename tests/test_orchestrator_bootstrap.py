@@ -19,12 +19,12 @@ def _prepare_project(tmp_path: Path):
 def test_create_orchestrator_bootstraps_redesigned_services(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
 
-    assert orchestrator.workflow_state_store.load().workflow_status.value == "init"
+    assert orchestrator._workflow_state_store.load().workflow_status.value == "init"
     assert orchestrator.mcp_server is not None
     assert orchestrator.mcp_host is not None
-    assert orchestrator.binding_service is not None
-    assert orchestrator.conversation_store.base_dir.exists()
-    assert orchestrator.attempt_store.list_active() == []
+    assert orchestrator._binding_service is not None
+    assert orchestrator._conversation_store.base_dir.exists()
+    assert orchestrator._attempt_store.list_active() == []
 
 
 def test_bootstrap_projects_gatekeeper_resume_from_run_record(tmp_path: Path) -> None:
@@ -58,7 +58,7 @@ def test_bootstrap_projects_gatekeeper_resume_from_run_record(tmp_path: Path) ->
     workflow_state_store.save(state)
 
     orchestrator = create_orchestrator(tmp_path)
-    snapshot = orchestrator.control_plane.workflow_snapshot()
+    snapshot = OrchestratorFacade(orchestrator).workflow_snapshot()
 
     assert snapshot.gatekeeper.run_id == "gatekeeper-run-1"
     assert snapshot.gatekeeper.provider_thread_id == "thread-existing"
@@ -91,7 +91,7 @@ def test_bootstrap_clears_stale_instance_active_run_pointer(tmp_path: Path) -> N
     )
 
     orchestrator = create_orchestrator(tmp_path)
-    instance = orchestrator.agent_instance_store.get("worker-1")
+    instance = orchestrator._agent_instance_store.get("worker-1")
 
     assert instance is not None
     assert instance.latest_run_id == "run-stale"
@@ -124,12 +124,6 @@ def test_ui_surface_excludes_mcp_only_compatibility_aliases(tmp_path: Path) -> N
     assert not hasattr(orchestrator, "set_pending_questions")
     assert not hasattr(orchestrator, "review_task_outcome")
     assert not hasattr(orchestrator, "mark_task_for_retry")
-    assert not hasattr(orchestrator.control_plane, "set_pending_questions")
-    assert not hasattr(orchestrator.control_plane, "review_task_outcome")
-    assert not hasattr(orchestrator.control_plane, "mark_task_for_retry")
-    assert not hasattr(orchestrator.control_plane, "list_agent_records")
-    assert not hasattr(orchestrator.control_plane, "list_active_agents")
-    assert not hasattr(orchestrator.control_plane, "get_agent_record")
     assert not hasattr(facade, "set_pending_questions")
     assert not hasattr(facade, "resolve_question")
     assert not hasattr(facade, "update_task")
@@ -158,7 +152,7 @@ def test_facade_derives_task_run_queries_from_attempts(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    orchestrator.agent_run_store.upsert(
+    orchestrator._agent_run_store.upsert(
         AgentRecord(
             identity={
                 "run_id": "run-task-1",
@@ -170,7 +164,7 @@ def test_facade_derives_task_run_queries_from_attempts(tmp_path: Path) -> None:
             outcome={"summary": "Finished task 1"},
         )
     )
-    orchestrator.agent_run_store.upsert(
+    orchestrator._agent_run_store.upsert(
         AgentRecord(
             identity={
                 "run_id": "run-task-2",
@@ -182,7 +176,7 @@ def test_facade_derives_task_run_queries_from_attempts(tmp_path: Path) -> None:
             outcome={"summary": "Finished task 2"},
         )
     )
-    orchestrator.attempt_store.create(
+    orchestrator._attempt_store.create(
         task_id="task-1",
         workspace_id="workspace-1",
         task_definition_version=1,
@@ -214,7 +208,7 @@ def test_resume_workflow_restores_planning_phase(tmp_path: Path) -> None:
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    orchestrator.control_plane.set_workflow_status(WorkflowStatus.PLANNING)
+    facade.transition_workflow_state(WorkflowStatus.PLANNING)
     paused = facade.pause_workflow()
     resumed = facade.resume_workflow()
 
@@ -226,6 +220,6 @@ def test_facade_surfaces_failed_workflow_without_paused_fallback(tmp_path: Path)
     orchestrator = _prepare_project(tmp_path)
     facade = OrchestratorFacade(orchestrator)
 
-    orchestrator.control_plane.set_workflow_status(WorkflowStatus.FAILED)
+    orchestrator._workflow_state_store.update_workflow_status(WorkflowStatus.FAILED)
 
     assert facade.get_workflow_status().value == "failed"

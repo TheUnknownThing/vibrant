@@ -143,6 +143,7 @@ class AttemptRecoveryState:
     status: AttemptStatus
     run_id: str | None
     run_status: str | None
+    run_stop_reason: str | None
     workspace_path: str | None
     live: bool = False
 
@@ -156,6 +157,7 @@ class AttemptExecutionView:
     conversation_id: str | None
     run_id: str | None
     run_status: str | None
+    run_stop_reason: str | None = None
     provider_thread_id: str | None = None
     resumable: bool = False
     live: bool = False
@@ -174,6 +176,7 @@ class AttemptExecutionSnapshot:
     conversation_id: str | None
     run_id: str | None
     run_status: str | None
+    run_stop_reason: str | None = None
     provider_resume_handle: ProviderResumeHandle | None = None
     provider_thread_id: str | None = None
     resumable: bool = False
@@ -534,6 +537,7 @@ class AgentRunRuntimeSnapshot:
     active: bool
     done: bool
     awaiting_input: bool
+    stop_reason: str | None = None
     pid: int | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None

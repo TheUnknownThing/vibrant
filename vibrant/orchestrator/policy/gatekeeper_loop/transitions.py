@@ -5,42 +5,34 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from vibrant.models.state import OrchestratorStatus
-
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, RoadmapStore, WorkflowStateStore
 from ...types import WorkflowSnapshot, WorkflowStatus
-from ..shared.workflow import (
-    apply_workflow_status,
+from ..workflow import (
+    WorkflowPolicy,
     infer_resume_workflow_status,
-    orchestrator_status_from_workflow,
-    resume_workflow as resume_workflow_session,
-    workflow_status_from_orchestrator,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class UITransitionPlan:
-    action: Literal["noop", "pause", "resume", "end_planning", "set_status"]
-    workflow_status: WorkflowStatus | None = None
+    action: Literal["noop", "pause", "resume", "begin_planning", "end_planning"]
 
 
-def set_workflow_status(
+def begin_planning(
     *,
     workflow_state_store: WorkflowStateStore,
     agent_run_store: AgentRunStore,
     consensus_store: ConsensusStore,
     question_store: QuestionStore,
     attempt_store: AttemptStore,
-    status: WorkflowStatus,
 ) -> WorkflowSnapshot:
-    return apply_workflow_status(
+    return WorkflowPolicy(
         workflow_state_store=workflow_state_store,
         agent_run_store=agent_run_store,
         consensus_store=consensus_store,
         question_store=question_store,
         attempt_store=attempt_store,
-        status=status,
-    )
+    ).begin_planning()
 
 
 def end_planning(
@@ -51,14 +43,13 @@ def end_planning(
     question_store: QuestionStore,
     attempt_store: AttemptStore,
 ) -> WorkflowSnapshot:
-    return apply_workflow_status(
+    return WorkflowPolicy(
         workflow_state_store=workflow_state_store,
         agent_run_store=agent_run_store,
         consensus_store=consensus_store,
         question_store=question_store,
         attempt_store=attempt_store,
-        status=WorkflowStatus.EXECUTING,
-    )
+    ).end_planning()
 
 
 def resume_workflow(
@@ -70,58 +61,47 @@ def resume_workflow(
     question_store: QuestionStore,
     attempt_store: AttemptStore,
 ) -> WorkflowSnapshot:
-    return resume_workflow_session(
+    return WorkflowPolicy(
         workflow_state_store=workflow_state_store,
         agent_run_store=agent_run_store,
         consensus_store=consensus_store,
         roadmap_store=roadmap_store,
         question_store=question_store,
         attempt_store=attempt_store,
-    )
+    ).resume()
 
 
-def can_transition_ui_status(current: OrchestratorStatus, next_status: OrchestratorStatus) -> bool:
-    if current in {OrchestratorStatus.COMPLETED, OrchestratorStatus.FAILED}:
+def can_transition_ui_status(current: WorkflowStatus, next_status: WorkflowStatus) -> bool:
+    if current in {WorkflowStatus.COMPLETED, WorkflowStatus.FAILED}:
         return next_status is current
     return next_status in {
-        OrchestratorStatus.INIT,
-        OrchestratorStatus.PLANNING,
-        OrchestratorStatus.EXECUTING,
-        OrchestratorStatus.PAUSED,
-        OrchestratorStatus.COMPLETED,
-        OrchestratorStatus.FAILED,
+        WorkflowStatus.INIT,
+        WorkflowStatus.PLANNING,
+        WorkflowStatus.EXECUTING,
+        WorkflowStatus.PAUSED,
     }
 
 
-def plan_ui_transition(current: OrchestratorStatus, next_status: OrchestratorStatus) -> UITransitionPlan:
+def plan_ui_transition(current: WorkflowStatus, next_status: WorkflowStatus) -> UITransitionPlan:
     if not can_transition_ui_status(current, next_status):
         raise ValueError(f"Workflow cannot transition from {current.value} to {next_status.value}")
     if current is next_status:
         return UITransitionPlan(action="noop")
-    if next_status is OrchestratorStatus.PAUSED:
+    if next_status is WorkflowStatus.PAUSED:
         return UITransitionPlan(action="pause")
-    if current is OrchestratorStatus.PAUSED and next_status is OrchestratorStatus.PLANNING:
-        return UITransitionPlan(
-            action="set_status",
-            workflow_status=WorkflowStatus.PLANNING,
-        )
-    if current is OrchestratorStatus.PAUSED and next_status is OrchestratorStatus.EXECUTING:
-        return UITransitionPlan(
-            action="set_status",
-            workflow_status=WorkflowStatus.EXECUTING,
-        )
-    if next_status is OrchestratorStatus.EXECUTING and current in {
-        OrchestratorStatus.INIT,
-        OrchestratorStatus.PLANNING,
+    if current is WorkflowStatus.INIT and next_status is WorkflowStatus.PLANNING:
+        return UITransitionPlan(action="begin_planning")
+    if current is WorkflowStatus.PAUSED and next_status is WorkflowStatus.PLANNING:
+        return UITransitionPlan(action="resume")
+    if current is WorkflowStatus.PAUSED and next_status is WorkflowStatus.EXECUTING:
+        return UITransitionPlan(action="resume")
+    if next_status is WorkflowStatus.EXECUTING and current in {
+        WorkflowStatus.INIT,
+        WorkflowStatus.PLANNING,
     }:
         return UITransitionPlan(action="end_planning")
-    return UITransitionPlan(
-        action="set_status",
-        workflow_status=workflow_status_from_orchestrator(next_status),
-    )
+    raise ValueError(f"Workflow cannot transition from {current.value} to {next_status.value}")
 
 
-def infer_resume_status(consensus, roadmap) -> OrchestratorStatus:
-    return orchestrator_status_from_workflow(
-        infer_resume_workflow_status(consensus=consensus, roadmap=roadmap)
-    )
+def infer_resume_status(roadmap) -> WorkflowStatus:
+    return infer_resume_workflow_status(roadmap=roadmap)

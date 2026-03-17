@@ -9,8 +9,7 @@ from typing import Any
 from vibrant.config import RoadmapExecutionMode
 from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.agent import AgentRecord
-from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
-from vibrant.models.state import OrchestratorStatus
+from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 
 from .policy.gatekeeper_loop.questions import current_pending_question, select_pending_question_by_text
@@ -19,7 +18,6 @@ from .policy.gatekeeper_loop.transitions import (
     infer_resume_status,
     plan_ui_transition,
 )
-from .policy.shared.workflow import orchestrator_status_from_workflow
 from .types import (
     AgentInstanceSnapshot,
     AgentRunSnapshot,
@@ -32,7 +30,7 @@ from .types import (
 
 @dataclass(frozen=True)
 class OrchestratorSnapshot:
-    status: OrchestratorStatus
+    status: WorkflowStatus
     pending_questions: tuple[str, ...]
     question_records: tuple[QuestionView, ...]
     roadmap: RoadmapDocument | None
@@ -140,8 +138,8 @@ class OrchestratorFacade:
     """UI-facing facade backed by the layered interface adapter."""
 
     def __init__(self, orchestrator) -> None:
-        self.orchestrator = orchestrator
-        self.control_plane = orchestrator.control_plane
+        self._orchestrator = orchestrator
+        self._control_plane = orchestrator._control_plane
         self.roles = _RoleReadView(self)
         self.instances = _InstanceReadView(self)
         self.runs = _RunReadView(self)
@@ -152,34 +150,55 @@ class OrchestratorFacade:
             status=self.get_workflow_status(),
             pending_questions=tuple(question.text for question in pending),
             question_records=tuple(self.list_question_records()),
-            roadmap=self.control_plane.get_roadmap(),
-            consensus=self.control_plane.get_consensus_document(),
-            consensus_path=self.orchestrator.consensus_path,
+            roadmap=self._control_plane.get_roadmap(),
+            consensus=self._control_plane.get_consensus_document(),
+            consensus_path=self._orchestrator._consensus_store.path,
             roles=tuple(self.list_roles()),
             instances=tuple(self.list_instances()),
             runs=tuple(self.list_runs()),
-            agent_records=tuple(self.orchestrator.agent_run_store.list()),
-            execution_mode=self.orchestrator.execution_mode,
+            agent_records=tuple(self._orchestrator._agent_run_store.list()),
+            execution_mode=self.get_execution_mode(),
             user_input_banner=self.get_user_input_banner(),
         )
 
-    def get_workflow_status(self) -> OrchestratorStatus:
-        return orchestrator_status_from_workflow(self.control_plane.get_workflow_status())
+    def get_workflow_status(self) -> WorkflowStatus:
+        return self._control_plane.get_workflow_status()
+
+    def workflow_snapshot(self):
+        return self._control_plane.workflow_snapshot()
+
+    def workflow_session(self):
+        return self._control_plane.workflow_session()
+
+    def gatekeeper_state(self):
+        return self._control_plane.gatekeeper_state()
+
+    def gatekeeper_session(self):
+        return self._control_plane.gatekeeper_session()
+
+    def task_loop_state(self):
+        return self._control_plane.task_loop_state()
 
     def get_consensus_document(self) -> ConsensusDocument | None:
-        return self.control_plane.get_consensus_document()
+        return self._control_plane.get_consensus_document()
 
     def get_roadmap(self) -> RoadmapDocument | None:
-        return self.control_plane.get_roadmap()
+        return self._control_plane.get_roadmap()
 
     def get_consensus_source_path(self) -> Path | None:
-        return self.orchestrator.consensus_path
+        return self._orchestrator._consensus_store.path
+
+    def get_execution_mode(self) -> RoadmapExecutionMode:
+        mode = self._orchestrator._config.execution_mode
+        if isinstance(mode, RoadmapExecutionMode):
+            return mode
+        return RoadmapExecutionMode(str(mode).strip().lower())
 
     def list_roles(self) -> list[RoleSnapshot]:
-        return self.control_plane.list_roles()
+        return self._control_plane.list_roles()
 
     def get_role(self, role: str) -> RoleSnapshot | None:
-        return self.control_plane.get_role(role)
+        return self._control_plane.get_role(role)
 
     def list_instances(
         self,
@@ -187,7 +206,7 @@ class OrchestratorFacade:
         role: str | None = None,
         active_only: bool = False,
     ) -> list[AgentInstanceSnapshot]:
-        instances = self.control_plane.list_instances()
+        instances = self._control_plane.list_instances()
         normalized_role = role.strip().lower() if isinstance(role, str) and role.strip() else None
         return [
             instance
@@ -197,7 +216,7 @@ class OrchestratorFacade:
         ]
 
     def get_instance(self, agent_id: str) -> AgentInstanceSnapshot | None:
-        return self.control_plane.get_instance(agent_id)
+        return self._control_plane.get_instance(agent_id)
 
     def list_runs(
         self,
@@ -208,13 +227,15 @@ class OrchestratorFacade:
         include_completed: bool = True,
         active_only: bool = False,
     ) -> list[AgentRunSnapshot]:
-        runs = self.control_plane.list_active_runs() if active_only else self.control_plane.list_runs()
+        runs = self._control_plane.list_active_runs() if active_only else self._control_plane.list_runs()
         normalized_role = role.strip().lower() if isinstance(role, str) and role.strip() else None
-        task_run_ids = (
-            self.orchestrator.attempt_store.run_ids_for_task(task_id)
-            if isinstance(task_id, str) and task_id.strip()
-            else None
-        )
+        task_run_ids = None
+        if isinstance(task_id, str) and task_id.strip():
+            task_run_ids = {
+                run_id
+                for run_id, mapped_task_id in self.get_run_task_ids().items()
+                if mapped_task_id == task_id
+            }
         snapshots: list[AgentRunSnapshot] = []
         for run in runs:
             if task_run_ids is not None and run.identity.run_id not in task_run_ids:
@@ -229,25 +250,25 @@ class OrchestratorFacade:
         return snapshots
 
     def list_active_runs(self) -> list[AgentRunSnapshot]:
-        return self.control_plane.list_active_runs()
+        return self._control_plane.list_active_runs()
 
     def get_run(self, run_id: str) -> AgentRunSnapshot | None:
-        return self.control_plane.get_run(run_id)
+        return self._control_plane.get_run(run_id)
 
     def get_attempt_execution(self, attempt_id: str):
-        return self.control_plane.get_attempt_execution(attempt_id)
+        return self._control_plane.get_attempt_execution(attempt_id)
 
     def get_conversation(self, conversation_id: str):
-        return self.control_plane.conversation_session(conversation_id)
+        return self._control_plane.conversation_session(conversation_id)
 
     def conversation(self, conversation_id: str):
-        return self.control_plane.conversation(conversation_id)
+        return self._control_plane.conversation(conversation_id)
 
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False):
-        return self.control_plane.subscribe_conversation(conversation_id, callback, replay=replay)
+        return self._control_plane.subscribe_conversation(conversation_id, callback, replay=replay)
 
     def gatekeeper_conversation_id(self) -> str | None:
-        return self.control_plane.gatekeeper_conversation_id()
+        return self._control_plane.gatekeeper_conversation_id()
 
     def subscribe_runtime_events(
         self,
@@ -258,7 +279,7 @@ class OrchestratorFacade:
         task_id: str | None = None,
         event_types=None,
     ):
-        return self.control_plane.subscribe_runtime_events(
+        return self._control_plane.subscribe_runtime_events(
             callback,
             agent_id=agent_id,
             run_id=run_id,
@@ -270,19 +291,22 @@ class OrchestratorFacade:
         normalized_run_id = run_id.strip() if isinstance(run_id, str) else ""
         if not normalized_run_id:
             return None
-        return self.orchestrator.attempt_store.task_id_for_run(normalized_run_id)
+        return self._control_plane.task_id_for_run(normalized_run_id)
 
     def list_question_records(self) -> list[QuestionView]:
-        return self.control_plane.list_question_records()
+        return self._control_plane.list_question_records()
+
+    def get_question(self, question_id: str) -> QuestionView | None:
+        return self._control_plane.get_question(question_id)
 
     def list_pending_question_records(self) -> list[QuestionView]:
-        return self.control_plane.list_pending_question_records()
+        return self._control_plane.list_pending_question_records()
 
     def get_task(self, task_id: str) -> TaskInfo | None:
-        return self.control_plane.get_task(task_id)
+        return self._control_plane.get_task(task_id)
 
     def add_task(self, task: TaskInfo, *, index: int | None = None) -> TaskInfo:
-        return self.control_plane.add_task(task, index=index)
+        return self._control_plane.add_task(task, index=index)
 
     def update_task_definition(
         self,
@@ -316,16 +340,16 @@ class OrchestratorFacade:
             if task is None:
                 raise KeyError(f"Task not found: {task_id}")
             return task
-        return self.control_plane.update_task_definition(task_id, **patch)
+        return self._control_plane.update_task_definition(task_id, **patch)
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:
-        return self.control_plane.reorder_tasks(ordered_task_ids)
+        return self._control_plane.reorder_tasks(ordered_task_ids)
 
     def replace_roadmap(self, *, tasks: list[TaskInfo], project: str | None = None) -> RoadmapDocument:
-        return self.control_plane.replace_roadmap(tasks=tasks, project=project)
+        return self._control_plane.replace_roadmap(tasks=tasks, project=project)
 
-    def update_consensus(self, *, status: ConsensusStatus | str | None = None, context: str | None = None) -> ConsensusDocument:
-        return self.control_plane.update_consensus(status=status, context=context)
+    def update_consensus(self, *, context: str | None = None) -> ConsensusDocument:
+        return self._control_plane.update_consensus(context=context)
 
     def request_user_decision(
         self,
@@ -339,7 +363,7 @@ class OrchestratorFacade:
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
     ) -> QuestionView:
-        return self.control_plane.request_user_decision(
+        return self._control_plane.request_user_decision(
             text,
             source_agent_id=source_agent_id,
             source_role=source_role,
@@ -351,7 +375,7 @@ class OrchestratorFacade:
         )
 
     def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionView:
-        return self.control_plane.withdraw_question(question_id, reason=reason)
+        return self._control_plane.withdraw_question(question_id, reason=reason)
 
     def get_task_summaries(self) -> dict[str, str]:
         summaries: dict[str, tuple[float, str]] = {}
@@ -376,7 +400,7 @@ class OrchestratorFacade:
         return {task_id: summary for task_id, (_, summary) in summaries.items()}
 
     def get_run_task_ids(self) -> dict[str, str]:
-        return self.orchestrator.attempt_store.run_task_ids()
+        return self._control_plane.run_task_ids()
 
     def get_user_input_banner(self) -> str:
         question = current_pending_question(self.list_pending_question_records())
@@ -385,35 +409,71 @@ class OrchestratorFacade:
         return f"Gatekeeper needs your input: {question.text}"
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
-        return self.control_plane.write_consensus_document(document)
+        return self._control_plane.write_consensus_document(document)
 
     async def submit_user_message(self, text: str):
-        return await self.control_plane.submit_user_input(text)
+        return await self._control_plane.submit_user_input(text)
 
     async def answer_user_decision(self, question_id: str, answer: str):
-        return await self.control_plane.submit_user_input(answer, question_id=question_id)
+        return await self._control_plane.submit_user_input(answer, question_id=question_id)
 
     async def wait_for_gatekeeper_submission(self, submission):
-        return await self.control_plane.wait_for_gatekeeper_submission(submission)
+        return await self._control_plane.wait_for_gatekeeper_submission(submission)
+
+    async def respond_to_gatekeeper_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ):
+        return await self._control_plane.respond_to_gatekeeper_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
 
     async def submit_gatekeeper_input(self, text: str, *, question_id: str | None = None):
-        submission = await self.control_plane.submit_user_input(text, question_id=question_id)
-        return submission, await self.control_plane.wait_for_gatekeeper_submission(submission)
+        submission = await self._control_plane.submit_user_input(text, question_id=question_id)
+        return submission, await self._control_plane.wait_for_gatekeeper_submission(submission)
 
     async def submit_gatekeeper_message(self, text: str):
         _, result = await self.submit_gatekeeper_input(text)
         return result
 
     async def run_next_task(self):
-        return await self.control_plane.run_next_task()
+        return await self._control_plane.run_next_task()
 
     async def run_until_blocked(self):
-        return await self.control_plane.run_until_blocked()
+        return await self._control_plane.run_until_blocked()
+
+    async def pause_gatekeeper(self, reason: str | None = None):
+        return await self._control_plane.pause_gatekeeper(reason)
+
+    async def resume_gatekeeper(self):
+        return await self._control_plane.resume_gatekeeper()
+
+    async def pause_task_execution(self):
+        return await self._control_plane.pause_task_execution()
+
+    async def resume_task_execution(self):
+        return await self._control_plane.resume_task_execution()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await self._control_plane.resume_attempt(attempt_id)
+
+    async def pause_policies(self, reason: str | None = None):
+        return await self._control_plane.pause_policies(reason)
+
+    async def resume_policies(self):
+        return await self._control_plane.resume_policies()
 
     async def interrupt_gatekeeper(self) -> bool:
-        if not self.control_plane.gatekeeper_busy():
+        if not self._control_plane.gatekeeper_busy():
             return False
-        session = await self.orchestrator.gatekeeper_lifecycle.interrupt_active_turn()
+        session = await self._control_plane.interrupt_gatekeeper()
         return session.lifecycle_state in {
             GatekeeperLifecycleStatus.RUNNING,
             GatekeeperLifecycleStatus.AWAITING_USER,
@@ -429,19 +489,19 @@ class OrchestratorFacade:
         return result
 
     def pause_workflow(self):
-        self.control_plane.pause_workflow()
+        self._control_plane.pause_workflow()
         return self.get_workflow_status()
 
     def resume_workflow(self):
-        self.control_plane.resume_workflow()
+        self._control_plane.resume_workflow()
         return self.get_workflow_status()
 
-    def end_planning_phase(self) -> OrchestratorStatus:
-        self.control_plane.end_planning_phase()
+    def end_planning_phase(self) -> WorkflowStatus:
+        self._control_plane.end_planning_phase()
         return self.get_workflow_status()
 
     def accept_review_ticket(self, ticket_id: str):
-        return self.control_plane.accept_review_ticket(ticket_id)
+        return self._control_plane.accept_review_ticket(ticket_id)
 
     def retry_review_ticket(
         self,
@@ -451,7 +511,7 @@ class OrchestratorFacade:
         prompt_patch: str | None = None,
         acceptance_patch: list[str] | None = None,
     ):
-        return self.control_plane.retry_review_ticket(
+        return self._control_plane.retry_review_ticket(
             ticket_id,
             failure_reason=failure_reason,
             prompt_patch=prompt_patch,
@@ -459,7 +519,7 @@ class OrchestratorFacade:
         )
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str):
-        return self.control_plane.escalate_review_ticket(ticket_id, reason=reason)
+        return self._control_plane.escalate_review_ticket(ticket_id, reason=reason)
 
     def list_pending_questions(self) -> list[str]:
         return [record.text for record in self.list_pending_question_records()]
@@ -468,49 +528,54 @@ class OrchestratorFacade:
         question = current_pending_question(self.list_pending_question_records())
         return question.text if question is not None else None
 
-    def can_transition_to(self, next_status: OrchestratorStatus) -> bool:
+    def can_transition_to(self, next_status: WorkflowStatus) -> bool:
         current = self.get_workflow_status()
         return can_transition_ui_status(current, next_status)
 
-    def transition_workflow_state(self, next_status: OrchestratorStatus) -> None:
+    def transition_workflow_state(self, next_status: WorkflowStatus) -> None:
         current_status = self.get_workflow_status()
         plan = plan_ui_transition(current_status, next_status)
         if plan.action == "noop":
             return
         if plan.action == "pause":
-            self.control_plane.pause_workflow()
+            self._control_plane.pause_workflow()
             return
         if plan.action == "resume":
-            self.control_plane.resume_workflow()
+            self._control_plane.resume_workflow()
+            return
+        if plan.action == "begin_planning":
+            self._control_plane.begin_planning_phase()
             return
         if plan.action == "end_planning":
-            self.control_plane.end_planning_phase()
+            self._control_plane.end_planning_phase()
             return
-        self.control_plane.set_workflow_status(plan.workflow_status)
+        raise ValueError(f"Unhandled workflow transition action: {plan.action}")
 
-    def infer_resume_status(self) -> OrchestratorStatus:
-        workflow_state = self.orchestrator.workflow_state_store.load()
-        if (
-            workflow_state.workflow_status is WorkflowStatus.PAUSED
-            and workflow_state.resume_status is not None
-        ):
-            return orchestrator_status_from_workflow(workflow_state.resume_status)
+    def infer_resume_status(self) -> WorkflowStatus:
+        workflow_session = self.workflow_session()
+        if workflow_session.status is WorkflowStatus.PAUSED and workflow_session.resume_status is not None:
+            return workflow_session.resume_status
         return infer_resume_status(
-            self.get_consensus_document(),
             self.snapshot().roadmap,
         )
 
     def list_active_attempts(self):
-        return self.control_plane.list_active_attempts()
+        return self._control_plane.list_active_attempts()
+
+    def list_attempt_executions(self, *, task_id: str | None = None, status=None):
+        return self._control_plane.list_attempt_executions(task_id=task_id, status=status)
 
     def get_review_ticket(self, ticket_id: str):
-        return self.control_plane.get_review_ticket(ticket_id)
+        return self._control_plane.get_review_ticket(ticket_id)
+
+    def list_review_tickets(self, *, task_id: str | None = None, status=None):
+        return self._control_plane.list_review_tickets(task_id=task_id, status=status)
 
     def list_pending_review_tickets(self):
-        return self.control_plane.list_pending_review_tickets()
+        return self._control_plane.list_pending_review_tickets()
 
     def list_recent_events(self, *, limit: int = 20):
-        return self.control_plane.list_recent_events(limit=limit)
+        return self._control_plane.list_recent_events(limit=limit)
 
     def gatekeeper_busy(self) -> bool:
-        return self.control_plane.gatekeeper_busy()
+        return self._control_plane.gatekeeper_busy()

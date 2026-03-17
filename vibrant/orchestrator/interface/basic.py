@@ -21,7 +21,7 @@ from ..basic.stores import (
 )
 from ..policy.gatekeeper_loop.roles import GATEKEEPER_ROLE
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
-from ..policy.shared.workflow import WorkflowSessionResource
+from ..policy.workflow import WorkflowSessionResource
 from ..policy.task_loop.roles import DEFAULT_TASK_AGENT_ROLE
 from ..policy.task_loop import TaskLoop
 from ..types import ConversationSummary
@@ -36,7 +36,11 @@ from ..types import (
     AgentRunRuntimeSnapshot,
     AgentRunSnapshot,
     AgentRunWorkspaceSnapshot,
+    AttemptExecutionView,
+    AttemptStatus,
     QuestionView,
+    ReviewTicket,
+    ReviewTicketStatus,
     RoleSnapshot,
 )
 
@@ -156,6 +160,12 @@ class BasicQueryAdapter:
     def list_recent_events(self, *, limit: int = 20):
         return self.event_log.list_recent_events(limit=limit)
 
+    def task_id_for_run(self, run_id: str) -> str | None:
+        return self.attempt_store.task_id_for_run(run_id)
+
+    def run_task_ids(self) -> dict[str, str]:
+        return self.attempt_store.run_task_ids()
+
     def get_consensus_document(self):
         return self.consensus_store.load()
 
@@ -232,17 +242,39 @@ class BasicQueryAdapter:
     def list_question_records(self) -> list[QuestionView]:
         return [QuestionView.from_record(record) for record in self.question_store.list()]
 
+    def get_question(self, question_id: str) -> QuestionView | None:
+        record = self.question_store.get(question_id)
+        if record is None:
+            return None
+        return QuestionView.from_record(record)
+
     def list_pending_question_records(self) -> list[QuestionView]:
         return [QuestionView.from_record(record) for record in self.question_store.list_pending()]
 
     def list_active_attempts(self):
         return self.attempt_store.list_active()
 
+    def list_attempt_executions(
+        self,
+        *,
+        task_id: str | None = None,
+        status: AttemptStatus | None = None,
+    ) -> list[AttemptExecutionView]:
+        return self.task_loop.execution.list_attempt_executions(task_id=task_id, status=status)
+
     def get_attempt_execution(self, attempt_id: str):
         return self.task_loop.execution.attempt_execution(attempt_id)
 
     def get_review_ticket(self, ticket_id: str):
         return self.task_loop.get_review_ticket(ticket_id)
+
+    def list_review_tickets(
+        self,
+        *,
+        task_id: str | None = None,
+        status: ReviewTicketStatus | None = None,
+    ) -> list[ReviewTicket]:
+        return self.task_loop.list_review_tickets(task_id=task_id, status=status)
 
     def list_pending_review_tickets(self):
         return self.task_loop.list_pending_review_tickets()
@@ -276,6 +308,7 @@ class BasicQueryAdapter:
         awaiting_input = False
         input_requests = []
         has_handle = False
+        stop_reason = record.lifecycle.stop_reason
         try:
             runtime_snapshot = self.runtime_service.snapshot_handle(record.identity.run_id)
         except KeyError:
@@ -285,6 +318,10 @@ class BasicQueryAdapter:
             awaiting_input = runtime_snapshot.awaiting_input
             input_requests = runtime_snapshot.input_requests
             has_handle = True
+        done = record.lifecycle.status.value in _DONE_RUN_STATUSES and stop_reason != "paused"
+        active = record.lifecycle.status.value in _ACTIVE_RUN_STATUSES and not (stop_reason == "paused" and not has_handle)
+        if not has_handle and stop_reason == "paused":
+            state = "stopped"
 
         return AgentRunSnapshot(
             identity=AgentRunIdentitySnapshot(
@@ -296,9 +333,10 @@ class BasicQueryAdapter:
                 status=record.lifecycle.status.value,
                 state=state,
                 has_handle=has_handle,
-                active=record.lifecycle.status.value in _ACTIVE_RUN_STATUSES,
-                done=record.lifecycle.status.value in _DONE_RUN_STATUSES,
+                active=active,
+                done=done,
                 awaiting_input=awaiting_input,
+                stop_reason=record.lifecycle.stop_reason,
                 pid=record.lifecycle.pid,
                 started_at=record.lifecycle.started_at,
                 finished_at=record.lifecycle.finished_at,

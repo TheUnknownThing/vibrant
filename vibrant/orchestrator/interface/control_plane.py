@@ -19,6 +19,24 @@ class InterfaceControlPlane:
     async def wait_for_gatekeeper_submission(self, submission):
         return await self.backend.commands.wait_for_gatekeeper_submission(submission)
 
+    async def respond_to_gatekeeper_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ):
+        return await self.backend.commands.respond_to_gatekeeper_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
+
+    def begin_planning_phase(self):
+        return self.backend.commands.begin_planning_phase()
+
     def end_planning_phase(self):
         return self.backend.commands.end_planning_phase()
 
@@ -28,14 +46,35 @@ class InterfaceControlPlane:
     def resume_workflow(self):
         return self.backend.commands.resume_workflow()
 
-    def set_workflow_status(self, status):
-        return self.backend.commands.set_workflow_status(status)
-
     async def restart_gatekeeper(self, reason: str | None = None):
         return await self.backend.commands.restart_gatekeeper(reason)
 
     async def stop_gatekeeper(self):
         return await self.backend.commands.stop_gatekeeper()
+
+    async def pause_gatekeeper(self, reason: str | None = None):
+        return await self.backend.commands.pause_gatekeeper(reason)
+
+    async def resume_gatekeeper(self):
+        return await self.backend.commands.resume_gatekeeper()
+
+    async def interrupt_gatekeeper(self):
+        return await self.backend.commands.interrupt_gatekeeper()
+
+    async def pause_task_execution(self):
+        return await self.backend.commands.pause_task_execution()
+
+    async def resume_task_execution(self):
+        return await self.backend.commands.resume_task_execution()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await self.backend.commands.resume_attempt(attempt_id)
+
+    async def pause_policies(self, reason: str | None = None):
+        return await self.backend.commands.pause_policies(reason)
+
+    async def resume_policies(self):
+        return await self.backend.commands.resume_policies()
 
     async def run_next_task(self):
         return await self.backend.commands.run_next_task()
@@ -96,6 +135,12 @@ class InterfaceControlPlane:
     def list_recent_events(self, *, limit: int = 20):
         return self.backend.queries.list_recent_events(limit=limit)
 
+    def task_id_for_run(self, run_id: str) -> str | None:
+        return self.backend.queries.task_id_for_run(run_id)
+
+    def run_task_ids(self) -> dict[str, str]:
+        return self.backend.queries.run_task_ids()
+
     def get_workflow_status(self):
         return self.backend.queries.get_workflow_status()
 
@@ -132,17 +177,26 @@ class InterfaceControlPlane:
     def list_question_records(self):
         return self.backend.queries.list_question_records()
 
+    def get_question(self, question_id: str):
+        return self.backend.queries.get_question(question_id)
+
     def list_pending_question_records(self):
         return self.backend.queries.list_pending_question_records()
 
     def list_active_attempts(self):
         return self.backend.queries.list_active_attempts()
 
+    def list_attempt_executions(self, *, task_id: str | None = None, status=None):
+        return self.backend.queries.list_attempt_executions(task_id=task_id, status=status)
+
     def get_attempt_execution(self, attempt_id: str):
         return self.backend.queries.get_attempt_execution(attempt_id)
 
     def get_review_ticket(self, ticket_id: str):
         return self.backend.queries.get_review_ticket(ticket_id)
+
+    def list_review_tickets(self, *, task_id: str | None = None, status=None):
+        return self.backend.queries.list_review_tickets(task_id=task_id, status=status)
 
     def list_pending_review_tickets(self):
         return self.backend.queries.list_pending_review_tickets()
@@ -162,8 +216,8 @@ class InterfaceControlPlane:
     def replace_roadmap(self, *, tasks, project: str | None = None):
         return self.backend.commands.replace_roadmap(tasks=tasks, project=project)
 
-    def update_consensus(self, *, status=None, context: str | None = None):
-        return self.backend.commands.update_consensus(status=status, context=context)
+    def update_consensus(self, *, context: str | None = None):
+        return self.backend.commands.update_consensus(context=context)
 
     def write_consensus_document(self, document):
         return self.backend.commands.write_consensus_document(document)
