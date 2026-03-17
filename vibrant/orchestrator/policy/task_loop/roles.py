@@ -8,7 +8,7 @@ from vibrant.models.task import TaskInfo
 from ...basic.stores import AgentInstanceStore
 
 DEFAULT_TASK_AGENT_ROLE = "code"
-DEFAULT_VALIDATION_AGENT_ROLE = "test"
+DEFAULT_TEST_AGENT_ROLE = "test"
 
 
 def resolve_task_agent_role(task: TaskInfo) -> str:
@@ -30,12 +30,12 @@ def ensure_task_agent_instance(
     )
 
 
-def ensure_validation_agent_instance(
+def ensure_test_agent_instance(
     store: AgentInstanceStore,
     *,
     task_id: str,
     provider: AgentInstanceProviderConfig,
-    role: str = DEFAULT_VALIDATION_AGENT_ROLE,
+    role: str = DEFAULT_TEST_AGENT_ROLE,
 ) -> AgentInstanceRecord:
     return _ensure_scoped_agent_instance(
         store,

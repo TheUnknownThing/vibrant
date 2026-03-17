@@ -1,4 +1,4 @@
-"""ValidationAgent — read-only agent for validation runs."""
+"""ExploreAgent — read-only agent for project exploration runs."""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from vibrant.providers.registry import provider_transport
 from .base import ReadOnlyAgentBase
 
 
-class ValidationAgent(ReadOnlyAgentBase):
-    """Agent that validates completed task work in a read-only workspace."""
+class ExploreAgent(ReadOnlyAgentBase):
+    """Agent that explores repository structure in a strict read-only workspace."""
 
     def get_agent_type(self) -> AgentType:
-        return AgentType.TEST
+        return AgentType.EXPLORE
 
     def build_run_record(
         self,
@@ -29,9 +29,9 @@ class ValidationAgent(ReadOnlyAgentBase):
         run_id: str | None = None,
         vibrant_dir: str | Path | None = None,
     ) -> AgentRunRecord:
-        resolved_agent_id = agent_id or f"test-{task_id}"
-        resolved_run_id = run_id or f"run-test-{task_id}-{uuid4().hex[:8]}"
-        resolved_role = role or AgentType.TEST.value
+        resolved_agent_id = agent_id or f"explore-{task_id}"
+        resolved_run_id = run_id or f"run-explore-{task_id}-{uuid4().hex[:8]}"
+        resolved_role = role or AgentType.EXPLORE.value
 
         provider_kwargs: dict[str, str | None] = {}
         if vibrant_dir is not None:
@@ -46,7 +46,7 @@ class ValidationAgent(ReadOnlyAgentBase):
                 "run_id": resolved_run_id,
                 "agent_id": resolved_agent_id,
                 "role": resolved_role,
-                "type": AgentType.TEST,
+                "type": AgentType.EXPLORE,
             },
             lifecycle={"status": AgentStatus.SPAWNING},
             context={

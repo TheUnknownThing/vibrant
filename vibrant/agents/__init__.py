@@ -6,6 +6,7 @@ types used by the orchestrator to run code, test, merge, and gatekeeper agents.
 
 from .base import AgentBase, AgentRunResult, ReadOnlyAgentBase
 from .code_agent import CodeAgent
+from .explore_agent import ExploreAgent
 from .gatekeeper import (
     ACCEPT_REVIEW_TICKET_MCP_TOOL,
     ADD_TASK_MCP_TOOL,
@@ -28,7 +29,7 @@ from .gatekeeper import (
     WITHDRAW_QUESTION_MCP_TOOL,
 )
 from .merge_agent import MergeAgent
-from .validation_agent import ValidationAgent
+from .test_agent import TestAgent
 from .runtime import (
     AgentHandle,
     AgentRecordCallback,
@@ -49,6 +50,7 @@ __all__ = [
     "AgentRuntime",
     "BaseAgentRuntime",
     "CodeAgent",
+    "ExploreAgent",
     "ACCEPT_REVIEW_TICKET_MCP_TOOL",
     "ADD_TASK_MCP_TOOL",
     "ESCALATE_REVIEW_TICKET_MCP_TOOL",
@@ -72,7 +74,7 @@ __all__ = [
     "RESUME_WORKFLOW_MCP_TOOL",
     "RETRY_REVIEW_TICKET_MCP_TOOL",
     "RunState",
-    "ValidationAgent",
+    "TestAgent",
     "UPDATE_CONSENSUS_MCP_TOOL",
     "UPDATE_TASK_DEFINITION_MCP_TOOL",
     "WITHDRAW_QUESTION_MCP_TOOL",

@@ -94,26 +94,53 @@ def _compile_codex_invocation(accesses: Sequence[MCPAccessDescriptor]) -> Provid
     ready_bindings: list[str] = []
     pending_bindings: list[str] = []
     for access in accesses:
-        if not access.endpoint_url or not access.server_id:
+        if not access.server_id:
             pending_bindings.append(access.binding_id)
             continue
 
-        ready_bindings.append(access.binding_id)
-        overrides.extend(
-            [
-                f"mcp_servers.{access.server_id}.enabled={_toml_literal(True)}",
-                f"mcp_servers.{access.server_id}.url={_toml_literal(access.endpoint_url)}",
-                f"mcp_servers.{access.server_id}.required={_toml_literal(access.required)}",
-            ]
-        )
-        if access.visible_tools:
-            overrides.append(
-                f"mcp_servers.{access.server_id}.enabled_tools={_toml_literal(access.visible_tools)}"
+        if access.endpoint_url:
+            ready_bindings.append(access.binding_id)
+            overrides.extend(
+                [
+                    f"mcp_servers.{access.server_id}.enabled={_toml_literal(True)}",
+                    f"mcp_servers.{access.server_id}.url={_toml_literal(access.endpoint_url)}",
+                    f"mcp_servers.{access.server_id}.required={_toml_literal(access.required)}",
+                ]
             )
-        if access.static_headers:
-            overrides.append(
-                f"mcp_servers.{access.server_id}.http_headers={_toml_literal(access.static_headers)}"
+            if access.visible_tools:
+                overrides.append(
+                    f"mcp_servers.{access.server_id}.enabled_tools={_toml_literal(access.visible_tools)}"
+                )
+            if access.static_headers:
+                overrides.append(
+                    f"mcp_servers.{access.server_id}.http_headers={_toml_literal(access.static_headers)}"
+                )
+            continue
+
+        if access.stdio_command:
+            ready_bindings.append(access.binding_id)
+            overrides.extend(
+                [
+                    f"mcp_servers.{access.server_id}.enabled={_toml_literal(True)}",
+                    f"mcp_servers.{access.server_id}.command={_toml_literal(access.stdio_command)}",
+                    f"mcp_servers.{access.server_id}.required={_toml_literal(access.required)}",
+                ]
             )
+            if access.stdio_args:
+                overrides.append(
+                    f"mcp_servers.{access.server_id}.args={_toml_literal(access.stdio_args)}"
+                )
+            if access.stdio_env:
+                overrides.append(
+                    f"mcp_servers.{access.server_id}.env={_toml_literal(access.stdio_env)}"
+                )
+            if access.visible_tools:
+                overrides.append(
+                    f"mcp_servers.{access.server_id}.enabled_tools={_toml_literal(access.visible_tools)}"
+                )
+            continue
+
+        pending_bindings.append(access.binding_id)
 
     debug_metadata = {
         "mcp_access": _serialize_descriptors(accesses),
