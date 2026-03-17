@@ -171,9 +171,13 @@ async def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, compl
     validation = completion.validation or ValidationOutcome(
         status="skipped",
         run_ids=[],
-        summary="Validation not configured yet.",
+        summary="Test stage did not run.",
     )
-    loop.attempt_store.update(completion.attempt_id, status=AttemptStatus.REVIEW_PENDING)
+    loop.attempt_store.update(
+        completion.attempt_id,
+        status=AttemptStatus.REVIEW_PENDING,
+        validation_run_ids=list(validation.run_ids),
+    )
     task_projection.record_task_state(
         loop,
         completion.task_id,

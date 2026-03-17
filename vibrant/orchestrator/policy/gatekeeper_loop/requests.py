@@ -69,7 +69,7 @@ def build_review_submission_request(
 ) -> GatekeeperSubmissionRequest:
     validation_status = validation.status if validation is not None else "skipped"
     if validation is None:
-        validation_summary = "Validation not configured."
+        validation_summary = "Test stage not configured."
     else:
         validation_summary = validation.summary or "Validation summary unavailable."
     trigger_description = "\n".join(

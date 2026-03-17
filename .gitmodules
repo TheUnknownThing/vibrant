@@ -1,0 +1,3 @@
+[submodule "tools/pyCUA"]
+	path = tools/pyCUA
+	url = https://github.com/TheUnknownThing/pyCUA.git

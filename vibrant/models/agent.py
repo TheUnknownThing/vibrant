@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serial
 
 class AgentType(str, enum.Enum):
     CODE = "code"
+    EXPLORE = "explore"
     TEST = "test"
     MERGE = "merge"
     GATEKEEPER = "gatekeeper"

@@ -21,6 +21,9 @@ class MCPAccessDescriptor:
     endpoint_url: str | None = None
     server_id: str | None = None
     transport_hint: Literal["http", "stdio"] | None = None
+    stdio_command: str | None = None
+    stdio_args: list[str] = field(default_factory=list)
+    stdio_env: dict[str, str] = field(default_factory=dict)
     required: bool = True
     static_headers: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -38,6 +41,9 @@ class MCPAccessDescriptor:
             "endpoint_url": self.endpoint_url,
             "server_id": self.server_id,
             "transport_hint": self.transport_hint,
+            "stdio_command": self.stdio_command,
+            "stdio_args": list(self.stdio_args),
+            "stdio_env": dict(self.stdio_env),
             "required": self.required,
             "static_headers": dict(self.static_headers),
             "metadata": dict(self.metadata),
