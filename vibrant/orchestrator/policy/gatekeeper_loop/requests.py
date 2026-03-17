@@ -71,7 +71,7 @@ def build_review_submission_request(
     if validation is None:
         validation_summary = "Test stage not configured."
     else:
-        validation_summary = validation.summary or "Validation summary unavailable."
+        validation_summary = validation.summary or "Test stage summary unavailable."
     trigger_description = "\n".join(
         [
             f"Review ticket: {ticket.ticket_id}",
