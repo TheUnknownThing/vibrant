@@ -9,14 +9,14 @@ def build_test_prompt(
     task_id: str,
     branch: str,
     code_summary: str | None,
+    pycua_enabled: bool = False
 ) -> str:
     """Render the prompt passed to a test agent."""
 
     prior_summary = (
         code_summary or "No implementation summary was captured from the code agent."
     )
-    return "\n".join(
-        [
+    prompt_lines = [
             f"You are a test agent working on Project {project}.",
             "## Validation Target",
             f"Task ID: {task_id}",
@@ -27,7 +27,10 @@ def build_test_prompt(
             "1. You are strictly read-only and must not create, edit, move, or delete files.",
             "2. Do NOT modify source files, git history, or orchestrator-owned `.vibrant` state.",
             "3. Select the validation steps that best verify the implementation and stop only if a step cannot continue.",
-            "4. You may use the pyCUA MCP `computer` tool when explicitly needed for UI/system validation.",
-            "5. Report whether validation passed or failed, which commands ran, and the first concrete failure if any.",
+            "4. Report whether validation passed or failed, which commands ran, and the first concrete failure if any.",
         ]
-    )
+    
+    if pycua_enabled:
+        prompt_lines.append("5. You may use the pyCUA MCP `computer` tool when explicitly needed for UI/system validation.")
+    
+    return "\n".join(prompt_lines)

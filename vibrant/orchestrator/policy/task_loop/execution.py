@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vibrant.agents.code_agent import CodeAgent
+from vibrant.agents.test_agent import TestAgent, pycua_enabled
 from vibrant.agents.test_agent import TestAgent
 from vibrant.agents.runtime import AgentHandle, BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig
@@ -463,11 +464,21 @@ class ExecutionCoordinator:
         workspace: WorkspaceHandle,
         code_summary: str | None,
     ) -> ValidationOutcome:
+        if not self.config.test_commands:
+            return ValidationOutcome(
+                status="skipped",
+                run_ids=[],
+                summary="Test stage skipped because no test commands are configured.",
+            )
+        
+        cua_enabled = pycua_enabled(self.project_root, self.config)
+
         prompt = build_test_prompt(
             project=self.project_root.name,
             task_id=attempt.task_id,
             branch=workspace.branch,
             code_summary=code_summary,
+            pycua_enabled=cua_enabled,
         )
         instance = ensure_test_agent_instance(
             self.agent_instance_store,
@@ -518,11 +529,11 @@ class ExecutionCoordinator:
         )
 
         invocation_plan = build_test_agent_invocation_plan(
-            project_root=self.project_root,
             config=self.config,
             run_id=test_record.identity.run_id,
             role=test_record.identity.role,
             extra_access=[bound_capabilities.access],
+            pycua_enabled=cua_enabled,
         )
         invocation_plan.debug_metadata["mcp_asgi_app"] = mcp_host.http_app()
         if use_inprocess_mcp:
