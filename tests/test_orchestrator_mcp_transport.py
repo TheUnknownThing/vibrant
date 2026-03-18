@@ -49,8 +49,8 @@ def _prepare_orchestrator(tmp_path: Path):
 async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_path: Path) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     try:
-        workspace = orchestrator.workspace_service.prepare_task_workspace("task-1")
-        attempt = orchestrator.attempt_store.create(
+        workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+        attempt = orchestrator._attempt_store.create(
             task_id="task-1",
             task_definition_version=1,
             workspace_id=workspace.workspace_id,
@@ -58,18 +58,18 @@ async def test_fastmcp_host_exposes_gatekeeper_surface_over_loopback_http(tmp_pa
             code_run_id="run-task-1",
             conversation_id="attempt-conv-1",
         )
-        orchestrator.conversation_stream.bind_run(
+        orchestrator._conversation_stream.bind_run(
             conversation_id="attempt-conv-1",
             run_id="run-task-1",
         )
-        orchestrator.conversation_stream.record_host_message(
+        orchestrator._conversation_stream.record_host_message(
             conversation_id="attempt-conv-1",
             role="system",
             text="Attempt resumed for transport inspection.",
         )
         orchestrator.mcp_host.transport.port = 8765
         app = orchestrator.mcp_host.http_app()
-        bound = orchestrator.binding_service.bind_preset(
+        bound = orchestrator._binding_service.bind_preset(
             preset=gatekeeper_binding_preset(orchestrator.mcp_server, "gatekeeper-test"),
             run_id="gatekeeper-test",
             conversation_id="gatekeeper-test",
@@ -149,7 +149,7 @@ async def test_fastmcp_host_filters_worker_bindings_server_side(tmp_path: Path) 
     try:
         orchestrator.mcp_host.transport.port = 8765
         app = orchestrator.mcp_host.http_app()
-        bound = orchestrator.binding_service.bind_preset(
+        bound = orchestrator._binding_service.bind_preset(
             preset=worker_binding_preset(orchestrator.mcp_server, "worker-1", "code"),
             run_id="task-1",
             conversation_id=None,
@@ -199,7 +199,7 @@ async def test_gatekeeper_lifecycle_compiles_and_passes_invocation_plan(tmp_path
         captured.update(kwargs)
         return _FakeHandle()
 
-    monkeypatch.setattr(orchestrator.gatekeeper_lifecycle.runtime_service, "start_run", fake_start_run)
+    monkeypatch.setattr(orchestrator._gatekeeper_lifecycle.runtime_service, "start_run", fake_start_run)
     async def fake_ensure_started() -> str:
         orchestrator.mcp_host.transport.port = 8765
         return "http://127.0.0.1:8765/mcp"
@@ -207,7 +207,7 @@ async def test_gatekeeper_lifecycle_compiles_and_passes_invocation_plan(tmp_path
     monkeypatch.setattr(orchestrator.mcp_host, "ensure_started", fake_ensure_started)
 
     try:
-        await orchestrator.gatekeeper_lifecycle.submit(
+        await orchestrator._gatekeeper_lifecycle.submit(
             request=GatekeeperRequest(
                 trigger=GatekeeperTrigger.USER_CONVERSATION,
                 trigger_description="Plan the next phase",
@@ -240,7 +240,7 @@ async def test_execution_coordinator_compiles_and_passes_worker_invocation_plan(
         captured.update(kwargs)
         return _FakeHandle()
 
-    monkeypatch.setattr(orchestrator.execution_coordinator.runtime_service, "start_run", fake_start_run)
+    monkeypatch.setattr(orchestrator._execution_coordinator.runtime_service, "start_run", fake_start_run)
 
     async def fake_ensure_started() -> str:
         orchestrator.mcp_host.transport.port = 8765
@@ -263,7 +263,7 @@ async def test_execution_coordinator_compiles_and_passes_worker_invocation_plan(
             prompt="Implement the task.",
         )
 
-        await orchestrator.execution_coordinator.start_attempt(prepared)
+        await orchestrator._execution_coordinator.start_attempt(prepared)
         await asyncio.sleep(0)
 
         invocation_plan = captured["invocation_plan"]

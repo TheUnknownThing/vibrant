@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from vibrant.consensus.roadmap import RoadmapDocument
-from vibrant.models.consensus import ConsensusDocument, ConsensusStatus
+from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
 
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop import TaskLoop
-from ..types import QuestionPriority, QuestionView, ReviewResolutionRecord, WorkflowSnapshot, WorkflowStatus
+from ..types import QuestionPriority, QuestionView, ReviewResolutionRecord, RuntimeHandleSnapshot, WorkflowSnapshot, WorkflowStatus
 
 
 @dataclass(slots=True)
@@ -27,14 +27,65 @@ class PolicyCommandAdapter:
     async def wait_for_gatekeeper_submission(self, submission):
         return await self.gatekeeper_loop.wait_for_submission(submission)
 
+    async def respond_to_gatekeeper_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ) -> RuntimeHandleSnapshot:
+        return await self.gatekeeper_loop.respond_to_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
+
     async def restart_gatekeeper(self, reason: str | None = None):
         return await self.gatekeeper_loop.restart(reason)
 
     async def stop_gatekeeper(self):
         return await self.gatekeeper_loop.stop()
 
-    def set_workflow_status(self, status: WorkflowStatus) -> WorkflowSnapshot:
-        return self.gatekeeper_loop.transition_workflow(status)
+    async def pause_gatekeeper(self, reason: str | None = None):
+        return await self.gatekeeper_loop.pause(reason)
+
+    async def resume_gatekeeper(self):
+        return await self.gatekeeper_loop.resume()
+
+    async def interrupt_gatekeeper(self):
+        return await self.gatekeeper_loop.lifecycle.interrupt_active_turn()
+
+    async def pause_task_execution(self):
+        return await self.task_loop.pause_active_execution()
+
+    async def resume_task_execution(self):
+        return await self.task_loop.resume_active_execution()
+
+    async def resume_attempt(self, attempt_id: str):
+        return await self.task_loop.resume_attempt(attempt_id)
+
+    async def pause_policies(self, reason: str | None = None) -> dict[str, object]:
+        gatekeeper = await self.gatekeeper_loop.pause(reason)
+        attempts = await self.task_loop.pause_active_execution()
+        return {
+            "gatekeeper": gatekeeper,
+            "attempts": attempts,
+        }
+
+    async def resume_policies(self) -> dict[str, object]:
+        workflow = self.gatekeeper_loop.resume_workflow()
+        gatekeeper = await self.gatekeeper_loop.resume()
+        attempt = await self.task_loop.resume_active_execution()
+        return {
+            "workflow": workflow,
+            "gatekeeper": gatekeeper,
+            "attempt": attempt,
+        }
+
+    def begin_planning_phase(self) -> WorkflowSnapshot:
+        return self.gatekeeper_loop.begin_planning()
 
     def end_planning_phase(self) -> WorkflowSnapshot:
         return self.gatekeeper_loop.end_planning()
@@ -66,10 +117,9 @@ class PolicyCommandAdapter:
     def update_consensus(
         self,
         *,
-        status: ConsensusStatus | str | None = None,
         context: str | None = None,
     ) -> ConsensusDocument:
-        return self.gatekeeper_loop.update_consensus(status=status, context=context)
+        return self.gatekeeper_loop.update_consensus(context=context)
 
     def write_consensus_document(self, document: ConsensusDocument) -> ConsensusDocument:
         return self.gatekeeper_loop.write_consensus_document(document)

@@ -1,12 +1,34 @@
 """Provider-neutral adapter interfaces used by Vibrant.
 
 Task 2.1 defines the abstract session/thread/turn control surface that any
-provider integration must implement. Vibrant's internal runtime modes map to
-Codex sandbox controls as follows:
+provider integration must implement. The normative provider compatibility
+rules live in ``vibrant/providers/BEHAVIOR_CONTRACT.md``; this module holds
+the typed adapter surface and canonical event vocabulary that contract refers
+to.
+
+Vibrant's internal runtime modes map to Codex sandbox controls as follows:
 
 - ``read_only`` -> thread sandbox ``read-only`` and turn policy ``readOnly``
 - ``workspace_write`` -> thread sandbox ``workspace-write`` and turn policy ``workspaceWrite``
 - ``full_access`` -> thread sandbox ``danger-full-access`` and turn policy ``dangerFullAccess``
+
+The stable contract is the adapter surface plus the canonical event semantics.
+Providers may legitimately differ in incidental behavior such as event
+chunking, optional auxiliary events, provider payload shapes, and whether a
+terminal error is followed by a separate completion event. Orchestrator code
+must not rely on those subtleties.
+
+What the orchestrator *does* rely on is narrower and explicit:
+
+- the adapter methods below exist and fail fast when unsupported
+- resumable providers persist thread metadata onto ``agent_record.provider``
+  once a durable provider thread id is known
+- each turn eventually resolves by surfacing either ``turn.completed`` or
+  ``runtime.error``
+- assistant text intended for transcript/summary extraction is emitted through
+  ``content.delta``
+- interactive pauses are surfaced through ``request.opened`` /
+  ``request.resolved`` instead of hidden behind provider-specific state
 """
 
 from __future__ import annotations
@@ -15,7 +37,7 @@ from dataclasses import dataclass
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from typing import Literal, NotRequired, Required, TypeAlias, TypedDict
+from typing import Any, Literal, NotRequired, Required, TypeAlias, TypedDict
 
 from vibrant.type_defs import AsyncNone, JSONMapping, JSONObject, JSONValue, RequestId
 
@@ -326,7 +348,13 @@ class RuntimeMode(str, enum.Enum):
 
 
 class ProviderAdapter(ABC):
-    """Abstract provider adapter for session lifecycle and event delivery."""
+    """Abstract provider adapter for session lifecycle and event delivery.
+
+    Behavioral requirements are defined in
+    ``vibrant/providers/BEHAVIOR_CONTRACT.md``. The key rule is that adapters
+    normalize provider-native behavior into the lifecycle methods below and
+    the canonical event stream consumed by ``AgentBase`` and the orchestrator.
+    """
 
     def __init__(self, on_canonical_event: CanonicalEventHandler | None = None) -> None:
         self._canonical_event_handler = on_canonical_event
@@ -342,16 +370,27 @@ class ProviderAdapter(ABC):
         self._canonical_event_handler = handler
 
     @abstractmethod
-    async def start_session(self, *, cwd: str | None = None, **kwargs: JSONValue) -> JSONValue:
-        """Start the underlying provider session/process."""
+    async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+        """Start the underlying provider session/process.
+
+        After this returns, the adapter must be ready for thread operations.
+        """
 
     @abstractmethod
-    async def stop_session(self) -> None:
-        """Stop the underlying provider session/process."""
+    async def stop_session(self) -> Any:
+        """Stop the underlying provider session/process.
+
+        Implementations should make this safe after success, failure, or
+        interruption.
+        """
 
     @abstractmethod
-    async def start_thread(self, **kwargs: JSONValue) -> JSONValue:
-        """Open a fresh provider thread/conversation handle."""
+    async def start_thread(self, **kwargs: Any) -> Any:
+        """Open a fresh provider thread/conversation handle.
+
+        Resumable providers must eventually surface a durable thread id either
+        here or later in the canonical event stream.
+        """
 
     @abstractmethod
     async def resume_thread(self, provider_thread_id: str, **kwargs: JSONValue) -> JSONValue:
@@ -364,9 +403,13 @@ class ProviderAdapter(ABC):
         input_items: Sequence[JSONMapping],
         runtime_mode: RuntimeMode,
         approval_policy: str,
-        **kwargs: JSONValue,
-    ) -> JSONValue:
-        """Start a turn with structured input items and sandbox controls."""
+        **kwargs: Any,
+    ) -> Any:
+        """Start a turn with structured input items and sandbox controls.
+
+        A started turn must eventually resolve by emitting ``turn.completed``
+        or ``runtime.error`` through the canonical event stream.
+        """
 
     @abstractmethod
     async def interrupt_turn(self, **kwargs: JSONValue) -> JSONValue:
@@ -390,10 +433,14 @@ class ProviderAdapter(ABC):
         self,
         request_id: RequestId,
         *,
-        result: JSONValue | None = None,
-        error: JSONMapping | None = None,
-    ) -> JSONValue:
-        """Respond to a server-initiated JSON-RPC request."""
+        result: Any | None = None,
+        error: Mapping[str, Any] | None = None,
+    ) -> Any:
+        """Respond to a server-initiated JSON-RPC request.
+
+        Providers that surface ``request.opened`` events must implement this
+        method or fail explicitly when interactivity is unsupported.
+        """
 
     @abstractmethod
     async def on_canonical_event(self, event: CanonicalEvent) -> None:

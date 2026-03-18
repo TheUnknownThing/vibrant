@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, RoadmapStore, WorkflowStateStore
-from ...types import QuestionPriority, WorkflowSnapshot, WorkflowStatus
+from ...types import QuestionPriority, ReviewTicket, RuntimeHandleSnapshot, ValidationOutcome, WorkflowSnapshot, WorkflowStatus
 from . import commands, submission as submission_flow
 from .lifecycle import GatekeeperLifecycleService
 from .models import GatekeeperLoopState, GatekeeperSubmission
@@ -32,8 +32,37 @@ class GatekeeperUserLoop:
     async def submit_user_input(self, text: str, question_id: str | None = None) -> GatekeeperSubmission:
         return await submission_flow.submit_user_input(self, text, question_id=question_id)
 
+    async def submit_review(
+        self,
+        ticket: ReviewTicket,
+        *,
+        validation: ValidationOutcome | None = None,
+        code_summary: str | None = None,
+    ) -> GatekeeperSubmission:
+        return await submission_flow.submit_review(
+            self,
+            ticket,
+            validation=validation,
+            code_summary=code_summary,
+        )
+
     async def wait_for_submission(self, submission: GatekeeperSubmission) -> object:
         return await submission_flow.wait_for_submission(self, submission)
+
+    async def respond_to_request(
+        self,
+        run_id: str,
+        request_id: int | str,
+        *,
+        result: object | None = None,
+        error: dict[str, object] | None = None,
+    ) -> RuntimeHandleSnapshot:
+        return await self.lifecycle.respond_to_request(
+            run_id,
+            request_id,
+            result=result,
+            error=error,
+        )
 
     async def restart(self, reason: str | None = None) -> GatekeeperLoopState:
         await self.lifecycle.restart_session(reason=reason)
@@ -42,6 +71,16 @@ class GatekeeperUserLoop:
 
     async def stop(self) -> GatekeeperLoopState:
         await self.lifecycle.stop_session()
+        self._last_error = self.lifecycle.snapshot().last_error
+        return self.snapshot()
+
+    async def pause(self, reason: str | None = None) -> GatekeeperLoopState:
+        await self.lifecycle.pause_session(reason=reason)
+        self._last_error = self.lifecycle.snapshot().last_error
+        return self.snapshot()
+
+    async def resume(self) -> GatekeeperLoopState:
+        await self.lifecycle.resume_session()
         self._last_error = self.lifecycle.snapshot().last_error
         return self.snapshot()
 
@@ -75,6 +114,9 @@ class GatekeeperUserLoop:
     def transition_workflow(self, status: WorkflowStatus) -> WorkflowSnapshot:
         return commands.transition_workflow(self, status)
 
+    def begin_planning(self) -> WorkflowSnapshot:
+        return commands.begin_planning(self)
+
     def end_planning(self) -> WorkflowSnapshot:
         return commands.end_planning(self)
 
@@ -93,8 +135,8 @@ class GatekeeperUserLoop:
     def replace_roadmap(self, *, tasks, project: str | None = None) -> object:
         return commands.replace_roadmap(self, tasks=tasks, project=project)
 
-    def update_consensus(self, *, status=None, context: str | None = None) -> object:
-        return commands.update_consensus(self, status=status, context=context)
+    def update_consensus(self, *, context: str | None = None) -> object:
+        return commands.update_consensus(self, context=context)
 
     def write_consensus_document(self, document) -> object:
         return commands.write_consensus_document(self, document)

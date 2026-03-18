@@ -345,6 +345,12 @@ The TUI must read orchestrator-owned conversation frames, not provider-native tr
 
 ### 6.1 Orchestrator Control Plane
 
+The control plane is a logical subsystem, not the public Python shape of the
+`Orchestrator` bootstrap root. The root object should stay narrow: bootstrap a
+project-scoped orchestrator, expose MCP host/server creation and shutdown, and
+keep service composition details internal. First-party Python behavior access
+should go through `OrchestratorFacade`.
+
 Responsibilities:
 
 1. Own the workflow state machine.
@@ -464,14 +470,15 @@ Conversation stream owns:
 
 Provider logs are not the primary conversation-history source.
 
-### 6.10 Compatibility Constraints
+### 6.10 Consumer Constraints
 
-The redesign requires a migration layer while first-party consumers move to the new model.
+The redesign requires stable first-party consumer surfaces while internals
+continue to evolve.
 
 Rules:
 
-1. Public facade and MCP compatibility must be resolved before removing first-party entry points.
-2. Compatibility aliases may exist temporarily, but they must route into the new semantic command handlers.
+1. Public facade and MCP surfaces must remain available before first-party entry points change.
+2. Temporary aliases may exist, but they must route into the new semantic command handlers.
 3. The redesign must not reintroduce legacy authority paths such as free-form review inference or direct Gatekeeper file writes.
 
 ---
@@ -505,6 +512,11 @@ Every canonical event must carry:
 - `role`
 - `agent_id`
 - `run_id`
+
+`run_id` is the stable logical identity. If a provider-backed execution is
+resumed, it continues the same logical run. Per-execution incarnation tokens
+may exist internally for runtime bookkeeping, but they are not part of the
+stable control-plane contract and must not affect logical workflow semantics.
 
 Routing fields may include:
 

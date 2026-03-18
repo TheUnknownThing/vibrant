@@ -23,6 +23,7 @@ from vibrant.type_defs import JSONObject, is_json_object
 
 class AgentType(str, enum.Enum):
     CODE = "code"
+    EXPLORE = "explore"
     TEST = "test"
     MERGE = "merge"
     GATEKEEPER = "gatekeeper"
@@ -205,6 +206,7 @@ class AgentLifecycle(BaseModel):
     pid: int | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    stop_reason: str | None = None
 
 
 class AgentExecutionContext(BaseModel):
@@ -274,7 +276,6 @@ class AgentRunIdentity(BaseModel):
             return _normalize_role(value)
         return value
 
-
 class AgentRunRecord(BaseModel):
     """Durable record describing one run and its provider state."""
 
@@ -333,6 +334,7 @@ class AgentRunRecord(BaseModel):
         finished_at: datetime | None = None,
         exit_code: int | None = None,
         error: str | None = None,
+        stop_reason: str | None = None,
     ) -> None:
         if not self.can_transition_to(next_status):
             raise ValueError(
@@ -344,10 +346,13 @@ class AgentRunRecord(BaseModel):
             self.outcome.exit_code = exit_code
         if error is not None:
             self.outcome.error = error
+        if stop_reason is not None:
+            self.lifecycle.stop_reason = stop_reason
+        elif next_status not in self.TERMINAL_STATUSES:
+            self.lifecycle.stop_reason = None
 
         if next_status in self.TERMINAL_STATUSES:
             self.lifecycle.finished_at = finished_at or self.lifecycle.finished_at or datetime.now(timezone.utc)
-
 
 # Temporary alias while the run/instance split propagates through lower layers.
 AgentRecord = AgentRunRecord

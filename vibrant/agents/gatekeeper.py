@@ -214,7 +214,12 @@ class Gatekeeper:
         role: str = AgentType.GATEKEEPER.value,
         run_id: str | None = None,
     ) -> AgentRunRecord:
-        return self.agent.build_run_record(request, agent_id=agent_id, role=role, run_id=run_id)
+        return self.agent.build_run_record(
+            request,
+            agent_id=agent_id,
+            role=role,
+            run_id=run_id,
+        )
 
     def build_agent_record(self, request: GatekeeperRequest) -> AgentRunRecord:
         return self.build_run_record(request)

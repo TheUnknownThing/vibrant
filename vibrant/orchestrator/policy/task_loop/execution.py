@@ -8,15 +8,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from vibrant.agents.code_agent import CodeAgent
+from vibrant.agents.test_agent import TestAgent
 from vibrant.agents.runtime import BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig
 from vibrant.models.agent import AgentInstanceProviderConfig, AgentRunRecord, ProviderResumeHandle
 from vibrant.models.task import TaskInfo
 from vibrant.providers.invocation_compiler import compile_provider_invocation
+from vibrant.prompts import build_test_prompt
 from vibrant.providers.registry import provider_transport
 
 from ...basic.conversation import ConversationStreamService
 from ...basic.runtime import AgentRuntimeService
+from ...basic.session import carry_forward_resume_handle
 from ...basic.stores import AgentInstanceStore, AgentRunStore, AttemptStore
 from ...basic.workspace import WorkspaceService
 from ...types import (
@@ -27,12 +30,14 @@ from ...types import (
     AttemptRecoveryState,
     AttemptStatus,
     ProviderAdapterFactory,
+    ValidationOutcome,
     WorkspaceHandle,
 )
 from .models import PreparedTaskExecution, WORKER_INPUT_UNSUPPORTED_ERROR
-from .roles import ensure_task_agent_instance
+from .roles import ensure_task_agent_instance, ensure_test_agent_instance
 from .sessions import AttemptExecutionSessionResource
-from ..shared.capabilities import worker_binding_preset
+from .testing import build_test_agent_invocation_plan
+from ..shared.capabilities import validator_binding_preset, worker_binding_preset
 
 if TYPE_CHECKING:
     from ...basic.binding import AgentSessionBindingService
@@ -136,6 +141,27 @@ class ExecutionCoordinator:
     def list_active_attempt_executions(self) -> list[AttemptExecutionView]:
         return self.execution_session.list_active_views()
 
+    def list_attempt_executions(
+        self,
+        *,
+        task_id: str | None = None,
+        status: AttemptStatus | None = None,
+    ) -> list[AttemptExecutionView]:
+        records = (
+            self.attempt_store.list_by_task(task_id)
+            if task_id is not None
+            else self.attempt_store.list_all()
+        )
+        views: list[AttemptExecutionView] = []
+        for record in records:
+            view = self.execution_session.get_view(record.attempt_id)
+            if view is None:
+                continue
+            if status is not None and view.status is not status:
+                continue
+            views.append(view)
+        return views
+
     def attempt_recovery_state(self, attempt_id: str) -> AttemptRecoveryState | None:
         return self.execution_session.get_recovery_state(attempt_id)
 
@@ -160,6 +186,24 @@ class ExecutionCoordinator:
             raise KeyError(f"Attempt not found after resume: {attempt_id}")
         return recovered
 
+    async def resume_attempt(
+        self,
+        attempt_id: str,
+        *,
+        prepared: PreparedTaskExecution,
+    ) -> AttemptRecord:
+        session = self.execution_session.get(attempt_id)
+        if session is None:
+            raise KeyError(f"Attempt not found: {attempt_id}")
+        if session.live:
+            attempt = self.attempt_store.get(attempt_id)
+            if attempt is None:
+                raise KeyError(f"Attempt not found: {attempt_id}")
+            return attempt
+        if not session.workspace_path:
+            raise RuntimeError(f"Attempt is not resumable: {attempt_id}")
+        return await self.recover_attempt(attempt_id, prepared=prepared)
+
     async def await_attempt_completion(self, attempt_id: str) -> AttemptCompletion:
         attempt = self.attempt_store.get(attempt_id)
         if attempt is None:
@@ -183,6 +227,7 @@ class ExecutionCoordinator:
                 conversation_ref=attempt.conversation_id,
                 provider_events_ref=runtime_result.provider_events_ref,
             )
+        validation: ValidationOutcome | None = None
         completion = AttemptCompletion(
             attempt_id=attempt.attempt_id,
             task_id=attempt.task_id,
@@ -202,10 +247,28 @@ class ExecutionCoordinator:
                 workspace_id=attempt.workspace_id,
             )
             self.workspace_service.capture_result_commit(workspace)
+            validation = await self._run_test_stage(
+                attempt=attempt,
+                workspace=workspace,
+                code_summary=runtime_result.summary,
+            )
+            completion.validation = validation
         return completion
 
     def reconcile_active_sessions(self) -> list[AttemptExecutionSnapshot]:
         return self.execution_session.reconcile_active()
+
+    async def pause_active_attempts(self) -> list[AttemptExecutionSnapshot]:
+        paused: list[AttemptExecutionSnapshot] = []
+        for session in self.execution_session.list_active():
+            if not session.live or session.run_id is None:
+                continue
+            self.runtime_service.annotate_run(session.run_id, stop_reason="paused")
+            await self.runtime_service.kill_run(session.run_id)
+            refreshed = self.execution_session.get(session.attempt_id)
+            if refreshed is not None:
+                paused.append(refreshed)
+        return paused
 
     def _persist_run(self, run_record: AgentRunRecord) -> None:
         self.agent_run_store.upsert(run_record)
@@ -230,7 +293,9 @@ class ExecutionCoordinator:
     ) -> None:
         runtime = BaseAgentRuntime(self._build_code_agent())
         binding_service, mcp_host = self._require_mcp_bridge()
-        await mcp_host.ensure_started()
+        use_inprocess_mcp = bool(getattr(self.adapter_factory, "supports_inprocess_mcp", False))
+        if not use_inprocess_mcp:
+            await mcp_host.ensure_started()
         bound_capabilities = binding_service.bind_preset(
             preset=worker_binding_preset(
                 binding_service.mcp_server,
@@ -246,6 +311,19 @@ class ExecutionCoordinator:
             agent_record.provider.kind,
             bound_capabilities.access,
         )
+        invocation_plan.debug_metadata["mcp_asgi_app"] = mcp_host.http_app()
+        if use_inprocess_mcp:
+            mcp_access = invocation_plan.debug_metadata.get("mcp_access")
+            if isinstance(mcp_access, dict) and not mcp_access.get("endpoint_url") and not mcp_access.get("stdio_command"):
+                mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
+            elif isinstance(mcp_access, list):
+                for descriptor in mcp_access:
+                    if (
+                        isinstance(descriptor, dict)
+                        and not descriptor.get("endpoint_url")
+                        and not descriptor.get("stdio_command")
+                    ):
+                        descriptor["endpoint_url"] = "http://127.0.0.1/mcp"
 
         handle = None
         if provider_thread is not None and provider_thread.resumable:
@@ -309,6 +387,11 @@ class ExecutionCoordinator:
             task=prepared.task,
             workspace=workspace,
             prompt=prompt,
+            run_id=session.run_id or attempt.code_run_id,
+        )
+        carry_forward_resume_handle(
+            agent_record.provider,
+            existing_run_record.provider if existing_run_record is not None else None,
         )
         self._persist_run(agent_record)
 
@@ -332,6 +415,7 @@ class ExecutionCoordinator:
             live=False,
             awaiting_input=False,
             input_requests=[],
+            run_stop_reason=None,
             provider_resume_handle=None,
             provider_thread_id=None,
             resumable=False,
@@ -346,12 +430,144 @@ class ExecutionCoordinator:
             on_agent_record_updated=self._persist_run,
         )
 
+    def _build_test_agent(self) -> TestAgent:
+        return TestAgent(
+            self.project_root,
+            self.config,
+            adapter_factory=self.adapter_factory,
+            on_agent_record_updated=self._persist_run,
+        )
+
+    async def _run_test_stage(
+        self,
+        *,
+        attempt: AttemptRecord,
+        workspace: WorkspaceHandle,
+        code_summary: str | None,
+    ) -> ValidationOutcome:
+        if not self.config.test_commands:
+            return ValidationOutcome(
+                status="skipped",
+                run_ids=[],
+                summary="Test stage skipped because no test commands are configured.",
+            )
+
+        prompt = build_test_prompt(
+            project=self.project_root.name,
+            task_id=attempt.task_id,
+            branch=workspace.branch,
+            test_commands=list(self.config.test_commands),
+            code_summary=code_summary,
+        )
+        instance = ensure_test_agent_instance(
+            self.agent_instance_store,
+            task_id=attempt.task_id,
+            provider=AgentInstanceProviderConfig(
+                kind=self.config.provider_kind.value,
+                transport=provider_transport(self.config.provider_kind),
+                runtime_mode="read-only",
+            ),
+        )
+        test_record = self._build_test_agent().build_run_record(
+            task_id=attempt.task_id,
+            branch=workspace.branch,
+            workspace_path=workspace.path,
+            prompt=prompt,
+            agent_id=instance.identity.agent_id,
+            role=instance.identity.role,
+            vibrant_dir=self.project_root / DEFAULT_CONFIG_DIR,
+        )
+        self._persist_run(test_record)
+
+        conversation_id = attempt.conversation_id
+        if conversation_id is not None:
+            self.conversation_stream.bind_run(
+                conversation_id=conversation_id,
+                run_id=test_record.identity.run_id,
+            )
+
+        runtime = BaseAgentRuntime(self._build_test_agent())
+        binding_service, mcp_host = self._require_mcp_bridge()
+        use_inprocess_mcp = bool(getattr(self.adapter_factory, "supports_inprocess_mcp", False))
+        if not use_inprocess_mcp:
+            await mcp_host.ensure_started()
+        bound_capabilities = binding_service.bind_preset(
+            preset=validator_binding_preset(
+                binding_service.mcp_server,
+                test_record.identity.agent_id,
+                test_record.identity.role,
+            ),
+            run_id=test_record.identity.run_id,
+            conversation_id=conversation_id,
+        )
+        registered_binding = mcp_host.register_binding(bound_capabilities)
+        self._binding_ids_by_run_id[test_record.identity.run_id] = registered_binding.binding_id
+
+        invocation_plan = build_test_agent_invocation_plan(
+            project_root=self.project_root,
+            config=self.config,
+            run_id=test_record.identity.run_id,
+            role=test_record.identity.role,
+            extra_access=[bound_capabilities.access],
+        )
+        invocation_plan.debug_metadata["mcp_asgi_app"] = mcp_host.http_app()
+        if use_inprocess_mcp:
+            mcp_access = invocation_plan.debug_metadata.get("mcp_access")
+            if isinstance(mcp_access, dict) and not mcp_access.get("endpoint_url") and not mcp_access.get("stdio_command"):
+                mcp_access["endpoint_url"] = "http://127.0.0.1/mcp"
+            elif isinstance(mcp_access, list):
+                for descriptor in mcp_access:
+                    if (
+                        isinstance(descriptor, dict)
+                        and not descriptor.get("endpoint_url")
+                        and not descriptor.get("stdio_command")
+                    ):
+                        descriptor["endpoint_url"] = "http://127.0.0.1/mcp"
+
+        self.attempt_store.update(
+            attempt.attempt_id,
+            status=AttemptStatus.VALIDATING,
+            validation_run_ids=[test_record.identity.run_id],
+        )
+
+        try:
+            await self.runtime_service.start_run(
+                agent_record=test_record,
+                prompt=prompt,
+                cwd=workspace.path,
+                runtime=runtime,
+                on_record_updated=self._persist_run,
+                invocation_plan=invocation_plan,
+            )
+            runtime_result = await self.runtime_service.wait_for_run(test_record.identity.run_id)
+        finally:
+            self._release_binding(test_record.identity.run_id)
+
+        run_ids = [test_record.identity.run_id]
+        if runtime_result.awaiting_input:
+            return ValidationOutcome(
+                status="failed",
+                run_ids=run_ids,
+                summary=runtime_result.error or WORKER_INPUT_UNSUPPORTED_ERROR,
+                results_ref=runtime_result.provider_events_ref,
+            )
+
+        status = "failed" if runtime_result.error else "passed"
+        summary = runtime_result.summary or (runtime_result.error if runtime_result.error else "Test stage passed.")
+        return ValidationOutcome(
+            status=status,
+            run_ids=run_ids,
+            summary=summary,
+            results_ref=runtime_result.provider_events_ref,
+        )
+
     def _build_run_record(
         self,
         *,
         task: TaskInfo,
         workspace: WorkspaceHandle,
         prompt: str,
+        run_id: str | None = None,
     ) -> AgentRunRecord:
         instance = ensure_task_agent_instance(
             self.agent_instance_store,
@@ -363,7 +579,8 @@ class ExecutionCoordinator:
             worktree=workspace,
             prompt=prompt,
             agent_id=instance.identity.agent_id,
-            role=instance.identity.role
+            role=instance.identity.role,
+            run_id=run_id,
         )
 
     def _task_agent_provider_config(self) -> AgentInstanceProviderConfig:
