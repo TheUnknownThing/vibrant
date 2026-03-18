@@ -71,3 +71,20 @@ def test_facade_run_projection_propagates_runtime_errors(tmp_path: Path, monkeyp
 
     with pytest.raises(RuntimeError, match="runtime snapshot failed for run-broken"):
         facade.get_run("run-broken")
+
+
+def test_facade_restart_failed_task_routes_through_control_plane(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+    calls: list[str] = []
+
+    def fake_restart(task_id: str):
+        calls.append(task_id)
+        return SimpleNamespace(id=task_id, status="queued")
+
+    facade._control_plane = SimpleNamespace(restart_failed_task=fake_restart)
+
+    restarted = facade.restart_failed_task("task-1")
+
+    assert restarted.id == "task-1"
+    assert calls == ["task-1"]

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from vibrant.models.task import TaskInfo
+
 from ...basic.artifacts import build_workflow_snapshot
 from ...basic.stores import AgentRunStore, AttemptStore, ConsensusStore, QuestionStore, ReviewTicketStore, RoadmapStore, WorkflowStateStore
 from ...basic.workspace import WorkspaceService
@@ -110,6 +112,9 @@ class TaskLoop:
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> ReviewResolutionRecord:
         return reviews.escalate_review_ticket(self, ticket_id, reason=reason)
+
+    def restart_failed_task(self, task_id: str) -> TaskInfo:
+        return task_projection.restart_failed_task(self, task_id)
 
     def _set_snapshot(
         self,

@@ -113,6 +113,7 @@ class InputBar(Static):
         "/logs",
         "/model",
         "/next",
+        "/restart",
         "/refresh",
         "/run",
         "/settings",

@@ -572,6 +572,40 @@ def test_workspace_capture_rejects_orchestrator_state_edits(tmp_path: Path) -> N
         orchestrator._workspace_service.capture_result_commit(workspace)
 
 
+def test_prepare_task_workspace_allows_repo_relative_worktree_roots(tmp_path: Path) -> None:
+    initialize_project(tmp_path)
+    (tmp_path / ".vibrant" / "vibrant.toml").write_text(
+        "\n".join(
+            [
+                "[provider]",
+                'kind = "codex"',
+                "",
+                "[orchestrator]",
+                'worktree-directory = "worktrees"',
+                'conversation-directory = ".vibrant/conversations"',
+                'execution-mode = "automatic"',
+                "",
+                "[validation]",
+                "test-commands = []",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "tracked.txt").write_text("root\n", encoding="utf-8")
+    _initialize_git_repo(tmp_path)
+    orchestrator = create_orchestrator(tmp_path)
+
+    first_workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+
+    assert "?? worktrees/" in _git(tmp_path, "status", "--porcelain")
+
+    second_workspace = orchestrator._workspace_service.prepare_task_workspace("task-2")
+
+    assert Path(first_workspace.path).exists()
+    assert Path(second_workspace.path).exists()
+
+
 @pytest.mark.asyncio
 async def test_pending_review_ticket_can_be_resolved_after_restart(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)

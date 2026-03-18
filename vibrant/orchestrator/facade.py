@@ -521,6 +521,9 @@ class OrchestratorFacade:
     def escalate_review_ticket(self, ticket_id: str, *, reason: str):
         return self._control_plane.escalate_review_ticket(ticket_id, reason=reason)
 
+    def restart_failed_task(self, task_id: str):
+        return self._control_plane.restart_failed_task(task_id)
+
     def list_pending_questions(self) -> list[str]:
         return [record.text for record in self.list_pending_question_records()]
 
