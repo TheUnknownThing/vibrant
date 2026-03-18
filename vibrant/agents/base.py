@@ -110,8 +110,15 @@ class AgentBase(ABC):
         """
         return True
 
-    def get_thread_kwargs(self) -> dict[str, JSONValue]:
+    def get_thread_kwargs(
+        self,
+        *,
+        agent_record: AgentRecord,
+        prompt: str,
+        resume_thread_id: str | None,
+    ) -> dict[str, JSONValue]:
         """Extra keyword arguments forwarded to ``adapter.start_thread``."""
+        _ = agent_record, prompt, resume_thread_id
         return {
             "model": self.config.model,
             "approval_policy": self.config.approval_policy,
@@ -147,6 +154,34 @@ class AgentBase(ABC):
 
     def on_run_completed(self, result: AgentRunResult) -> None:
         """Hook called after the run finishes (success or failure). No-op by default."""
+
+    def on_thread_ready(
+        self,
+        agent_record: AgentRecord,
+        *,
+        resumed: bool,
+    ) -> bool:
+        """Hook called after the provider thread is ready.
+
+        Return True when this hook mutates the agent record and the runtime
+        should persist/broadcast the updated record immediately.
+        """
+        _ = agent_record, resumed
+        return False
+
+    def on_turn_started(
+        self,
+        agent_record: AgentRecord,
+        *,
+        resumed: bool,
+    ) -> bool:
+        """Hook called after the provider accepts the turn start request.
+
+        Return True when this hook mutates the agent record and the runtime
+        should persist/broadcast the updated record immediately.
+        """
+        _ = agent_record, resumed
+        return False
 
     # ------------------------------------------------------------------
     # Core run method
@@ -253,7 +288,11 @@ class AgentBase(ABC):
             agent_record.lifecycle.pid = extract_pid(adapter)
             self._notify_record_updated(agent_record)
 
-            thread_kwargs = self.get_thread_kwargs()
+            thread_kwargs = self.get_thread_kwargs(
+                agent_record=agent_record,
+                prompt=prompt,
+                resume_thread_id=resume_thread_id,
+            )
             thread_kwargs["cwd"] = working_dir
             thread_kwargs["runtime_mode"] = thread_runtime_mode
 
@@ -261,6 +300,8 @@ class AgentBase(ABC):
                 await adapter.resume_thread(resume_thread_id, **thread_kwargs)
             else:
                 await adapter.start_thread(**thread_kwargs)
+            if self.on_thread_ready(agent_record, resumed=resume_thread_id is not None):
+                self._notify_record_updated(agent_record)
 
             agent_record.transition_to(AgentStatus.RUNNING)
             self._notify_record_updated(agent_record)
@@ -272,6 +313,8 @@ class AgentBase(ABC):
                 reasoning_effort=self.config.reasoning_effort,
                 reasoning_summary=self.config.reasoning_summary,
             )
+            if self.on_turn_started(agent_record, resumed=resume_thread_id is not None):
+                self._notify_record_updated(agent_record)
             await asyncio.wait_for(
                 turn_finished.wait(), timeout=self.timeout_seconds
             )

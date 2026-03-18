@@ -12,6 +12,8 @@ from vibrant.agents import (
     Gatekeeper,
     GatekeeperRequest,
     GatekeeperTrigger,
+    GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY,
+    GATEKEEPER_SYSTEM_PROMPT_VERSION,
     MCP_TOOL_NAMES,
     PLANNING_COMPLETE_MCP_TOOL,
 )
@@ -78,6 +80,9 @@ class FakeGatekeeperAdapter:
             self.client._process.returncode = 0
         elif self.scenario == "request":
             asyncio.create_task(self._simulate_request_flow(), name="fake-gatekeeper-request")
+        elif self.scenario == "start_turn_error":
+            self.client._process.returncode = 1
+            raise RuntimeError("provider start_turn failed")
         else:
             raise AssertionError(f"Unknown fake Gatekeeper scenario: {self.scenario}")
         return {"turn": {"id": "turn-gatekeeper-1"}}
@@ -148,18 +153,20 @@ def test_prompt_template_renders_for_each_trigger(tmp_path, trigger, description
     )
 
     gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter)
+    system_prompt = gatekeeper.render_system_prompt()
     prompt = gatekeeper.render_prompt(
         GatekeeperRequest(trigger=trigger, trigger_description=description, agent_summary=summary)
     )
 
     assert f"{trigger.value}: {description}" in prompt
-    assert "You are read-only. Do not edit repository files or .vibrant state directly." in prompt
-    assert "## Current Consensus" in prompt
+    assert "You are read-only. Do not edit repository files or .vibrant state directly." in system_prompt
+    assert "Read `.vibrant/consensus.md` directly" in system_prompt
+    assert "testing-strategy: Write focused tests before broader validation." in system_prompt
     assert "## Current Roadmap" in prompt
-    assert "## MCP Tools" in prompt
-    assert PLANNING_COMPLETE_MCP_TOOL in prompt
-    assert all(tool_name in prompt for tool_name in MCP_TOOL_NAMES)
-    assert "testing-strategy: Write focused tests before broader validation." in prompt
+    assert "## MCP Tools" in system_prompt
+    assert PLANNING_COMPLETE_MCP_TOOL in system_prompt
+    assert all(tool_name in system_prompt for tool_name in MCP_TOOL_NAMES)
+    assert "## Current Consensus" not in prompt
     if summary:
         assert summary in prompt
     else:
@@ -171,6 +178,7 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     FakeGatekeeperAdapter.instances.clear()
     FakeGatekeeperAdapter.scenario = "complete"
     initialize_project(tmp_path)
+    seeded_marker = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter).agent._system_prompt_marker()
 
     prior_record = AgentRecord(
         identity={
@@ -182,7 +190,10 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
             provider_thread_id="thread-existing",
-            resume_cursor={"threadId": "thread-existing"},
+            resume_cursor={
+                "threadId": "thread-existing",
+                GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: seeded_marker,
+            },
         ),
     )
     runs_dir = tmp_path / ".vibrant" / "agent-runs"
@@ -207,13 +218,131 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     assert adapter.start_thread_calls == []
     assert adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-existing"
     assert adapter.resume_thread_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
+    assert "instructions" not in adapter.resume_thread_calls[0]
     assert adapter.start_turn_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
+    prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
+    assert "## Current Roadmap" in prompt
+    assert "## Current Consensus" not in prompt
+    assert "You are read-only. Do not edit repository files or .vibrant state directly." not in prompt
     assert result.succeeded is True
     assert result.state is RunState.COMPLETED
     assert result.provider_thread.thread_id == "thread-existing"
     assert result.role == AgentType.GATEKEEPER.value
     assert result.status is AgentStatus.COMPLETED
     assert result.run_id.startswith("gatekeeper-user_conversation-")
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_seeds_system_prompt_only_when_starting_new_thread(tmp_path):
+    FakeGatekeeperAdapter.instances.clear()
+    FakeGatekeeperAdapter.scenario = "complete"
+    initialize_project(tmp_path)
+
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
+    result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.PROJECT_START,
+            trigger_description="Create the first plan.",
+        ),
+        resume_latest_thread=False,
+    )
+
+    adapter = FakeGatekeeperAdapter.instances[0]
+    assert "instructions" in adapter.start_thread_calls[0]
+    assert "You are a long-lived, project-scoped planning and review agent." in adapter.start_thread_calls[0]["instructions"]
+    assert "Read `.vibrant/consensus.md` directly" in adapter.start_thread_calls[0]["instructions"]
+    prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
+    assert "## Current Roadmap" in prompt
+    assert "## Current Consensus" not in prompt
+    assert "## MCP Tools" not in prompt
+    assert result.succeeded is True
+    assert result.provider_thread.resume_cursor is not None
+    assert result.provider_thread.resume_cursor[GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY].startswith(
+        f"v{GATEKEEPER_SYSTEM_PROMPT_VERSION}:"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_reseeds_resumed_thread_when_system_prompt_marker_is_stale(tmp_path):
+    FakeGatekeeperAdapter.instances.clear()
+    FakeGatekeeperAdapter.scenario = "complete"
+    initialize_project(tmp_path)
+
+    prior_record = AgentRecord(
+        identity={
+            "run_id": "gatekeeper-project_start-old",
+            "agent_id": "gatekeeper-project_start-old",
+            "role": AgentType.GATEKEEPER.value,
+            "type": AgentType.GATEKEEPER,
+        },
+        lifecycle={"status": AgentStatus.COMPLETED},
+        provider=AgentProviderMetadata(
+            provider_thread_id="thread-existing",
+            resume_cursor={
+                "threadId": "thread-existing",
+                GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: "v1:stale-marker",
+            },
+        ),
+    )
+    runs_dir = tmp_path / ".vibrant" / "agent-runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / f"{prior_record.identity.run_id}.json").write_text(
+        prior_record.model_dump_json(indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
+    result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description="Review the refreshed project instructions.",
+        ),
+        resume_latest_thread=True,
+    )
+
+    adapter = FakeGatekeeperAdapter.instances[0]
+    assert adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-existing"
+    assert "instructions" in adapter.resume_thread_calls[0]
+    assert "You are a long-lived, project-scoped planning and review agent." in adapter.resume_thread_calls[0]["instructions"]
+    assert result.provider_thread.resume_cursor is not None
+    assert result.provider_thread.resume_cursor[GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY].startswith(
+        f"v{GATEKEEPER_SYSTEM_PROMPT_VERSION}:"
+    )
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_does_not_mark_system_prompt_seeded_before_turn_starts(tmp_path):
+    FakeGatekeeperAdapter.instances.clear()
+    FakeGatekeeperAdapter.scenario = "start_turn_error"
+    initialize_project(tmp_path)
+
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
+    first_result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.PROJECT_START,
+            trigger_description="Create the first plan.",
+        ),
+        resume_latest_thread=False,
+    )
+
+    first_adapter = FakeGatekeeperAdapter.instances[0]
+    assert first_result.succeeded is False
+    assert first_adapter.start_thread_calls[0]["instructions"]
+    assert first_result.provider_thread.resume_cursor == {"threadId": "thread-gatekeeper-123"}
+
+    FakeGatekeeperAdapter.scenario = "complete"
+    second_result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description="Retry the planning turn.",
+        ),
+        resume_latest_thread=True,
+    )
+
+    second_adapter = FakeGatekeeperAdapter.instances[1]
+    assert second_adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-gatekeeper-123"
+    assert "instructions" in second_adapter.resume_thread_calls[0]
+    assert second_result.succeeded is True
 
 
 @pytest.mark.asyncio
