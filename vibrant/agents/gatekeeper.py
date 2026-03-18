@@ -20,10 +20,14 @@ from collections.abc import Callable
 from uuid import uuid4
 
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
-from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
+from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType, ProviderResumeHandle
 from vibrant.providers.base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 from vibrant.providers.registry import provider_transport, resolve_configured_adapter_factory
-from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
+from vibrant.prompts import (
+    build_gatekeeper_system_prompt,
+    build_gatekeeper_turn_prompt,
+    build_user_answer_trigger_description,
+)
 from vibrant.type_defs import AsyncNone, JSONValue
 
 from .base import ReadOnlyAgentBase
@@ -41,6 +45,8 @@ RESUME_WORKFLOW_MCP_TOOL = "vibrant.resume_workflow"
 ACCEPT_REVIEW_TICKET_MCP_TOOL = "vibrant.accept_review_ticket"
 RETRY_REVIEW_TICKET_MCP_TOOL = "vibrant.retry_review_ticket"
 ESCALATE_REVIEW_TICKET_MCP_TOOL = "vibrant.escalate_review_ticket"
+GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY = "gatekeeperSystemPromptVersion"
+GATEKEEPER_SYSTEM_PROMPT_VERSION = 1
 
 MCP_TOOL_NAMES = (
     PLANNING_COMPLETE_MCP_TOOL,
@@ -111,10 +117,40 @@ class GatekeeperAgent(ReadOnlyAgentBase):
     def should_auto_reject_requests(self) -> bool:
         return False
 
-    def get_thread_kwargs(self) -> dict[str, JSONValue]:
-        kwargs = super().get_thread_kwargs()
+    def get_thread_kwargs(
+        self,
+        *,
+        agent_record: AgentRunRecord,
+        prompt: str,
+        resume_thread_id: str | None,
+    ) -> dict[str, JSONValue]:
+        kwargs = super().get_thread_kwargs(
+            agent_record=agent_record,
+            prompt=prompt,
+            resume_thread_id=resume_thread_id,
+        )
         kwargs["persist_extended_history"] = True
+        if not self._system_prompt_seeded(agent_record):
+            kwargs["instructions"] = self.render_system_prompt()
         return kwargs
+
+    def on_thread_ready(
+        self,
+        agent_record: AgentRunRecord,
+        *,
+        resumed: bool,
+    ) -> bool:
+        _ = resumed
+        handle = ProviderResumeHandle.from_provider_metadata(agent_record.provider)
+        if handle is None:
+            return False
+        resume_cursor = dict(handle.resume_cursor or {})
+        if resume_cursor.get(GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY) == GATEKEEPER_SYSTEM_PROMPT_VERSION:
+            return False
+        resume_cursor[GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY] = GATEKEEPER_SYSTEM_PROMPT_VERSION
+        handle.resume_cursor = resume_cursor
+        agent_record.provider.set_resume_handle(handle)
+        return True
 
     def build_run_record(
         self,
@@ -150,20 +186,28 @@ class GatekeeperAgent(ReadOnlyAgentBase):
     def build_agent_record(self, request: GatekeeperRequest) -> AgentRunRecord:
         return self.build_run_record(request)
 
+    def render_system_prompt(self) -> str:
+        return build_gatekeeper_system_prompt(
+            project_name=self.project_root.name,
+            mcp_tool_names=MCP_TOOL_NAMES,
+        )
+
     def render_prompt(self, request: GatekeeperRequest) -> str:
         consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
         roadmap_text = _read_text(self.roadmap_path) or "No roadmap document exists yet."
         skills_text = self._render_available_skills()
-        return build_gatekeeper_prompt(
-            project_name=self.project_root.name,
+        return build_gatekeeper_turn_prompt(
             consensus_text=consensus_text,
             roadmap_text=roadmap_text,
             trigger_value=request.trigger.value,
             trigger_description=request.trigger_description,
             agent_summary=request.agent_summary,
             skills_text=skills_text,
-            mcp_tool_names=MCP_TOOL_NAMES,
         )
+
+    def _system_prompt_seeded(self, agent_record: AgentRunRecord) -> bool:
+        resume_cursor = agent_record.provider.resume_cursor or {}
+        return resume_cursor.get(GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY) == GATEKEEPER_SYSTEM_PROMPT_VERSION
 
     def _render_available_skills(self) -> str:
         skills_dir = self.vibrant_dir / "skills"
@@ -205,6 +249,9 @@ class Gatekeeper:
 
     def render_prompt(self, request: GatekeeperRequest) -> str:
         return self.agent.render_prompt(request)
+
+    def render_system_prompt(self) -> str:
+        return self.agent.render_system_prompt()
 
     def build_run_record(
         self,
@@ -253,14 +300,16 @@ class Gatekeeper:
             if resume_latest_thread is not None
             else request.trigger is GatekeeperTrigger.USER_CONVERSATION
         )
-        resume_thread_id = self._find_latest_gatekeeper_thread_id() if should_resume else None
+        resume_handle = self._find_latest_gatekeeper_resume_handle() if should_resume else None
+        if resume_handle is not None:
+            agent_record.provider.set_resume_handle(resume_handle)
         record_callback = on_record_updated or self._persist_agent_record
 
         handle = await self.runtime.start(
             agent_record=agent_record,
             prompt=prompt,
             cwd=self.project_root,
-            resume_thread_id=resume_thread_id,
+            resume_thread_id=resume_handle.thread_id if resume_handle is not None else None,
             on_record_updated=record_callback,
         )
         setattr(handle, "agent_record", agent_record)
@@ -313,14 +362,14 @@ class Gatekeeper:
         if inspect.isawaitable(callback_result):
             await callback_result
 
-    def _find_latest_gatekeeper_thread_id(self) -> str | None:
+    def _find_latest_gatekeeper_resume_handle(self) -> ProviderResumeHandle | None:
         candidate_paths: list[Path] = []
         if self.agent_runs_dir.exists():
             candidate_paths.extend(sorted(self.agent_runs_dir.glob("*.json")))
         if not candidate_paths:
             return None
 
-        latest_record: AgentRunRecord | None = None
+        latest_handle: ProviderResumeHandle | None = None
         latest_sort_key: tuple[datetime, datetime] | None = None
         for path in candidate_paths:
             try:
@@ -330,21 +379,18 @@ class Gatekeeper:
             if record.identity.role != AgentType.GATEKEEPER.value:
                 continue
 
-            thread_id = record.provider.provider_thread_id
-            if not thread_id:
+            handle = ProviderResumeHandle.from_provider_metadata(record.provider)
+            if handle is None or not handle.resumable:
                 continue
 
             started = record.lifecycle.started_at or datetime.min.replace(tzinfo=timezone.utc)
             finished = record.lifecycle.finished_at or started
             sort_key = (started, finished)
             if latest_sort_key is None or sort_key > latest_sort_key:
-                latest_record = record
+                latest_handle = handle.model_copy(deep=True)
                 latest_sort_key = sort_key
 
-        if latest_record is None:
-            return None
-
-        return latest_record.provider.provider_thread_id
+        return latest_handle
 
     def _persist_agent_record(self, agent_record: AgentRunRecord) -> None:
         self.agent_runs_dir.mkdir(parents=True, exist_ok=True)

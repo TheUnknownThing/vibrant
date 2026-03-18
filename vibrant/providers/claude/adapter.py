@@ -120,6 +120,8 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._session_started = False
         self._thread_started_emitted = False
         self._thread_resumed = False
+        self._thread_instructions: str | None = None
+        self._inject_thread_instructions_next_turn = False
         self._last_result: JSONObject | None = None
         self._last_server_info: JSONObject | None = None
         self._on_stderr_line = on_stderr_line
@@ -293,6 +295,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._thread_resumed = False
         self._thread_started_emitted = False
         self.thread_metadata = {}
+        self._inject_thread_instructions_next_turn = bool(self._thread_instructions)
         return {"thread": {}}
 
     async def resume_thread(self, provider_thread_id: str, **kwargs: JSONValue) -> JSONValue:
@@ -300,6 +303,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self.provider_thread_id = provider_thread_id
         self._thread_resumed = True
         self._thread_started_emitted = True
+        self._inject_thread_instructions_next_turn = bool(self._thread_instructions)
         self._persist_thread_metadata(provider_thread_id)
         await self._emit_canonical(
             "thread.started",
@@ -318,6 +322,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
 
         model = data.pop("model", self._model)
         data.pop("model_provider", None)
+        instructions = data.pop("instructions", None)
         data.pop("reasoning_summary", None)
         data.pop("persist_extended_history", None)
         data.pop("extra_config", None)
@@ -328,6 +333,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._runtime_mode = runtime_mode
         self._approval_policy = approval_policy
         self._model = model
+        self._thread_instructions = instructions.strip() if isinstance(instructions, str) and instructions.strip() else None
 
         if model is not None and hasattr(client, "set_model"):
             await client.set_model(model)
@@ -360,6 +366,9 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._turn_counter += 1
         self.current_turn_id = f"turn-{self._turn_counter}"
         prompt = _prompt_from_input_items(input_items)
+        if self._inject_thread_instructions_next_turn and self._thread_instructions:
+            prompt = f"{self._thread_instructions}\n\n{prompt}".strip()
+            self._inject_thread_instructions_next_turn = False
         self._last_result = None
 
         if kwargs:

@@ -12,6 +12,8 @@ from vibrant.agents import (
     Gatekeeper,
     GatekeeperRequest,
     GatekeeperTrigger,
+    GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY,
+    GATEKEEPER_SYSTEM_PROMPT_VERSION,
     MCP_TOOL_NAMES,
     PLANNING_COMPLETE_MCP_TOOL,
 )
@@ -148,17 +150,18 @@ def test_prompt_template_renders_for_each_trigger(tmp_path, trigger, description
     )
 
     gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter)
+    system_prompt = gatekeeper.render_system_prompt()
     prompt = gatekeeper.render_prompt(
         GatekeeperRequest(trigger=trigger, trigger_description=description, agent_summary=summary)
     )
 
     assert f"{trigger.value}: {description}" in prompt
-    assert "You are read-only. Do not edit repository files or .vibrant state directly." in prompt
+    assert "You are read-only. Do not edit repository files or .vibrant state directly." in system_prompt
     assert "## Current Consensus" in prompt
     assert "## Current Roadmap" in prompt
-    assert "## MCP Tools" in prompt
-    assert PLANNING_COMPLETE_MCP_TOOL in prompt
-    assert all(tool_name in prompt for tool_name in MCP_TOOL_NAMES)
+    assert "## MCP Tools" in system_prompt
+    assert PLANNING_COMPLETE_MCP_TOOL in system_prompt
+    assert all(tool_name in system_prompt for tool_name in MCP_TOOL_NAMES)
     assert "testing-strategy: Write focused tests before broader validation." in prompt
     if summary:
         assert summary in prompt
@@ -182,7 +185,10 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
             provider_thread_id="thread-existing",
-            resume_cursor={"threadId": "thread-existing"},
+            resume_cursor={
+                "threadId": "thread-existing",
+                GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: GATEKEEPER_SYSTEM_PROMPT_VERSION,
+            },
         ),
     )
     runs_dir = tmp_path / ".vibrant" / "agent-runs"
@@ -207,13 +213,41 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     assert adapter.start_thread_calls == []
     assert adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-existing"
     assert adapter.resume_thread_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
+    assert "instructions" not in adapter.resume_thread_calls[0]
     assert adapter.start_turn_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
+    prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
+    assert "## Current Consensus" in prompt
+    assert "You are read-only. Do not edit repository files or .vibrant state directly." not in prompt
     assert result.succeeded is True
     assert result.state is RunState.COMPLETED
     assert result.provider_thread.thread_id == "thread-existing"
     assert result.role == AgentType.GATEKEEPER.value
     assert result.status is AgentStatus.COMPLETED
     assert result.run_id.startswith("gatekeeper-user_conversation-")
+
+
+@pytest.mark.asyncio
+async def test_gatekeeper_seeds_system_prompt_only_when_starting_new_thread(tmp_path):
+    FakeGatekeeperAdapter.instances.clear()
+    FakeGatekeeperAdapter.scenario = "complete"
+    initialize_project(tmp_path)
+
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=FakeGatekeeperAdapter, timeout_seconds=1)
+    result = await gatekeeper.run(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.PROJECT_START,
+            trigger_description="Create the first plan.",
+        ),
+        resume_latest_thread=False,
+    )
+
+    adapter = FakeGatekeeperAdapter.instances[0]
+    assert "instructions" in adapter.start_thread_calls[0]
+    assert "You are a long-lived, project-scoped planning and review agent." in adapter.start_thread_calls[0]["instructions"]
+    prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
+    assert "## Current Consensus" in prompt
+    assert "## MCP Tools" not in prompt
+    assert result.succeeded is True
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,13 @@ from typing import Any
 
 import pytest
 
-from vibrant.agents import Gatekeeper, GatekeeperRequest, GatekeeperTrigger
+from vibrant.agents import (
+    GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY,
+    GATEKEEPER_SYSTEM_PROMPT_VERSION,
+    Gatekeeper,
+    GatekeeperRequest,
+    GatekeeperTrigger,
+)
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
@@ -73,7 +79,10 @@ class FollowUpAdapter:
         if self.agent_record is None:
             return
         self.agent_record.provider.provider_thread_id = thread_id
-        self.agent_record.provider.resume_cursor = {"threadId": thread_id}
+        self.agent_record.provider.resume_cursor = {
+            "threadId": thread_id,
+            GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: GATEKEEPER_SYSTEM_PROMPT_VERSION,
+        }
 
 
 def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: str) -> None:
@@ -87,7 +96,10 @@ def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: st
         lifecycle={"status": AgentStatus.COMPLETED},
         provider=AgentProviderMetadata(
             provider_thread_id=thread_id,
-            resume_cursor={"threadId": thread_id},
+            resume_cursor={
+                "threadId": thread_id,
+                GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: GATEKEEPER_SYSTEM_PROMPT_VERSION,
+            },
         ),
     )
     runs_dir = project_root / ".vibrant" / "agent-runs"
@@ -110,6 +122,7 @@ async def test_answer_question_resumes_latest_gatekeeper_thread(tmp_path):
     adapter = FollowUpAdapter.instances[0]
     assert adapter.start_thread_calls == []
     assert adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-existing"
+    assert "instructions" not in adapter.resume_thread_calls[0]
     prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
     assert "Question: Should we defer the UI?" in prompt
     assert "User Answer: Yes, keep the first milestone backend-only." in prompt
