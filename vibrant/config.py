@@ -8,10 +8,16 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 
 from .providers.base import ProviderKind
-
 
 DEFAULT_CONFIG_DIR = ".vibrant"
 DEFAULT_CONFIG_FILE = "vibrant.toml"
@@ -43,7 +49,9 @@ class VibrantConfig(BaseModel):
     )
     codex_binary: str = Field(
         default="codex",
-        validation_alias=AliasChoices("codex_binary", "codex-binary", "codex-binary-path"),
+        validation_alias=AliasChoices(
+            "codex_binary", "codex-binary", "codex-binary-path"
+        ),
         serialization_alias="codex-binary",
     )
     launch_args: list[str] = Field(
@@ -83,7 +91,9 @@ class VibrantConfig(BaseModel):
     )
     claude_disallowed_tools: list[str] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("claude_disallowed_tools", "claude-disallowed-tools"),
+        validation_alias=AliasChoices(
+            "claude_disallowed_tools", "claude-disallowed-tools"
+        ),
         serialization_alias="claude-disallowed-tools",
     )
     claude_fallback_model: str | None = Field(
@@ -93,7 +103,9 @@ class VibrantConfig(BaseModel):
     )
     claude_setting_sources: list[str] = Field(
         default_factory=lambda: ["user", "project", "local"],
-        validation_alias=AliasChoices("claude_setting_sources", "claude-setting-sources"),
+        validation_alias=AliasChoices(
+            "claude_setting_sources", "claude-setting-sources"
+        ),
         serialization_alias="claude-setting-sources",
     )
     model: str = "gpt-5.3-codex"
@@ -167,11 +179,6 @@ class VibrantConfig(BaseModel):
         ),
         serialization_alias="execution-mode",
     )
-    test_commands: list[str] = Field(
-        default_factory=list,
-        validation_alias=AliasChoices("test_commands", "test-commands"),
-        serialization_alias="test-commands",
-    )
     extra_config: dict[str, Any] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("extra_config", "extra-config"),
@@ -187,7 +194,12 @@ class VibrantConfig(BaseModel):
 
         merged: dict[str, Any] = {}
         for key, value in data.items():
-            if key in {"provider", "runtime", "orchestrator", "validation"} and isinstance(value, Mapping):
+            if key in {
+                "provider",
+                "runtime",
+                "orchestrator",
+                "validation",
+            } and isinstance(value, Mapping):
                 merged.update(value)
             else:
                 merged[key] = value
@@ -196,7 +208,9 @@ class VibrantConfig(BaseModel):
     def resolve_conversation_directory(self, project_root: Path) -> Path:
         """Resolve the configured conversation directory against the project root."""
 
-        return resolve_project_path(self.conversation_directory, project_root=project_root)
+        return resolve_project_path(
+            self.conversation_directory, project_root=project_root
+        )
 
 
 def _resolve_start_directory(start_path: Path | None) -> Path:
@@ -266,7 +280,9 @@ def load_config(
     try:
         return VibrantConfig.model_validate(raw_data)
     except ValidationError as exc:
-        raise VibrantConfigError(f"Invalid configuration in {config_path}: {exc}") from exc
+        raise VibrantConfigError(
+            f"Invalid configuration in {config_path}: {exc}"
+        ) from exc
 
 
 __all__ = [

@@ -8,13 +8,13 @@ def build_test_prompt(
     project: str,
     task_id: str,
     branch: str,
-    test_commands: list[str],
     code_summary: str | None,
 ) -> str:
     """Render the prompt passed to a test agent."""
 
-    command_lines = "\n".join(f"{index}. `{command}`" for index, command in enumerate(test_commands, start=1))
-    prior_summary = code_summary or "No implementation summary was captured from the code agent."
+    prior_summary = (
+        code_summary or "No implementation summary was captured from the code agent."
+    )
     return "\n".join(
         [
             f"You are a test agent working on Project {project}.",
@@ -23,8 +23,6 @@ def build_test_prompt(
             f"Branch: {branch}",
             "## Code Agent Summary",
             prior_summary,
-            "## Validation Commands",
-            command_lines,
             "## Rules",
             "1. You are strictly read-only and must not create, edit, move, or delete files.",
             "2. Do NOT modify source files, git history, or orchestrator-owned `.vibrant` state.",

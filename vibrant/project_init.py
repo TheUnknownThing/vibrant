@@ -12,9 +12,7 @@ from .consensus.writer import ConsensusWriter
 from .models.consensus import ConsensusDocument, ConsensusStatus
 from .orchestrator.types import GatekeeperSessionSnapshot, WorkflowStatus, utc_now
 
-GITIGNORE_ENTRIES = [
-    "*"
-]
+GITIGNORE_ENTRIES = ["*"]
 
 DIRECTORIES = [
     Path("skills"),
@@ -38,8 +36,12 @@ def initialize_project(target_path: Path = Path(".")) -> Path:
     for relative_dir in DIRECTORIES:
         (vibrant_dir / relative_dir).mkdir(parents=True, exist_ok=True)
 
-    _write_if_missing(vibrant_dir / "consensus.md", _render_consensus_markdown(project_root.name))
-    _write_if_missing(vibrant_dir / "roadmap.md", _render_roadmap_markdown(project_root.name))
+    _write_if_missing(
+        vibrant_dir / "consensus.md", _render_consensus_markdown(project_root.name)
+    )
+    _write_if_missing(
+        vibrant_dir / "roadmap.md", _render_roadmap_markdown(project_root.name)
+    )
     _write_if_missing(vibrant_dir / "vibrant.toml", _render_default_config())
     _write_if_missing(vibrant_dir / "state.json", _render_initial_state())
     _ensure_gitignore(vibrant_dir / ".gitignore")
@@ -110,9 +112,6 @@ def _render_default_config() -> str:
         f'worktree-directory = "{config.worktree_directory}"',
         f'conversation-directory = "{config.conversation_directory}"',
         f'execution-mode = "{config.execution_mode.value}"',
-        "",
-        "[validation]",
-        "test-commands = []",
         "",
     ]
     if config.model_provider is not None:
