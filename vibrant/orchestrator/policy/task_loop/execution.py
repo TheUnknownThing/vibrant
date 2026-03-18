@@ -86,6 +86,7 @@ class ExecutionCoordinator:
         workspace = self.workspace_service.prepare_task_workspace(
             lease.task_id,
             branch_hint=lease.branch_hint,
+            prompt=prepared.prompt,
         )
         attempt = self.attempt_store.create(
             task_id=lease.task_id,
@@ -95,6 +96,10 @@ class ExecutionCoordinator:
         workspace = self.workspace_service.attach_attempt(
             workspace_id=workspace.workspace_id,
             attempt_id=attempt.attempt_id,
+        )
+        self.workspace_service.sync_prompt_inputs(
+            Path(workspace.path),
+            prepared.prompt,
         )
         agent_record = self._build_run_record(
             task=prepared.task,

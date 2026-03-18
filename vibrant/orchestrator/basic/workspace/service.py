@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,6 +23,7 @@ _WORKSPACE_EXCLUDED_PATHS = (".vibrant", ".vibrant/**")
 _BOT_NAME = "Vibrant"
 _BOT_EMAIL = "vibrant@example.invalid"
 _MAX_REPORTED_ORCHESTRATOR_PATHS = 5
+_PROMPT_FILE_REFERENCE_PATTERN = re.compile(r"(?<!\S)@(?P<path>\S+)")
 
 
 class WorkspaceService:
@@ -50,9 +54,10 @@ class WorkspaceService:
         *,
         attempt_id: str | None = None,
         branch_hint: str | None = None,
+        prompt: str | None = None,
     ) -> WorkspaceHandle:
         self._ensure_git_repo()
-        self._ensure_clean_target_repo()
+        self._ensure_clean_target_repo(prompt=prompt)
 
         workspace_id = uuid4().hex[:12]
         target_ref = self._resolve_target_ref()
@@ -82,6 +87,23 @@ class WorkspaceService:
         updated = self.workspace_store.update(workspace_id, attempt_id=attempt_id)
         self._workspaces[workspace_id] = updated
         return updated
+
+    def sync_prompt_inputs(self, workspace_root: Path, prompt: str) -> list[str]:
+        copied_paths: list[str] = []
+        ignore_patterns: list[str] = []
+        for source_path, relative_path in self._prompt_input_paths(prompt):
+            destination = workspace_root / relative_path
+            if source_path.is_dir():
+                shutil.copytree(source_path, destination, dirs_exist_ok=True)
+                ignore_patterns.append(f"/{relative_path.as_posix()}/**")
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, destination)
+                ignore_patterns.append(f"/{relative_path.as_posix()}")
+            copied_paths.append(relative_path.as_posix())
+        if ignore_patterns:
+            self._ensure_workspace_git_excludes(workspace_root, ignore_patterns)
+        return copied_paths
 
     def get_workspace(self, *, task_id: str, workspace_id: str) -> WorkspaceHandle:
         workspace = self._workspaces.get(workspace_id)
@@ -262,14 +284,14 @@ class WorkspaceService:
         if not self._git_success(self.project_root, "rev-parse", "--is-inside-work-tree"):
             raise RuntimeError(f"Project root is not a git repository: {self.project_root}")
 
-    def _ensure_clean_target_repo(self) -> None:
+    def _ensure_clean_target_repo(self, *, prompt: str | None = None) -> None:
         status = self._git_stdout(
             self.project_root,
             "status",
             "--porcelain",
             "--",
             ".",
-            *self._target_excluded_pathspec(),
+            *self._target_excluded_pathspec(prompt=prompt),
         )
         if status.strip():
             raise RuntimeError("Project repository has uncommitted changes outside orchestrator-owned paths.")
@@ -322,10 +344,11 @@ class WorkspaceService:
                 changed_paths.append(normalized)
         return changed_paths
 
-    def _target_excluded_pathspec(self) -> tuple[str, ...]:
+    def _target_excluded_pathspec(self, *, prompt: str | None = None) -> tuple[str, ...]:
         excluded_paths = list(_WORKSPACE_EXCLUDED_PATHS)
         excluded_paths.extend(self._project_relative_excluded_paths(self.worktree_root))
         excluded_paths.extend(self._project_relative_excluded_paths(self.artifacts_root))
+        excluded_paths.extend(self._prompt_input_excluded_paths(prompt or ""))
         return tuple(f":(exclude){path}" for path in excluded_paths)
 
     @staticmethod
@@ -344,6 +367,71 @@ class WorkspaceService:
         if not normalized:
             return ()
         return (normalized, f"{normalized}/**")
+
+    def _prompt_input_paths(self, prompt: str) -> list[tuple[Path, Path]]:
+        resolved_paths: list[tuple[Path, Path]] = []
+        seen: set[Path] = set()
+        for match in _PROMPT_FILE_REFERENCE_PATTERN.finditer(prompt):
+            token = match.group("path").strip()
+            if not token:
+                continue
+            candidate = Path(token).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.project_root / candidate
+            resolved_candidate = candidate.resolve(strict=False)
+            if not resolved_candidate.exists():
+                continue
+            try:
+                relative_path = resolved_candidate.relative_to(self.project_root)
+            except ValueError:
+                continue
+            if resolved_candidate in seen:
+                continue
+            seen.add(resolved_candidate)
+            resolved_paths.append((resolved_candidate, relative_path))
+        return resolved_paths
+
+    def _prompt_input_excluded_paths(self, prompt: str) -> tuple[str, ...]:
+        return self._pathspecs_for_relative_paths(relative_path for _, relative_path in self._prompt_input_paths(prompt))
+
+    @staticmethod
+    def _pathspecs_for_relative_paths(paths: Iterable[Path]) -> tuple[str, ...]:
+        rendered: list[str] = []
+        seen: set[str] = set()
+        for relative_path in paths:
+            normalized = relative_path.as_posix().strip("/")
+            if not normalized:
+                continue
+            candidates = (
+                normalized,
+                f"{normalized}/**",
+            )
+            for candidate in candidates:
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                rendered.append(candidate)
+        return tuple(rendered)
+
+    def _ensure_workspace_git_excludes(self, workspace_root: Path, patterns: list[str]) -> None:
+        exclude_path_value = self._git_stdout(workspace_root, "rev-parse", "--git-path", "info/exclude")
+        exclude_path = Path(exclude_path_value)
+        if not exclude_path.is_absolute():
+            exclude_path = (workspace_root / exclude_path).resolve()
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_patterns: set[str] = set()
+        if exclude_path.exists():
+            existing_patterns = {
+                line.strip()
+                for line in exclude_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            }
+        additions = [pattern for pattern in patterns if pattern not in existing_patterns]
+        if not additions:
+            return
+        with exclude_path.open("a", encoding="utf-8") as handle:
+            for pattern in additions:
+                handle.write(f"{pattern}\n")
 
     @staticmethod
     def _bot_git_env() -> dict[str, str]:
