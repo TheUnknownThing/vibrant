@@ -796,12 +796,10 @@ class VibrantApp(App):
             return None
         control_plane = getattr(orchestrator, "control_plane", None)
         if control_plane is not None:
-            assert isinstance(control_plane, InterfaceControlPlane)
             return control_plane
         fallback = getattr(orchestrator, "_control_plane", None)
         if fallback is None:
             return None
-        assert isinstance(fallback, InterfaceControlPlane)
         return fallback
 
     def _project_has_vibrant_state(self) -> bool:

@@ -33,11 +33,7 @@ EXPECTED_FILES = [
     ".vibrant/.gitignore",
 ]
 EXPECTED_GITIGNORE_ENTRIES = [
-    "logs/",
-    "conversations/",
-    "agent-instances/*.json",
-    "agent-runs/*.json",
-    "state.json",
+    "*",
 ]
 
 

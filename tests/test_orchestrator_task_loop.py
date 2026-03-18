@@ -41,7 +41,8 @@ def _initialize_git_repo(project_root: Path) -> None:
     _git(project_root, "init", "-b", "main")
     _git(project_root, "config", "user.name", "Vibrant Tests")
     _git(project_root, "config", "user.email", "vibrant-tests@example.com")
-    _git(project_root, "add", ".")
+    (project_root / ".gitignore").write_text(".vibrant/state\n", encoding="utf-8")
+    _git(project_root, "add", ".gitignore")
     _git(project_root, "commit", "-m", "Initial commit")
 
 
@@ -366,6 +367,8 @@ async def test_failed_completion_marks_attempt_failed_and_inactive(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_execution_coordinator_converts_worker_awaiting_input_to_failed_completion(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
+    orchestrator._config.test_commands = ["pytest"]
+    orchestrator._execution_coordinator.config.test_commands = ["pytest"]
     workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
     attempt = orchestrator._attempt_store.create(
         task_id="task-1",
@@ -399,6 +402,8 @@ async def test_execution_coordinator_marks_attempt_validating_before_waiting_for
     monkeypatch,
 ) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
+    orchestrator._config.test_commands = ["pytest"]
+    orchestrator._execution_coordinator.config.test_commands = ["pytest"]
     workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
     attempt = orchestrator._attempt_store.create(
         task_id="task-1",
@@ -410,11 +415,11 @@ async def test_execution_coordinator_marks_attempt_validating_before_waiting_for
     )
 
     class _FakeBindingService:
-        mcp_server = object()
+        mcp_server = SimpleNamespace(tool_definitions={}, resource_definitions={})
 
         def bind_preset(self, *, preset, run_id, conversation_id):
             del preset, conversation_id
-            return SimpleNamespace(access={"mode": "test"}, run_id=run_id)
+            return SimpleNamespace(access={"binding_id": "binding-1", "role": "test", "run_id": run_id}, run_id=run_id)
 
     class _FakeMCPHost:
         async def ensure_started(self):
@@ -565,8 +570,8 @@ def test_workspace_capture_rejects_orchestrator_state_edits(tmp_path: Path) -> N
     workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
     workspace_root = Path(workspace.path)
     consensus_path = workspace_root / ".vibrant" / "consensus.md"
-    original = consensus_path.read_text(encoding="utf-8")
-    consensus_path.write_text(f"{original}\n\nWorker-local edit.\n", encoding="utf-8")
+    consensus_path.parent.mkdir(parents=True, exist_ok=True)
+    consensus_path.write_text("Worker-local edit.\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="orchestrator-owned `.vibrant` state"):
         orchestrator._workspace_service.capture_result_commit(workspace)
