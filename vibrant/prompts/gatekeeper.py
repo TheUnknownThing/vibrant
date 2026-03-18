@@ -63,17 +63,24 @@ def build_gatekeeper_turn_prompt(
     trigger_value: str,
     trigger_description: str,
     agent_summary: str | None,
+    show_agent_summary: bool,
 ) -> str:
     """Render the per-turn Gatekeeper context."""
 
-    summary_text = agent_summary.strip() if agent_summary else "N/A"
-    return "\n".join(
-        [
-            "## Current Roadmap",
-            roadmap_text,
-            "## Trigger",
-            f"{trigger_value}: {trigger_description}",
-            "## Agent Summary (if applicable)",
-            summary_text,
-        ]
-    )
+    parts = [
+        "## Current Roadmap",
+        roadmap_text,
+        "## Trigger",
+        f"{trigger_value}: {trigger_description}",
+    ]
+
+    if show_agent_summary:
+        summary_text = agent_summary.strip() if agent_summary else "N/A"
+        parts.extend(
+            [
+                "## Agent Summary (if applicable)",
+                summary_text,
+            ]
+        )
+
+    return "\n".join(parts)

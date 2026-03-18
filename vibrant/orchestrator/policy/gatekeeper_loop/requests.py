@@ -29,12 +29,12 @@ def build_request(
         return GatekeeperRequest(
             trigger=GatekeeperTrigger.TASK_COMPLETION,
             trigger_description=trigger_description or text,
-            agent_summary=agent_summary or text,
+            agent_summary=agent_summary,
         )
     return GatekeeperRequest(
         trigger=GatekeeperTrigger.USER_CONVERSATION,
         trigger_description=trigger_description or text,
-        agent_summary=agent_summary or text,
+        agent_summary=agent_summary,
     )
 
 
