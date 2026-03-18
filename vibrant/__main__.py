@@ -19,12 +19,12 @@ import shlex
 import sys
 from collections.abc import Sequence
 from typing import Literal
-from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .config import VibrantConfig, find_project_root, load_config
 from .project_init import initialize_project
 from .providers.base import ProviderKind
+from .type_defs import JSONObject
 
 
 @dataclass(slots=True)
@@ -59,17 +59,17 @@ def _enable_textual_devtools() -> None:
 class _DynamicHostServer:
     """Small wrapper around textual-serve that builds URLs from request host."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *server_args: object, **server_kwargs: object) -> None:
         from textual_serve.server import Server
 
-        self._server: Server = Server(*args, **kwargs)
+        self._server: Server = Server(*server_args, **server_kwargs)
 
     def serve(self, debug: bool = False) -> None:
         from aiohttp import web
         import aiohttp_jinja2
 
         @aiohttp_jinja2.template("app_index.html")
-        async def _dynamic_handle_index(request: web.Request) -> dict[str, Any]:
+        async def _dynamic_handle_index(request: web.Request) -> JSONObject:
             router = request.app.router
             try:
                 font_size = int(request.query.get("fontsize", "16"))
@@ -78,8 +78,8 @@ class _DynamicHostServer:
 
             origin = self._server.public_url.rstrip("/")
 
-            def get_url(route: str, **args: Any) -> str:
-                path = router[route].url_for(**args)
+            def get_url(route: str, **route_params: str) -> str:
+                path = router[route].url_for(**route_params)
                 path_text = str(path)
                 if not path_text.startswith("/"):
                     path_text = f"/{path_text}"

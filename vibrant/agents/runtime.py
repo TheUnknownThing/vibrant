@@ -43,12 +43,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 from vibrant.agents.base import AgentBase
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType, ProviderResumeHandle
-from vibrant.providers.base import CanonicalEvent
+from vibrant.providers.base import CanonicalEvent, ProviderAdapter
 from vibrant.providers.invocation import ProviderInvocationPlan
+from vibrant.type_defs import JSONMapping, JSONValue, RequestId
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class NormalizedRunResult:
     input_requests: list[InputRequest] = field(default_factory=list)
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    turn_result: Any | None = None
+    turn_result: JSONValue | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -116,14 +117,13 @@ class NormalizedRunResult:
 
 # ── Callback type ────────────────────────────────────────────────────
 
-AgentRecordCallback = Callable[[AgentRecord], Any]
+AgentRecordCallback = Callable[[AgentRecord], None]
 """Invoked by the runtime on every record mutation so the orchestrator
 can persist / broadcast without the runtime knowing about state stores."""
 
 
 # ── Adapter accessor type ────────────────────────────────────────────
-
-AdapterAccessor = Callable[[], Any | None]
+ProviderAdapterAccessor = Callable[[], ProviderAdapter | None]
 """Returns the live adapter from the underlying AgentBase, or None."""
 
 
@@ -146,7 +146,7 @@ class AgentHandle:
         self,
         result_future: asyncio.Future[NormalizedRunResult],
         *,
-        adapter_accessor: AdapterAccessor | None = None,
+        adapter_accessor: ProviderAdapterAccessor | None = None,
     ) -> None:
         self._future = result_future
         self._state: RunState = RunState.STARTING
@@ -186,10 +186,10 @@ class AgentHandle:
 
     async def respond_to_request(
         self,
-        request_id: int | str,
+        request_id: RequestId,
         *,
-        result: Any | None = None,
-        error: Mapping[str, Any] | None = None,
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
     ) -> None:
         """Respond to a pending interactive provider request.
 
@@ -249,7 +249,7 @@ class AgentHandle:
 
     # -- internal ------------------------------------------------------
 
-    def _get_adapter(self, method_name: str) -> Any:
+    def _get_adapter(self, method_name: str) -> ProviderAdapter:
         """Obtain the live adapter or raise."""
         if self._adapter_accessor is None:
             raise RuntimeError(
@@ -426,11 +426,14 @@ class BaseAgentRuntime:
         future: asyncio.Future[NormalizedRunResult] = loop.create_future()
 
         # Build the adapter accessor so the handle can delegate control
-        # methods to the live adapter held by AgentBase._live_adapter.
+        # methods to the live adapter held by AgentBase.live_adapter.
         agent = self._agent
 
-        def _adapter_accessor() -> Any | None:
-            return getattr(agent, "_live_adapter", None)
+        def _adapter_accessor() -> ProviderAdapter | None:
+            adapter = agent.live_adapter
+            if adapter is None:
+                return None
+            return adapter
 
         handle = AgentHandle(future, adapter_accessor=_adapter_accessor)
 

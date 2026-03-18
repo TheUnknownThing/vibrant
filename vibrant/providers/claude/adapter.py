@@ -7,10 +7,11 @@ from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
-from typing import Any
+from typing import Callable
 
 from ...models.agent import AgentRecord, ProviderResumeHandle
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
+from ...type_defs import AsyncNone, JSONMapping, JSONObject, JSONValue, is_json_mapping
 from ..base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 from ..invocation import ProviderInvocationPlan
 
@@ -48,8 +49,8 @@ SUPPORTED_LIST_METHODS = {"session/list", "session/messages", "mcp/status", "ser
 
 @dataclass(slots=True)
 class _PermissionAllowShim:
-    updated_input: dict[str, Any] | None = None
-    updated_permissions: list[Any] | None = None
+    updated_input: JSONObject | None = None
+    updated_permissions: list[JSONValue] | None = None
     behavior: str = "allow"
 
 
@@ -65,7 +66,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
 
     def __init__(
         self,
-        client: ClaudeSDKClient | Any | None = None,
+        client: ClaudeSDKClient | None = None,
         *,
         cwd: str | None = None,
         launch_args: Sequence[str] | None = None,
@@ -80,16 +81,16 @@ class ClaudeProviderAdapter(ProviderAdapter):
         claude_setting_sources: Sequence[str] | None = None,
         claude_model: str | None = None,
         claude_effort: str | None = None,
-        claude_extra_config: Mapping[str, Any] | None = None,
+        claude_extra_config: JSONMapping | None = None,
         codex_binary: str | None = None,
         codex_home: str | None = None,
         agent_record: AgentRecord | None = None,
         on_canonical_event: CanonicalEventHandler | None = None,
-        on_stderr_line: Any | None = None,
+        on_stderr_line: Callable[[str], AsyncNone] | None = None,
         native_logger: NativeLogger | None = None,
         canonical_logger: CanonicalLogger | None = None,
-        client_factory: Any | None = None,
-        **_: Any,
+        client_factory: Callable[..., object] | None = None,
+        **_: object,
     ) -> None:
         super().__init__(on_canonical_event=on_canonical_event)
         self.client = client
@@ -111,7 +112,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._extra_config = dict(claude_extra_config or {})
         self.agent_record = agent_record
         self.provider_thread_id: str | None = None
-        self.thread_metadata: dict[str, Any] = {}
+        self.thread_metadata: JSONObject = {}
         self.current_turn_id: str | None = None
         self._turn_counter = 0
         self._runtime_mode = RuntimeMode.WORKSPACE_WRITE
@@ -119,14 +120,14 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._session_started = False
         self._thread_started_emitted = False
         self._thread_resumed = False
-        self._last_result: dict[str, Any] | None = None
-        self._last_server_info: dict[str, Any] | None = None
+        self._last_result: JSONObject | None = None
+        self._last_server_info: JSONObject | None = None
         self._on_stderr_line = on_stderr_line
         self._native_logger = native_logger
         self._canonical_logger = canonical_logger
 
         self._ensure_loggers()
-        ignored_constructor_extras: dict[str, Any] = {}
+        ignored_constructor_extras: JSONObject = {}
         if codex_binary:
             ignored_constructor_extras["codex_binary"] = codex_binary
         if codex_home:
@@ -147,7 +148,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
     def is_running(self) -> bool:
         return self._session_started and self.client is not None
 
-    def _ensure_client(self, cwd: str | None = None) -> Any:
+    def _ensure_client(self, cwd: str | None = None) -> object:
         self._ensure_loggers(cwd)
         if cwd is not None:
             self._cwd = cwd
@@ -163,13 +164,13 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self.client = self._client_factory(options=options)
         return self.client
 
-    def _build_client_options(self) -> Any:
+    def _build_client_options(self) -> object:
         if ClaudeAgentOptions is None:
             raise RuntimeError(
                 "Claude provider support requires the claude-agent-sdk package"
             ) from _CLAUDE_SDK_IMPORT_ERROR
 
-        option_kwargs: dict[str, Any] = {
+        option_kwargs: dict[str, object] = {
             "cwd": self._cwd,
             "cli_path": self._claude_cli_path,
             "settings": self._claude_settings,
@@ -213,7 +214,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
 
         return ClaudeAgentOptions(**option_kwargs)
 
-    def _apply_invocation_plan(self, option_kwargs: dict[str, Any]) -> None:
+    def _apply_invocation_plan(self, option_kwargs: dict[str, object]) -> None:
         if self._invocation_plan is None:
             return
 
@@ -260,7 +261,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         if self._canonical_logger is None:
             self._canonical_logger = CanonicalLogger(canonical_path)
 
-    async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+    async def start_session(self, *, cwd: str | None = None, **kwargs: JSONValue) -> JSONValue:
         client = self._ensure_client(cwd)
         if kwargs:
             self._handle_native_event({"event": "session.start.extra", "data": dict(kwargs)})
@@ -287,14 +288,14 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self._session_started = False
         await self._emit_canonical("session.state.changed", state="stopped")
 
-    async def start_thread(self, **kwargs: Any) -> Any:
+    async def start_thread(self, **kwargs: JSONValue) -> JSONValue:
         await self._configure_thread(kwargs)
         self._thread_resumed = False
         self._thread_started_emitted = False
         self.thread_metadata = {}
         return {"thread": {}}
 
-    async def resume_thread(self, provider_thread_id: str, **kwargs: Any) -> Any:
+    async def resume_thread(self, provider_thread_id: str, **kwargs: JSONValue) -> JSONValue:
         await self._configure_thread(kwargs)
         self.provider_thread_id = provider_thread_id
         self._thread_resumed = True
@@ -307,7 +308,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         )
         return {"thread": {"id": provider_thread_id}}
 
-    async def _configure_thread(self, kwargs: Mapping[str, Any]) -> None:
+    async def _configure_thread(self, kwargs: JSONMapping) -> None:
         client = self._ensure_client()
         data = dict(kwargs)
         runtime_mode = RuntimeMode(data.pop("runtime_mode", self._runtime_mode))
@@ -345,11 +346,11 @@ class ClaudeProviderAdapter(ProviderAdapter):
     async def start_turn(
         self,
         *,
-        input_items: Sequence[Mapping[str, Any]],
+        input_items: Sequence[JSONMapping],
         runtime_mode: RuntimeMode,
         approval_policy: str,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         if approval_policy != "never":
             raise ValueError("Claude provider currently supports approval_policy='never' only")
 
@@ -392,7 +393,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
             raise RuntimeError("Claude response stream ended without a terminal result message")
         return self._last_result or {}
 
-    async def interrupt_turn(self, **kwargs: Any) -> Any:
+    async def interrupt_turn(self, **kwargs: JSONValue) -> JSONValue:
         client = self._ensure_client(kwargs.pop("cwd", None))
         if kwargs:
             self._handle_native_event({"event": "turn.interrupt.extra", "data": dict(kwargs)})
@@ -402,9 +403,9 @@ class ClaudeProviderAdapter(ProviderAdapter):
     async def send_request(
         self,
         method: str,
-        params: Mapping[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        params: JSONMapping | None = None,
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         if kwargs:
             raise TypeError(f"Unexpected keyword arguments: {', '.join(sorted(kwargs))}")
         request_params = dict(params or {})
@@ -447,9 +448,9 @@ class ClaudeProviderAdapter(ProviderAdapter):
         self,
         request_id: int | str,
         *,
-        result: Any | None = None,
-        error: Mapping[str, Any] | None = None,
-    ) -> Any:
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
+    ) -> JSONValue | None:
         raise RuntimeError(
             f"Claude provider does not expose interactive request handling (request_id={request_id!r}, "
             f"result={result!r}, error={dict(error) if error else None!r})"
@@ -461,7 +462,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
             if inspect.isawaitable(callback_result):
                 await callback_result
 
-    async def _handle_message(self, message: Any) -> None:
+    async def _handle_message(self, message: object) -> None:
         self._handle_native_event({"event": "sdk.message.received", "data": _serialize_value(message)})
         session_id = _message_session_id(message)
         if session_id:
@@ -594,7 +595,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
             )
         )
 
-    async def _emit_task_progress(self, *, item: Mapping[str, Any]) -> None:
+    async def _emit_task_progress(self, *, item: JSONMapping) -> None:
         await self._emit_canonical(
             "task.progress",
             item=dict(item),
@@ -604,7 +605,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
             provider_payload={"item": dict(item)},
         )
 
-    async def _emit_canonical(self, event_type: str, **payload: Any) -> None:
+    async def _emit_canonical(self, event_type: str, **payload: JSONValue) -> None:
         event: CanonicalEvent = {
             "type": event_type,
             "timestamp": _timestamp_now(),
@@ -626,7 +627,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
             )
         await self.on_canonical_event(event)
 
-    async def _can_use_tool(self, tool_name: str, input_data: dict[str, Any], context: Any) -> Any:
+    async def _can_use_tool(self, tool_name: str, input_data: JSONObject, context: object) -> object:
         request_payload = {
             "tool_name": tool_name,
             "input": dict(input_data),
@@ -655,7 +656,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         )
         return response
 
-    def _tool_denial_message(self, tool_name: str, input_data: Mapping[str, Any]) -> str | None:
+    def _tool_denial_message(self, tool_name: str, input_data: JSONMapping) -> str | None:
         if tool_name in self._claude_disallowed_tool_set:
             return f"Tool {tool_name} is disallowed by Vibrant configuration."
 
@@ -688,7 +689,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
         roots.extend(Path(path).expanduser().resolve() for path in self._claude_add_dirs)
         return roots
 
-    def _handle_native_event(self, raw_event: Mapping[str, Any]) -> None:
+    def _handle_native_event(self, raw_event: JSONMapping) -> None:
         if self._native_logger is None:
             self._ensure_loggers()
         if self._native_logger is None:
@@ -706,7 +707,7 @@ class ClaudeProviderAdapter(ProviderAdapter):
                 raise RuntimeError("on_stderr_line must be synchronous")
 
 
-async def _maybe_call(target: Any, method_name: str) -> Any:
+async def _maybe_call(target: object, method_name: str) -> object:
     method = getattr(target, method_name, None)
     if method is None:
         return None
@@ -716,19 +717,19 @@ async def _maybe_call(target: Any, method_name: str) -> Any:
     return result
 
 
-def _permission_allow(*, updated_input: dict[str, Any] | None = None) -> Any:
+def _permission_allow(*, updated_input: JSONObject | None = None) -> object:
     if PermissionResultAllow is not None:
         return PermissionResultAllow(updated_input=updated_input)
     return _PermissionAllowShim(updated_input=updated_input)
 
 
-def _permission_deny(*, message: str, interrupt: bool) -> Any:
+def _permission_deny(*, message: str, interrupt: bool) -> object:
     if PermissionResultDeny is not None:
         return PermissionResultDeny(message=message, interrupt=interrupt)
     return _PermissionDenyShim(message=message, interrupt=interrupt)
 
 
-def _tool_path_candidate(tool_name: str, input_data: Mapping[str, Any]) -> Path | None:
+def _tool_path_candidate(tool_name: str, input_data: JSONMapping) -> Path | None:
     keys_by_tool = {
         "Write": ("file_path", "path"),
         "Edit": ("file_path", "path"),
@@ -761,14 +762,14 @@ def _path_within_any_root(candidate: Path, roots: Sequence[Path]) -> bool:
     return False
 
 
-def _message_session_id(message: Any) -> str | None:
+def _message_session_id(message: object) -> str | None:
     session_id = getattr(message, "session_id", None)
     if isinstance(session_id, str) and session_id:
         return session_id
     return None
 
 
-def _result_payload(message: ResultMessage) -> dict[str, Any]:
+def _result_payload(message: ResultMessage) -> JSONObject:
     return {
         "subtype": message.subtype,
         "duration_ms": message.duration_ms,
@@ -785,7 +786,7 @@ def _result_payload(message: ResultMessage) -> dict[str, Any]:
     }
 
 
-def _serialize_value(value: Any) -> Any:
+def _serialize_value(value: object) -> JSONValue:
     if is_dataclass(value):
         return {key: _serialize_value(item) for key, item in asdict(value).items()}
     if isinstance(value, Mapping):
@@ -797,19 +798,19 @@ def _serialize_value(value: Any) -> Any:
     return value
 
 
-def _coerce_provider_payload(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
+def _coerce_provider_payload(value: object) -> JSONObject:
+    if is_json_mapping(value):
         return dict(value)
     if value is None:
         return {}
     return {"value": _serialize_value(value)}
 
 
-def _is_string_sequence(value: Any) -> bool:
+def _is_string_sequence(value: object) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
 
 
-def _merge_unique_strings(existing: Any, extra: Sequence[Any]) -> list[str]:
+def _merge_unique_strings(existing: object, extra: Sequence[object]) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
     for source in (existing or [], extra):
@@ -822,7 +823,7 @@ def _merge_unique_strings(existing: Any, extra: Sequence[Any]) -> list[str]:
     return merged
 
 
-def _prompt_from_input_items(input_items: Sequence[Mapping[str, Any]]) -> str:
+def _prompt_from_input_items(input_items: Sequence[JSONMapping]) -> str:
     parts: list[str] = []
     for item in input_items:
         text = item.get("text")
@@ -833,7 +834,7 @@ def _prompt_from_input_items(input_items: Sequence[Mapping[str, Any]]) -> str:
     return "\n\n".join(part for part in parts if part).strip()
 
 
-def _progress_text_from_item(item_payload: Mapping[str, Any]) -> str | None:
+def _progress_text_from_item(item_payload: JSONMapping) -> str | None:
     text = item_payload.get("text")
     if isinstance(text, str) and text:
         return text

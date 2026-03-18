@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Protocol
 
-from .base import ProviderKind
+from .base import ProviderAdapter, ProviderKind
+
+
+class ProviderAdapterFactory(Protocol):
+    def __call__(self, *args: object, **kwargs: object) -> ProviderAdapter: ...
+
+
+class ProviderConfig(Protocol):
+    mock_responses: bool
+    provider_kind: ProviderKind | str | None
 
 PROVIDER_TRANSPORTS: dict[ProviderKind, str] = {
     ProviderKind.CODEX: "app-server-json-rpc",
@@ -28,7 +37,7 @@ def provider_transport(value: ProviderKind | str | None) -> str:
     return PROVIDER_TRANSPORTS[normalize_provider_kind(value)]
 
 
-def resolve_provider_adapter(value: ProviderKind | str | None) -> Any:
+def resolve_provider_adapter(value: ProviderKind | str | None) -> type[ProviderAdapter]:
     """Return the adapter class for a provider kind."""
 
     kind = normalize_provider_kind(value)
@@ -43,7 +52,10 @@ def resolve_provider_adapter(value: ProviderKind | str | None) -> Any:
     raise ValueError(f"Unsupported provider kind: {value!r}")
 
 
-def resolve_configured_adapter_factory(config: Any, adapter_factory: Any | None = None) -> Any:
+def resolve_configured_adapter_factory(
+    config: ProviderConfig,
+    adapter_factory: ProviderAdapterFactory | None = None,
+) -> ProviderAdapterFactory:
     """Resolve the adapter factory for a runtime configuration."""
 
     if adapter_factory is not None:

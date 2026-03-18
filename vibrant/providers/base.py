@@ -37,7 +37,9 @@ from dataclasses import dataclass
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal, NotRequired, Required, TypeAlias, TypedDict
+from typing import Literal, NotRequired, Required, TypeAlias, TypedDict
+
+from vibrant.type_defs import AsyncNone, JSONMapping, JSONObject, JSONValue, RequestId
 
 CanonicalEventOrigin: TypeAlias = Literal["provider", "orchestrator"]
 CanonicalRequestKind: TypeAlias = Literal["request", "approval", "user-input"]
@@ -62,7 +64,7 @@ CanonicalKnownEventType: TypeAlias = Literal[
     "turn.completed",
     "runtime.error",
 ]
-CanonicalPayload: TypeAlias = Mapping[str, Any]
+CanonicalPayload: TypeAlias = JSONMapping
 
 
 class CanonicalEventEnvelope(TypedDict, total=False):
@@ -160,13 +162,13 @@ class ToolCallCompletedEvent(CanonicalEventEnvelope):
     item_id: Required[str]
     tool_name: Required[str]
     turn_id: NotRequired[str]
-    result: NotRequired[Any]
-    error: NotRequired[Any]
+    result: NotRequired[JSONValue]
+    error: NotRequired[JSONValue]
 
 
 class RequestOpenedEvent(CanonicalEventEnvelope):
     type: Required[Literal["request.opened"]]
-    request_id: Required[int | str]
+    request_id: Required[RequestId]
     request_kind: Required[CanonicalRequestKind]
     method: Required[str]
     params: NotRequired[CanonicalPayload]
@@ -174,17 +176,17 @@ class RequestOpenedEvent(CanonicalEventEnvelope):
 
 class RequestResolvedEvent(CanonicalEventEnvelope):
     type: Required[Literal["request.resolved"]]
-    request_id: Required[int | str]
+    request_id: Required[RequestId]
     request_kind: Required[CanonicalRequestKind]
     method: Required[str]
-    result: NotRequired[Any]
-    error: NotRequired[Any]
+    result: NotRequired[JSONValue]
+    error: NotRequired[JSONValue]
     error_message: NotRequired[str]
 
 
 class UserInputRequestedEvent(CanonicalEventEnvelope):
     type: Required[Literal["user-input.requested"]]
-    request_id: NotRequired[int | str]
+    request_id: NotRequired[RequestId]
     method: NotRequired[str]
     params: NotRequired[CanonicalPayload]
     questions: NotRequired[list[str]]
@@ -194,10 +196,10 @@ class UserInputRequestedEvent(CanonicalEventEnvelope):
 
 class UserInputResolvedEvent(CanonicalEventEnvelope):
     type: Required[Literal["user-input.resolved"]]
-    request_id: NotRequired[int | str]
+    request_id: NotRequired[RequestId]
     method: NotRequired[str]
-    result: NotRequired[Any]
-    error: NotRequired[Any]
+    result: NotRequired[JSONValue]
+    error: NotRequired[JSONValue]
     error_message: NotRequired[str]
     question: NotRequired[str]
     answer: NotRequired[str]
@@ -205,7 +207,7 @@ class UserInputResolvedEvent(CanonicalEventEnvelope):
 
 class TaskProgressEvent(CanonicalEventEnvelope):
     type: Required[Literal["task.progress"]]
-    item: Required[dict]
+    item: Required[JSONObject]
     turn_id: NotRequired[str]
     item_type: NotRequired[str]
     text: NotRequired[str]
@@ -227,7 +229,7 @@ class TurnCompletedEvent(CanonicalEventEnvelope):
 
 class RuntimeErrorEvent(CanonicalEventEnvelope):
     type: Required[Literal["runtime.error"]]
-    error: NotRequired[Any]
+    error: NotRequired[JSONValue]
     error_message: NotRequired[str]
     error_code: NotRequired[int | str]
 
@@ -260,7 +262,7 @@ CanonicalEvent: TypeAlias = (
     | RuntimeErrorEvent
     | GenericCanonicalEvent
 )
-CanonicalEventHandler: TypeAlias = Callable[[CanonicalEvent], Any]
+CanonicalEventHandler: TypeAlias = Callable[[CanonicalEvent], AsyncNone]
 
 
 class CodexAuthMode(str, enum.Enum):
@@ -298,13 +300,13 @@ class CodexAuthConfig:
     id_token: str | None = None
     access_token: str | None = None
 
-    def to_login_params(self) -> dict[str, Any] | None:
+    def to_login_params(self) -> JSONObject | None:
         """Return ``account/login/start`` params for this configuration."""
 
         if self.mode is CodexAuthMode.SYSTEM:
             return None
 
-        params: dict[str, Any] = {"type": self.mode.value}
+        params: JSONObject = {"type": self.mode.value}
         if self.mode is CodexAuthMode.API_KEY:
             if not self.api_key:
                 raise ValueError("CodexAuthConfig.api_key is required for API_KEY auth mode")
@@ -368,14 +370,14 @@ class ProviderAdapter(ABC):
         self._canonical_event_handler = handler
 
     @abstractmethod
-    async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+    async def start_session(self, *, cwd: str | None = None, **kwargs: JSONValue) -> JSONValue:
         """Start the underlying provider session/process.
 
         After this returns, the adapter must be ready for thread operations.
         """
 
     @abstractmethod
-    async def stop_session(self) -> Any:
+    async def stop_session(self) -> JSONValue | None:
         """Stop the underlying provider session/process.
 
         Implementations should make this safe after success, failure, or
@@ -383,7 +385,7 @@ class ProviderAdapter(ABC):
         """
 
     @abstractmethod
-    async def start_thread(self, **kwargs: Any) -> Any:
+    async def start_thread(self, **kwargs: JSONValue) -> JSONValue:
         """Open a fresh provider thread/conversation handle.
 
         Resumable providers must eventually surface a durable thread id either
@@ -391,18 +393,18 @@ class ProviderAdapter(ABC):
         """
 
     @abstractmethod
-    async def resume_thread(self, provider_thread_id: str, **kwargs: Any) -> Any:
+    async def resume_thread(self, provider_thread_id: str, **kwargs: JSONValue) -> JSONValue:
         """Resume an existing provider thread using durable provider metadata."""
 
     @abstractmethod
     async def start_turn(
         self,
         *,
-        input_items: Sequence[Mapping[str, Any]],
+        input_items: Sequence[JSONMapping],
         runtime_mode: RuntimeMode,
         approval_policy: str,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         """Start a turn with structured input items and sandbox controls.
 
         A started turn must eventually resolve by emitting ``turn.completed``
@@ -410,16 +412,16 @@ class ProviderAdapter(ABC):
         """
 
     @abstractmethod
-    async def interrupt_turn(self, **kwargs: Any) -> Any:
+    async def interrupt_turn(self, **kwargs: JSONValue) -> JSONValue:
         """Interrupt the currently running turn, if any."""
 
     @abstractmethod
     async def send_request(
         self,
         method: str,
-        params: Mapping[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        params: JSONMapping | None = None,
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         """Send a provider-native control-plane request.
 
         This surface is used for Codex management endpoints such as
@@ -429,11 +431,11 @@ class ProviderAdapter(ABC):
     @abstractmethod
     async def respond_to_request(
         self,
-        request_id: int | str,
+        request_id: RequestId,
         *,
-        result: Any | None = None,
-        error: Mapping[str, Any] | None = None,
-    ) -> Any:
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
+    ) -> JSONValue | None:
         """Respond to a server-initiated JSON-RPC request.
 
         Providers that surface ``request.opened`` events must implement this

@@ -6,10 +6,14 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TypeVar, cast
+
+from vibrant.type_defs import JSONValue, is_json_value
+
+JSONDocument = TypeVar("JSONDocument", bound=JSONValue)
 
 
-def read_json(path: Path, *, default: Any) -> Any:
+def read_json(path: Path, *, default: JSONDocument) -> JSONDocument:
     """Read JSON from disk, returning ``default`` when the file is absent."""
 
     if not path.exists():
@@ -17,10 +21,12 @@ def read_json(path: Path, *, default: Any) -> Any:
     text = path.read_text(encoding="utf-8").strip()
     if not text:
         return default
-    return json.loads(text)
+    payload = json.loads(text)
+    assert is_json_value(payload), f"JSON file {path} must contain JSON-compatible data"
+    return cast(JSONDocument, payload)
 
 
-def write_json(path: Path, payload: Any) -> None:
+def write_json(path: Path, payload: JSONValue) -> None:
     """Atomically write JSON to disk."""
 
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import enum
-from typing import Any
 
 from pydantic import BaseModel
 
@@ -36,13 +35,19 @@ class AppSettings(BaseModel):
     codex_binary: str = "codex"
     history_dir: str = str(DEFAULT_CONVERSATION_DIRECTORY)
 
-    def to_session_config(self, **overrides: Any) -> SessionConfig:
-        base = {
-            "model": self.default_model,
-            "approval_mode": self.default_approval_mode,
-            "cwd": self.default_cwd,
-            "effort": self.default_effort,
-            "codex_binary": self.codex_binary,
-        }
-        base.update(overrides)
-        return SessionConfig(**base)
+    def to_session_config(
+        self,
+        *,
+        model: str | None = None,
+        approval_mode: ApprovalMode | None = None,
+        cwd: str | None = None,
+        effort: str | None = None,
+        codex_binary: str | None = None,
+    ) -> SessionConfig:
+        return SessionConfig(
+            model=model or self.default_model,
+            approval_mode=approval_mode or self.default_approval_mode,
+            cwd=cwd if cwd is not None else self.default_cwd,
+            effort=effort or self.default_effort,
+            codex_binary=codex_binary or self.codex_binary,
+        )

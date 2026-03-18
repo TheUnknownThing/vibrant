@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import Any
 
 from vibrant.models.agent import ProviderResumeHandle
 
+from ...basic.runtime import AgentRuntimeService
 from ...basic.session import authoritative_resume_handle
+from ...basic.stores import AgentRunStore, AttemptStore
+from ...basic.workspace import WorkspaceService
 from ...types import (
     AttemptCompletion,
     AttemptExecutionSnapshot,
@@ -18,7 +20,7 @@ from ...types import (
     AttemptStatus,
     InputRequest,
 )
-from .models import WORKER_INPUT_UNSUPPORTED_ERROR
+from .models import PreparedTaskExecution, WORKER_INPUT_UNSUPPORTED_ERROR
 
 _CODE_PHASE_STATUSES = {
     AttemptStatus.LEASED,
@@ -57,11 +59,14 @@ def active_run_id_for_attempt(attempt: AttemptRecord) -> str | None:
 
 @dataclass(slots=True)
 class AttemptExecutionSessionResource:
-    attempt_store: Any
-    run_store: Any
-    workspace_service: Any
-    runtime_service: Any
-    resume_callback: Callable[[str, AttemptExecutionSnapshot, ProviderResumeHandle | None, Any], Any]
+    attempt_store: AttemptStore
+    run_store: AgentRunStore
+    workspace_service: WorkspaceService
+    runtime_service: AgentRuntimeService
+    resume_callback: Callable[
+        [str, AttemptExecutionSnapshot, ProviderResumeHandle | None, PreparedTaskExecution],
+        Awaitable[AttemptExecutionSnapshot],
+    ]
 
     def get(self, attempt_id: str) -> AttemptExecutionSnapshot | None:
         attempt = self.attempt_store.get(attempt_id)
@@ -128,7 +133,7 @@ class AttemptExecutionSessionResource:
         self,
         attempt_id: str,
         *,
-        prepared: Any,
+        prepared: PreparedTaskExecution,
     ) -> AttemptExecutionSnapshot:
         snapshot = self.get(attempt_id)
         if snapshot is None:
@@ -272,9 +277,9 @@ def attempt_needs_recovery(snapshot: AttemptRecoveryState | AttemptExecutionSnap
 def _project_snapshot(
     attempt: AttemptRecord,
     *,
-    run_store: Any,
-    workspace_service: Any,
-    runtime_service: Any,
+    run_store: AgentRunStore,
+    workspace_service: WorkspaceService,
+    runtime_service: AgentRuntimeService,
 ) -> AttemptExecutionSnapshot:
     run_id = active_run_id_for_attempt(attempt)
     run_record = run_store.get(run_id) if run_id is not None else None

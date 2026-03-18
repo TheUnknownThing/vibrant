@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Any, Callable
+from typing import Callable, ParamSpec, TypeVar
 import warnings
 
 _stdlib_deprecated = getattr(warnings, "deprecated", None)
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
-def deprecated(func: Callable[..., Any]) -> Callable[..., Any]:
+def deprecated(func: Callable[P, R]) -> Callable[P, R]:
     """Provide a runtime deprecation decorator when ``warnings.deprecated`` is unavailable."""
 
     message = f"{func.__qualname__} is deprecated and will be removed in a future release."
@@ -21,14 +23,14 @@ def deprecated(func: Callable[..., Any]) -> Callable[..., Any]:
     if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             warnings.warn(message, category=DeprecationWarning, stacklevel=2)
             return await func(*args, **kwargs)
 
         return async_wrapper
 
     @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         warnings.warn(message, category=DeprecationWarning, stacklevel=2)
         return func(*args, **kwargs)
 

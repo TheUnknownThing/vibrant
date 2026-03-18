@@ -10,13 +10,13 @@ import asyncio
 import inspect
 import re
 from datetime import datetime, timezone
-from typing import Any, Callable
 
 from vibrant.models.agent import AgentRecord, AgentStatus
-from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.providers.base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
+from vibrant.type_defs import JSONMapping, JSONObject, JSONValue, is_json_mapping
 
 
-async def stop_adapter_safely(adapter: Any) -> None:
+async def stop_adapter_safely(adapter: ProviderAdapter) -> None:
     """Stop a provider adapter session, swallowing errors."""
     try:
         await adapter.stop_session()
@@ -24,9 +24,9 @@ async def stop_adapter_safely(adapter: Any) -> None:
         return
 
 
-def extract_text_from_progress_item(item: Any) -> str:
+def extract_text_from_progress_item(item: JSONValue) -> str:
     """Extract display text from a task.progress event item."""
-    if not isinstance(item, dict):
+    if not is_json_mapping(item):
         return ""
     if not _is_assistant_progress_item(item):
         return ""
@@ -41,7 +41,7 @@ def extract_text_from_progress_item(item: Any) -> str:
     return ""
 
 
-def _is_assistant_progress_item(item: dict[str, Any]) -> bool:
+def _is_assistant_progress_item(item: JSONMapping) -> bool:
     item_type = _normalize_progress_item_token(item.get("type"))
     if item_type in {"agentmessage", "assistantmessage"}:
         return True
@@ -54,7 +54,7 @@ def _is_assistant_progress_item(item: dict[str, Any]) -> bool:
     return author in {"assistant", "agent", "model"}
 
 
-def _normalize_progress_item_token(value: Any) -> str:
+def _normalize_progress_item_token(value: JSONValue) -> str:
     if not isinstance(value, str):
         return ""
     return re.sub(r"[^a-z0-9]+", "", value.lower())
@@ -66,7 +66,7 @@ def extract_error_message(event: CanonicalEvent) -> str:
     if isinstance(error_message, str) and error_message:
         return error_message
     error = event.get("error")
-    if isinstance(error, dict):
+    if is_json_mapping(error):
         return str(error.get("message") or error)
     if error is None:
         return "Agent runtime error"
@@ -74,7 +74,7 @@ def extract_error_message(event: CanonicalEvent) -> str:
 
 
 async def maybe_forward_event(
-    callback: Callable[[CanonicalEvent], Any] | None,
+    callback: CanonicalEventHandler | None,
     event: CanonicalEvent,
 ) -> None:
     """Forward a canonical event through a callback, supporting sync and async."""
@@ -130,7 +130,7 @@ def parse_runtime_mode(value: str | None) -> RuntimeMode:
         raise ValueError(f"Unsupported runtime mode: {value}") from exc
 
 
-def extract_pid(adapter: Any) -> int | None:
+def extract_pid(adapter: ProviderAdapter) -> int | None:
     """Extract the OS process ID from a provider adapter, if available."""
     client = getattr(adapter, "client", None)
     process = getattr(client, "_process", None)
@@ -138,7 +138,7 @@ def extract_pid(adapter: Any) -> int | None:
     return pid if isinstance(pid, int) else None
 
 
-def extract_exit_code(adapter: Any | None) -> int | None:
+def extract_exit_code(adapter: ProviderAdapter | None) -> int | None:
     """Extract the process return code from a provider adapter, if available."""
     client = getattr(adapter, "client", None)
     process = getattr(client, "_process", None)
@@ -146,14 +146,14 @@ def extract_exit_code(adapter: Any | None) -> int | None:
     return returncode if isinstance(returncode, int) else None
 
 
-def extract_summary_from_turn_result(turn_result: Any) -> str | None:
+def extract_summary_from_turn_result(turn_result: JSONValue) -> str | None:
     """Extract a summary string from the provider's turn result payload."""
-    if not isinstance(turn_result, dict):
+    if not is_json_mapping(turn_result):
         return None
 
-    candidates: list[Any] = [turn_result]
+    candidates: list[JSONMapping] = [turn_result]
     turn_payload = turn_result.get("turn")
-    if isinstance(turn_payload, dict):
+    if is_json_mapping(turn_payload):
         candidates.append(turn_payload)
 
     for candidate in candidates:

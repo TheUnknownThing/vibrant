@@ -6,10 +6,11 @@ import inspect
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 from uuid import uuid4
 
 from vibrant.providers.base import CanonicalEvent
+from vibrant.type_defs import JSONMapping, JSONObject, JSONValue, is_json_mapping
 
 from ...types import AgentConversationEntry, AgentConversationView, AgentStreamCallback, AgentStreamEvent, StreamSubscription, utc_now
 from .store import ConversationStore
@@ -145,7 +146,7 @@ class ConversationStreamService:
             return self._run_conversations.get(run_id)
         return None
 
-    def _project_event_types(self, event: CanonicalEvent) -> list[tuple[str, str | None, Mapping[str, Any] | None]]:
+    def _project_event_types(self, event: CanonicalEvent) -> list[tuple[str, str | None, JSONMapping | None]]:
         event_type = str(event.get("type") or "")
         if event_type == "turn.started":
             return [("conversation.turn.started", None, None)]
@@ -179,14 +180,14 @@ class ConversationStreamService:
         self,
         conversation_id: str,
         event: CanonicalEvent,
-        spec: tuple[str, str | None, Mapping[str, Any] | None],
+        spec: tuple[str, str | None, JSONMapping | None],
     ) -> AgentStreamEvent:
         event_type, text, payload = spec
         turn_id = event.get("turn_id")
         item_id = event.get("item_id")
         if not isinstance(item_id, str):
             progress_item = event.get("item")
-            if isinstance(progress_item, Mapping):
+            if is_json_mapping(progress_item):
                 progress_item_id = progress_item.get("id")
                 if isinstance(progress_item_id, str) and progress_item_id:
                     item_id = progress_item_id
@@ -300,19 +301,21 @@ class ConversationStreamService:
         target.finished_at = frame.created_at
 
 
-def _coerce_text(event: Mapping[str, Any], key: str) -> str | None:
+def _coerce_text(event: JSONMapping, key: str) -> str | None:
     value = event.get(key)
     if isinstance(value, str) and value:
         return value
     return None
 
 
-def _payload(event: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    payload = {key: value for key, value in event.items() if key not in {"type", "timestamp", "agent_id"}}
+def _payload(event: JSONMapping) -> JSONObject | None:
+    payload: JSONObject = {
+        key: value for key, value in event.items() if key not in {"type", "timestamp", "agent_id"}
+    }
     return payload or None
 
 
-def _request_text(event: Mapping[str, Any]) -> str | None:
+def _request_text(event: JSONMapping) -> str | None:
     for key in ("message", "method", "error_message"):
         value = event.get(key)
         if isinstance(value, str) and value:

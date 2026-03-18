@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 import json
-from typing import Any, Iterable, Literal
+from typing import Iterable, Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -15,6 +15,7 @@ from textual.widgets import ContentSwitcher, Static
 
 from ...models.agent import AgentRecord, AgentStatus
 from ...orchestrator.types import AgentStreamEvent, ConversationSummary
+from ...type_defs import JSONValue, is_json_mapping
 
 MAX_DEBUG_LINES = 10_000
 DEFAULT_RENDERED_BLOCKS = 120
@@ -156,8 +157,8 @@ class LogBlockWidget(Vertical):
 class AgentOutputScroll(VerticalScroll):
     """Scrollable region that asks the owner to expand windows on demand."""
 
-    def __init__(self, owner: "AgentOutput", *, mode: Literal["stream", "debug"], **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, owner: "AgentOutput", *, mode: Literal["stream", "debug"], **widget_kwargs: object) -> None:
+        super().__init__(**widget_kwargs)
         self._owner = owner
         self._mode = mode
 
@@ -289,8 +290,8 @@ class AgentOutput(Static):
     }
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, **widget_kwargs: object) -> None:
+        super().__init__(**widget_kwargs)
         self._conversations: dict[str, ConversationLogState] = {}
         self._conversation_order: list[str] = []
         self._active_conversation_id: str | None = None
@@ -1665,8 +1666,8 @@ def _normalize_item_type(value: object) -> str:
     return value.strip().lower()
 
 
-def _extract_progress_text(item: Any) -> str:
-    if not isinstance(item, dict):
+def _extract_progress_text(item: JSONValue) -> str:
+    if not is_json_mapping(item):
         return ""
     text = item.get("text")
     if isinstance(text, str):
@@ -1680,8 +1681,8 @@ def _extract_progress_text(item: Any) -> str:
     return ""
 
 
-def _extract_reasoning_text(item: Any, *, fallback: str = "") -> str:
-    if not isinstance(item, dict):
+def _extract_reasoning_text(item: JSONValue, *, fallback: str = "") -> str:
+    if not is_json_mapping(item):
         return fallback
 
     text = _extract_progress_text(item)
@@ -1699,8 +1700,8 @@ def _extract_reasoning_text(item: Any, *, fallback: str = "") -> str:
     return fallback
 
 
-def _progress_is_running(item: Any) -> bool:
-    if not isinstance(item, dict):
+def _progress_is_running(item: JSONValue) -> bool:
+    if not is_json_mapping(item):
         return False
     status = _normalize_item_type(item.get("status"))
     return status in {"", "started", "inprogress", "running"}
@@ -1790,8 +1791,8 @@ def _error_text_from_payload(payload: object | None) -> str:
     return str(error or "")
 
 
-def _command_title(item: Any) -> str:
-    if not isinstance(item, dict):
+def _command_title(item: JSONValue) -> str:
+    if not is_json_mapping(item):
         return "Command"
     command = item.get("command")
     if isinstance(command, str) and command.strip():
@@ -1799,8 +1800,8 @@ def _command_title(item: Any) -> str:
     return "Command"
 
 
-def _command_body(item: Any, *, fallback: str) -> str:
-    if not isinstance(item, dict):
+def _command_body(item: JSONValue, *, fallback: str) -> str:
+    if not is_json_mapping(item):
         return fallback
     aggregated_output = item.get("aggregatedOutput")
     if isinstance(aggregated_output, str) and aggregated_output.strip():
@@ -1811,8 +1812,8 @@ def _command_body(item: Any, *, fallback: str) -> str:
     return fallback
 
 
-def _command_status(item: Any) -> str:
-    if not isinstance(item, dict):
+def _command_status(item: JSONValue) -> str:
+    if not is_json_mapping(item):
         return "unknown"
     exit_code = item.get("exitCode")
     if exit_code == 0:
@@ -1825,8 +1826,8 @@ def _command_status(item: Any) -> str:
     return status or "unknown"
 
 
-def _file_change_text(item: Any) -> str:
-    if not isinstance(item, dict):
+def _file_change_text(item: JSONValue) -> str:
+    if not is_json_mapping(item):
         return "Modified a file"
     path = item.get("filename") or item.get("path")
     if isinstance(path, str) and path.strip():
@@ -1834,8 +1835,8 @@ def _file_change_text(item: Any) -> str:
     return "Modified a file"
 
 
-def _file_read_text(item: Any) -> str:
-    if not isinstance(item, dict):
+def _file_read_text(item: JSONValue) -> str:
+    if not is_json_mapping(item):
         return "Read a file"
     path = item.get("filename") or item.get("path")
     if isinstance(path, str) and path.strip():

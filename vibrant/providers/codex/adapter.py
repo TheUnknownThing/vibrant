@@ -6,18 +6,25 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, TypeGuard, TypedDict
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ...models.agent import AgentRecord, ProviderResumeHandle
 from ...models.wire import JsonRpcNotification
+from ...type_defs import AsyncNone, JSONMapping, JSONObject, JSONValue, RequestId, is_json_mapping, is_json_object
 from ..base import CanonicalEvent, CanonicalEventHandler, CodexAuthConfig, CodexAuthMode, ProviderAdapter, RuntimeMode
 from ..invocation import ProviderInvocationPlan
 from .client import CodexClient
 
 DEFAULT_CLIENT_INFO = {"name": "vibrant", "title": "Vibrant", "version": "0.1.0"}
-NotificationHandler = Callable[[JsonRpcNotification], Any]
-StderrHandler = Callable[[str], Any]
+NotificationHandler = Callable[[JsonRpcNotification], AsyncNone]
+StderrHandler = Callable[[str], AsyncNone]
+
+
+class _PendingRequest(TypedDict):
+    method: str
+    request_kind: str
+    params: JSONObject
 
 
 class CodexProviderAdapter(ProviderAdapter):
@@ -25,7 +32,7 @@ class CodexProviderAdapter(ProviderAdapter):
 
     def __init__(
         self,
-        client: CodexClient | Any | None = None,
+        client: CodexClient | None = None,
         *,
         cwd: str | None = None,
         codex_binary: str = "codex",
@@ -39,8 +46,8 @@ class CodexProviderAdapter(ProviderAdapter):
         on_stderr_line: StderrHandler | None = None,
         native_logger: NativeLogger | None = None,
         canonical_logger: CanonicalLogger | None = None,
-        client_factory: Any | None = None,
-        **_: Any,
+        client_factory: Callable[..., CodexClient] | None = None,
+        **_: object,
     ) -> None:
         super().__init__(on_canonical_event=on_canonical_event)
         self.client = client
@@ -52,11 +59,11 @@ class CodexProviderAdapter(ProviderAdapter):
         self._invocation_plan = invocation_plan
         self.agent_record = agent_record
         self.provider_thread_id: str | None = None
-        self.thread_metadata: dict[str, Any] = {}
+        self.thread_metadata: JSONObject = {}
         self.current_turn_id: str | None = None
-        self._item_states: dict[str, dict[str, Any]] = {}
+        self._item_states: dict[str, JSONObject] = {}
         self._session_started = False
-        self._pending_requests: dict[int | str, dict[str, Any]] = {}
+        self._pending_requests: dict[RequestId, _PendingRequest] = {}
         self._awaiting_thread_started_for: str | None = None
         self._on_raw_notification = on_raw_notification
         self._on_stderr_line = on_stderr_line
@@ -80,11 +87,11 @@ class CodexProviderAdapter(ProviderAdapter):
         if hasattr(self.client, "_on_raw_event"):
             self.client._on_raw_event = self._handle_native_event
 
-    def _ensure_client(self, cwd: str | None = None) -> Any:
+    def _ensure_client(self, cwd: str | None = None) -> CodexClient:
         self._ensure_loggers(cwd)
         if self.client is None:
             resolved_cwd = cwd or self._cwd
-            kwargs: dict[str, Any] = {
+            kwargs: dict[str, object] = {
                 "cwd": resolved_cwd,
                 "codex_binary": self._codex_binary,
                 "on_notification": self._handle_notification,
@@ -126,7 +133,7 @@ class CodexProviderAdapter(ProviderAdapter):
         if self._canonical_logger is None:
             self._canonical_logger = CanonicalLogger(canonical_path)
 
-    async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+    async def start_session(self, *, cwd: str | None = None, **kwargs: JSONValue) -> JSONValue:
         auth_config = _coerce_auth_config(kwargs.pop("auth_config", None) or kwargs.pop("auth", None))
         client = self._ensure_client(cwd)
         if cwd is not None:
@@ -162,7 +169,7 @@ class CodexProviderAdapter(ProviderAdapter):
         self._pending_requests.clear()
         await self._emit_canonical("session.state.changed", state="stopped")
 
-    async def start_thread(self, **kwargs: Any) -> Any:
+    async def start_thread(self, **kwargs: JSONValue) -> JSONValue:
         client = self._ensure_client()
         payload, runtime_mode, approval_policy, agent_record = self._build_thread_payload(kwargs)
         result = await client.send_request("thread/start", payload)
@@ -183,7 +190,7 @@ class CodexProviderAdapter(ProviderAdapter):
         )
         return result
 
-    async def resume_thread(self, provider_thread_id: str, **kwargs: Any) -> Any:
+    async def resume_thread(self, provider_thread_id: str, **kwargs: JSONValue) -> JSONValue:
         client = self._ensure_client()
         payload, runtime_mode, approval_policy, agent_record = self._build_thread_payload(kwargs)
         payload = {"threadId": provider_thread_id, **payload}
@@ -209,11 +216,11 @@ class CodexProviderAdapter(ProviderAdapter):
     async def start_turn(
         self,
         *,
-        input_items: Sequence[Mapping[str, Any]],
+        input_items: Sequence[JSONMapping],
         runtime_mode: RuntimeMode,
         approval_policy: str,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         client = self._ensure_client()
         runtime_mode = RuntimeMode(runtime_mode)
         effort = kwargs.pop("effort", kwargs.pop("reasoning_effort", None))
@@ -233,7 +240,7 @@ class CodexProviderAdapter(ProviderAdapter):
             payload["threadId"] = self.provider_thread_id
         return await client.send_request("turn/start", payload)
 
-    async def interrupt_turn(self, **kwargs: Any) -> Any:
+    async def interrupt_turn(self, **kwargs: JSONValue) -> JSONValue:
         client = self._ensure_client()
         payload = dict(kwargs)
         if self.current_turn_id and "turnId" not in payload:
@@ -245,9 +252,9 @@ class CodexProviderAdapter(ProviderAdapter):
     async def send_request(
         self,
         method: str,
-        params: Mapping[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> Any:
+        params: JSONMapping | None = None,
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         """Send an arbitrary Codex management request."""
 
         client = self._ensure_client(kwargs.pop("cwd", None))
@@ -259,12 +266,12 @@ class CodexProviderAdapter(ProviderAdapter):
             return await client.send_request(method, request_params)
         return await client.send_request(method, request_params, timeout=float(timeout))
 
-    async def read_account(self, *, refresh_token: bool = False) -> Any:
+    async def read_account(self, *, refresh_token: bool = False) -> JSONValue:
         """Return Codex auth/account state via ``account/read``."""
 
         return await self.send_request("account/read", {"refreshToken": bool(refresh_token)})
 
-    async def login(self, auth_config: CodexAuthConfig) -> Any:
+    async def login(self, auth_config: CodexAuthConfig) -> JSONValue:
         """Log in to Codex using ``account/login/start``."""
 
         params = auth_config.to_login_params()
@@ -272,7 +279,7 @@ class CodexProviderAdapter(ProviderAdapter):
             return await self.read_account(refresh_token=False)
         return await self.send_request("account/login/start", params)
 
-    async def logout(self) -> Any:
+    async def logout(self) -> JSONValue:
         """Logout via ``account/logout``."""
 
         return await self.send_request("account/logout", None)
@@ -282,11 +289,11 @@ class CodexProviderAdapter(ProviderAdapter):
         *,
         cwds: Sequence[str],
         force_reload: bool = False,
-        per_cwd_extra_user_roots: Sequence[Mapping[str, Any]] | None = None,
-    ) -> Any:
+        per_cwd_extra_user_roots: Sequence[JSONMapping] | None = None,
+    ) -> JSONValue:
         """List skills via ``skills/list``."""
 
-        params: dict[str, Any] = {
+        params: JSONObject = {
             "cwds": [str(Path(cwd)) for cwd in cwds],
             "forceReload": bool(force_reload),
         }
@@ -294,7 +301,7 @@ class CodexProviderAdapter(ProviderAdapter):
             params["perCwdExtraUserRoots"] = [dict(entry) for entry in per_cwd_extra_user_roots]
         return await self.send_request("skills/list", params)
 
-    async def write_skill_config(self, *, path: str, enabled: bool) -> Any:
+    async def write_skill_config(self, *, path: str, enabled: bool) -> JSONValue:
         """Enable/disable a skill via ``skills/config/write``."""
 
         return await self.send_request(
@@ -302,22 +309,22 @@ class CodexProviderAdapter(ProviderAdapter):
             {"path": str(Path(path)), "enabled": bool(enabled)},
         )
 
-    async def reload_mcp_servers(self) -> Any:
+    async def reload_mcp_servers(self) -> JSONValue:
         """Reload MCP server configuration from disk via ``config/mcpServer/reload``."""
 
         return await self.send_request("config/mcpServer/reload", None)
 
-    async def list_mcp_server_status(self, *, cursor: str | None = None, limit: int | None = None) -> Any:
+    async def list_mcp_server_status(self, *, cursor: str | None = None, limit: int | None = None) -> JSONValue:
         """List MCP server status via ``mcpServerStatus/list``."""
 
-        params: dict[str, Any] = {}
+        params: JSONObject = {}
         if cursor is not None:
             params["cursor"] = cursor
         if limit is not None:
             params["limit"] = int(limit)
         return await self.send_request("mcpServerStatus/list", params or None)
 
-    async def start_mcp_oauth_login(self, *, name: str) -> Any:
+    async def start_mcp_oauth_login(self, *, name: str) -> JSONValue:
         """Start an MCP OAuth login via ``mcpServer/oauth/login``."""
 
         return await self.send_request("mcpServer/oauth/login", {"name": name})
@@ -327,15 +334,15 @@ class CodexProviderAdapter(ProviderAdapter):
         *,
         include_home: bool = True,
         cwds: Sequence[str] | None = None,
-    ) -> Any:
+    ) -> JSONValue:
         """Detect migratable external-agent config via ``externalAgentConfig/detect``."""
 
-        params: dict[str, Any] = {"includeHome": bool(include_home)}
+        params: JSONObject = {"includeHome": bool(include_home)}
         if cwds is not None:
             params["cwds"] = [str(Path(cwd)) for cwd in cwds]
         return await self.send_request("externalAgentConfig/detect", params)
 
-    async def import_external_agent_config(self, *, migration_items: Sequence[Mapping[str, Any]]) -> Any:
+    async def import_external_agent_config(self, *, migration_items: Sequence[JSONMapping]) -> JSONValue:
         """Import external-agent config items via ``externalAgentConfig/import``."""
 
         return await self.send_request(
@@ -347,8 +354,8 @@ class CodexProviderAdapter(ProviderAdapter):
         self,
         request_id: int | str,
         *,
-        result: Any | None = None,
-        error: Mapping[str, Any] | None = None,
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
     ) -> None:
         client = self._ensure_client()
         client.respond_to_server_request(request_id, result=result, error=dict(error) if error else None)
@@ -510,7 +517,7 @@ class CodexProviderAdapter(ProviderAdapter):
 
         await self._forward_raw_notification(JsonRpcNotification(method=method, params=original_params or None))
 
-    async def _handle_server_request(self, method: str, request_id: int | str, params: dict[str, Any]) -> None:
+    async def _handle_server_request(self, method: str, request_id: RequestId, params: JSONObject) -> None:
         request_kind = self._classify_request_kind(method)
         self._pending_requests[request_id] = {
             "method": method,
@@ -534,8 +541,8 @@ class CodexProviderAdapter(ProviderAdapter):
 
     def _build_thread_payload(
         self,
-        kwargs: dict[str, Any],
-    ) -> tuple[dict[str, Any], RuntimeMode, str, AgentRecord | None]:
+        kwargs: JSONObject,
+    ) -> tuple[JSONObject, RuntimeMode, str, AgentRecord | None]:
         data = dict(kwargs)
         runtime_mode = RuntimeMode(data.pop("runtime_mode", RuntimeMode.WORKSPACE_WRITE))
         approval_policy = data.pop("approval_policy", "never")
@@ -573,17 +580,17 @@ class CodexProviderAdapter(ProviderAdapter):
             return {}
         return dict(self._invocation_plan.launch_env)
 
-    def _invocation_scope_options(self, scope: str) -> dict[str, Any]:
+    def _invocation_scope_options(self, scope: str) -> JSONObject:
         if self._invocation_plan is None:
             return {}
         scoped = self._invocation_plan.session_options.get(scope)
-        if not isinstance(scoped, Mapping):
+        if not is_json_mapping(scoped):
             return {}
         return dict(scoped)
 
     def _persist_thread_metadata(
         self,
-        result: Any,
+        result: JSONValue,
         *,
         runtime_mode: RuntimeMode | None = None,
         approval_policy: str | None = None,
@@ -600,7 +607,7 @@ class CodexProviderAdapter(ProviderAdapter):
         if record is None:
             return
 
-        resume_cursor: dict[str, Any] | None = None
+        resume_cursor: JSONObject | None = None
         if thread_id is not None:
             resume_cursor = {"threadId": thread_id}
         if runtime_mode is not None:
@@ -621,10 +628,11 @@ class CodexProviderAdapter(ProviderAdapter):
             )
         )
 
-    def _extract_thread_payload(self, result: Any) -> dict[str, Any]:
-        if not isinstance(result, dict):
+    def _extract_thread_payload(self, result: JSONValue) -> JSONObject:
+        if not is_json_object(result):
             return {}
-        if isinstance(result.get("thread"), dict):
+        thread_payload = result.get("thread")
+        if is_json_object(thread_payload):
             return dict(result["thread"])
         return dict(result)
 
@@ -638,11 +646,11 @@ class CodexProviderAdapter(ProviderAdapter):
     async def _handle_reasoning_delta(
         self,
         *,
-        item_id: Any,
+        item_id: JSONValue,
         turn_id: str | None,
-        delta: Any,
-        raw: Mapping[str, Any],
-        summary_index: Any | None = None,
+        delta: JSONValue,
+        raw: JSONMapping,
+        summary_index: JSONValue | None = None,
         redacted_for_log: bool,
     ) -> None:
         if not isinstance(item_id, str) or not item_id:
@@ -678,10 +686,10 @@ class CodexProviderAdapter(ProviderAdapter):
     async def _handle_command_output_delta(
         self,
         *,
-        item_id: Any,
+        item_id: JSONValue,
         turn_id: str | None,
-        delta: Any,
-        raw: Mapping[str, Any],
+        delta: JSONValue,
+        raw: JSONMapping,
     ) -> None:
         if not isinstance(item_id, str) or not item_id:
             return
@@ -703,10 +711,10 @@ class CodexProviderAdapter(ProviderAdapter):
 
     async def _handle_item_completed(
         self,
-        item_payload: Mapping[str, Any],
+        item_payload: JSONMapping,
         *,
         turn_id: str | None,
-        raw: Mapping[str, Any],
+        raw: JSONMapping,
     ) -> None:
         item_id = self._remember_item_state(item_payload, turn_id=turn_id)
         item_type = _normalize_item_type(item_payload.get("type"))
@@ -728,10 +736,10 @@ class CodexProviderAdapter(ProviderAdapter):
 
     async def _emit_command_started(
         self,
-        item_payload: Mapping[str, Any],
+        item_payload: JSONMapping,
         *,
         turn_id: str | None,
-        raw: Mapping[str, Any],
+        raw: JSONMapping,
         item_id: str | None,
     ) -> None:
         if not item_id:
@@ -745,10 +753,10 @@ class CodexProviderAdapter(ProviderAdapter):
 
     async def _emit_command_completed(
         self,
-        item_payload: Mapping[str, Any],
+        item_payload: JSONMapping,
         *,
         turn_id: str | None,
-        raw: Mapping[str, Any],
+        raw: JSONMapping,
         item_id: str | None,
     ) -> None:
         if not item_id:
@@ -768,10 +776,10 @@ class CodexProviderAdapter(ProviderAdapter):
     async def _emit_task_progress(
         self,
         *,
-        item: Mapping[str, Any],
+        item: JSONMapping,
         turn_id: str | None,
-        raw: Mapping[str, Any],
-        log_item: Mapping[str, Any] | None = None,
+        raw: JSONMapping,
+        log_item: JSONMapping | None = None,
     ) -> None:
         item_payload = dict(item)
         provider_payload = dict(raw)
@@ -791,7 +799,7 @@ class CodexProviderAdapter(ProviderAdapter):
         }
         await self._emit_canonical("task.progress", _log_payload=log_payload, **payload)
 
-    def _remember_item_state(self, item_payload: Mapping[str, Any], *, turn_id: str | None = None) -> str | None:
+    def _remember_item_state(self, item_payload: JSONMapping, *, turn_id: str | None = None) -> str | None:
         item_id = item_payload.get("id")
         if not isinstance(item_id, str) or not item_id:
             return None
@@ -801,7 +809,7 @@ class CodexProviderAdapter(ProviderAdapter):
             state["turn_id"] = turn_id
         return item_id
 
-    def _ensure_item_state(self, item_id: str) -> dict[str, Any]:
+    def _ensure_item_state(self, item_id: str) -> JSONObject:
         state = self._item_states.get(item_id)
         if state is None:
             state = {
@@ -817,11 +825,11 @@ class CodexProviderAdapter(ProviderAdapter):
 
     def _command_progress_item(
         self,
-        item_payload: Mapping[str, Any] | None,
+        item_payload: JSONMapping | None,
         *,
         text: str,
-        status: Any,
-    ) -> dict[str, Any]:
+        status: JSONValue,
+    ) -> JSONObject:
         item = dict(item_payload or {})
         item["type"] = item.get("type") or "commandExecution"
         if isinstance(text, str) and text:
@@ -830,7 +838,12 @@ class CodexProviderAdapter(ProviderAdapter):
             item["status"] = status
         return item
 
-    async def _emit_canonical(self, event_type: str, _log_payload: Mapping[str, Any] | None = None, **payload: Any) -> None:
+    async def _emit_canonical(
+        self,
+        event_type: str,
+        _log_payload: JSONMapping | None = None,
+        **payload: JSONValue,
+    ) -> None:
         event: CanonicalEvent = {
             "type": event_type,
             "timestamp": _timestamp_now(),
@@ -860,7 +873,7 @@ class CodexProviderAdapter(ProviderAdapter):
             )
         await self.on_canonical_event(event)
 
-    def _handle_native_event(self, raw_event: dict[str, Any]) -> None:
+    def _handle_native_event(self, raw_event: JSONObject) -> None:
         if self._native_logger is None:
             self._ensure_loggers()
         if self._native_logger is None:
@@ -938,16 +951,16 @@ def _coerce_auth_mode(value: object) -> CodexAuthMode:
     raise ValueError(f"Unsupported Codex auth mode: {value!r}")
 
 
-def _coerce_provider_payload(value: Any, *, field_name: str | None = None) -> dict[str, Any]:
+def _coerce_provider_payload(value: JSONValue, *, field_name: str | None = None) -> JSONObject:
     if field_name is not None:
         return {field_name: value}
-    if isinstance(value, Mapping):
+    if is_json_mapping(value):
         return dict(value)
     return {"value": value}
 
 
-def _thread_path_from_payload(payload: Any) -> str | None:
-    if not isinstance(payload, Mapping):
+def _thread_path_from_payload(payload: JSONValue) -> str | None:
+    if not is_json_mapping(payload):
         return None
     path = payload.get("path") or payload.get("threadPath") or payload.get("thread_path")
     if isinstance(path, str) and path:
@@ -955,8 +968,8 @@ def _thread_path_from_payload(payload: Any) -> str | None:
     return None
 
 
-def _turn_id_from_payload(payload: Any) -> str | None:
-    if not isinstance(payload, Mapping):
+def _turn_id_from_payload(payload: JSONValue) -> str | None:
+    if not is_json_mapping(payload):
         return None
     turn_id = payload.get("id") or payload.get("turnId") or payload.get("turn_id")
     if isinstance(turn_id, str) and turn_id:
@@ -964,8 +977,8 @@ def _turn_id_from_payload(payload: Any) -> str | None:
     return None
 
 
-def _turn_status_from_payload(payload: Any) -> str | None:
-    if not isinstance(payload, Mapping):
+def _turn_status_from_payload(payload: JSONValue) -> str | None:
+    if not is_json_mapping(payload):
         return None
     status = payload.get("status")
     if isinstance(status, str) and status:
@@ -973,8 +986,18 @@ def _turn_status_from_payload(payload: Any) -> str | None:
     return None
 
 
-def _progress_text_from_item(item_payload: Any) -> str | None:
-    if not isinstance(item_payload, Mapping):
+def _is_string_mapping(value: object) -> TypeGuard[Mapping[str, object]]:
+    """Return whether ``value`` is a mapping keyed by strings.
+
+    This helper intentionally avoids recursively validating nested values so
+    hot-path progress extraction can stay shallow.
+    """
+
+    return isinstance(value, Mapping) and all(isinstance(key, str) for key in value)
+
+
+def _progress_text_from_item(item_payload: JSONValue) -> str | None:
+    if not _is_string_mapping(item_payload):
         return None
     text = item_payload.get("text")
     if isinstance(text, str) and text:
@@ -985,7 +1008,7 @@ def _progress_text_from_item(item_payload: Any) -> str | None:
     if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
         parts: list[str] = []
         for entry in content:
-            if isinstance(entry, Mapping):
+            if _is_string_mapping(entry):
                 part = entry.get("text")
                 if isinstance(part, str) and part:
                     parts.append(part)
@@ -994,8 +1017,8 @@ def _progress_text_from_item(item_payload: Any) -> str | None:
     return None
 
 
-def _error_message(error_payload: Any) -> str | None:
-    if isinstance(error_payload, Mapping):
+def _error_message(error_payload: JSONValue) -> str | None:
+    if is_json_mapping(error_payload):
         message = error_payload.get("message")
         if isinstance(message, str) and message:
             return message
@@ -1008,8 +1031,8 @@ def _error_message(error_payload: Any) -> str | None:
     return text or None
 
 
-def _error_code(error_payload: Any) -> int | str | None:
-    if not isinstance(error_payload, Mapping):
+def _error_code(error_payload: JSONValue) -> int | str | None:
+    if not is_json_mapping(error_payload):
         return None
     code = error_payload.get("code")
     if isinstance(code, (int, str)):
@@ -1017,10 +1040,10 @@ def _error_code(error_payload: Any) -> int | str | None:
     return None
 
 
-def _sanitize_progress_item(item_payload: Any) -> Any:
+def _sanitize_progress_item(item_payload: JSONValue) -> JSONValue:
     """Return a canonical-safe representation of an ``item/completed`` payload."""
 
-    if not isinstance(item_payload, Mapping):
+    if not is_json_mapping(item_payload):
         return item_payload
 
     item = dict(item_payload)
@@ -1037,18 +1060,18 @@ def _sanitize_progress_item(item_payload: Any) -> Any:
     return item
 
 
-def _normalize_item_type(value: Any) -> str:
+def _normalize_item_type(value: JSONValue) -> str:
     if not isinstance(value, str):
         return ""
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
-def _command_start_text(item_payload: Mapping[str, Any]) -> str:
+def _command_start_text(item_payload: JSONMapping) -> str:
     command = str(item_payload.get("command") or "").strip()
     return f"$ {command}" if command else "command started"
 
 
-def _command_completion_text(item_payload: Mapping[str, Any], *, include_output: bool) -> str:
+def _command_completion_text(item_payload: JSONMapping, *, include_output: bool) -> str:
     exit_code = item_payload.get("exitCode")
     duration_ms = item_payload.get("durationMs")
     summary = "command completed"
@@ -1086,10 +1109,10 @@ def _reasoning_summary_text(value: object) -> str:
 
 def _sanitize_native_event_data(
     event_name: object,
-    data: Mapping[str, Any],
+    data: JSONMapping,
     *,
-    pending_requests: Mapping[int | str, Mapping[str, Any]] | None = None,
-) -> dict[str, Any]:
+    pending_requests: Mapping[RequestId, _PendingRequest] | None = None,
+) -> JSONObject:
     """Redact sensitive fields before writing native debug logs."""
 
     sanitized = dict(data)
@@ -1116,7 +1139,7 @@ def _sanitize_native_event_data(
     return sanitized
 
 
-def _redact_keys(payload: Mapping[str, Any], keys: set[str]) -> dict[str, Any]:
+def _redact_keys(payload: JSONMapping, keys: set[str]) -> JSONObject:
     redacted = dict(payload)
     for key in keys:
         if key in redacted and redacted[key] is not None:

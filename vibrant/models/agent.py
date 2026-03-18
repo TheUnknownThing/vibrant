@@ -4,9 +4,21 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
-from typing import Any, ClassVar
+from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
+
+from vibrant.type_defs import JSONObject, is_json_object
 
 
 class AgentType(str, enum.Enum):
@@ -35,7 +47,7 @@ class ProviderResumeHandle(BaseModel):
     kind: str = "codex"
     thread_id: str | None = None
     thread_path: str | None = None
-    resume_cursor: dict[str, Any] | None = None
+    resume_cursor: dict[str, JsonValue] | None = None
 
     @property
     def resumable(self) -> bool:
@@ -45,7 +57,7 @@ class ProviderResumeHandle(BaseModel):
     def empty(self) -> bool:
         return self.thread_id is None and self.thread_path is None and self.resume_cursor is None
 
-    def serialize(self) -> dict[str, Any]:
+    def serialize(self) -> dict[str, JsonValue]:
         return self.model_dump(mode="python")
 
     @classmethod
@@ -87,7 +99,7 @@ class AgentProviderMetadata(BaseModel):
     runtime_mode: str = "workspace-write"
     resume_handle: ProviderResumeHandle | None = None
     provider_thread_id: str | None = None
-    resume_cursor: dict[str, Any] | None = None
+    resume_cursor: dict[str, JsonValue] | None = None
     thread_path: str | None = None
     rollout_path: str | None = None
     native_event_log: str | None = None
@@ -110,8 +122,13 @@ class AgentProviderMetadata(BaseModel):
         return self
 
     @model_serializer(mode="wrap")
-    def serialize_provider(self, handler: Any, info: Any) -> dict[str, Any]:
+    def serialize_provider(
+        self,
+        handler: SerializerFunctionWrapHandler,
+        info: SerializationInfo,
+    ) -> dict[str, JsonValue]:
         data = handler(self)
+        assert is_json_object(data), "Serialized provider metadata must be a JSON object"
         if data.get("resume_handle") is not None:
             data.pop("provider_thread_id", None)
             data.pop("resume_cursor", None)

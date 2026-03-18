@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+
+from vibrant.type_defs import JSONMapping, JSONObject, JSONValue, is_json_mapping, is_json_object
 
 
 class NdjsonLogger:
@@ -22,11 +23,11 @@ class NdjsonLogger:
     def log(
         self,
         event: str,
-        data: Mapping[str, Any] | None = None,
+        data: JSONMapping | None = None,
         *,
         timestamp: str | None = None,
     ) -> None:
-        payload = {
+        payload: JSONObject = {
             "timestamp": timestamp or _timestamp_now(),
             "event": event,
             "data": dict(data or {}),
@@ -35,13 +36,15 @@ class NdjsonLogger:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
             handle.flush()
 
-    def write(self, event: dict[str, Any] | str, data: Mapping[str, Any] | None = None) -> None:
+    def write(self, event: JSONObject | str, data: JSONMapping | None = None) -> None:
         """Compatibility wrapper around :meth:`log`."""
-        if isinstance(event, dict):
+        if is_json_object(event):
+            embedded_data = event.get("data")
+            timestamp = event.get("timestamp")
             self.log(
                 str(event.get("event") or event.get("type") or "event"),
-                event.get("data") if isinstance(event.get("data"), Mapping) else event,
-                timestamp=event.get("timestamp") if isinstance(event.get("timestamp"), str) else None,
+                embedded_data if is_json_mapping(embedded_data) else event,
+                timestamp=timestamp if isinstance(timestamp, str) else None,
             )
             return
         self.log(event, data)
@@ -50,7 +53,7 @@ class NdjsonLogger:
 class NativeLogger(NdjsonLogger):
     """Logger for raw provider diagnostics and JSON-RPC traffic."""
 
-    def log_jsonrpc(self, event: str, message: Mapping[str, Any]) -> None:
+    def log_jsonrpc(self, event: str, message: JSONMapping) -> None:
         self.log(event, message)
 
     def log_stderr(self, line: str) -> None:
@@ -60,7 +63,7 @@ class NativeLogger(NdjsonLogger):
 class CanonicalLogger(NdjsonLogger):
     """Logger for normalized events consumed by Vibrant."""
 
-    def log_canonical(self, event: str, data: Mapping[str, Any] | None = None, *, timestamp: str | None = None) -> None:
+    def log_canonical(self, event: str, data: JSONMapping | None = None, *, timestamp: str | None = None) -> None:
         self.log(event, data, timestamp=timestamp)
 
 

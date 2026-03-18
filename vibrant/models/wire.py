@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from pydantic import BaseModel, JsonValue
 
-from pydantic import BaseModel
+from vibrant.type_defs import RequestId
 
 
 class JsonRpcRequest(BaseModel):
     """Outgoing JSON-RPC request."""
 
-    id: int | str
+    id: RequestId
     method: str
-    params: dict[str, Any] | None = None
+    params: dict[str, JsonValue] | None = None
 
     def to_line(self) -> str:
         return self.model_dump_json(exclude_none=True)
@@ -21,9 +21,9 @@ class JsonRpcRequest(BaseModel):
 class JsonRpcResponse(BaseModel):
     """Incoming JSON-RPC response."""
 
-    id: int | str
-    result: Any | None = None
-    error: dict[str, Any] | None = None
+    id: RequestId
+    result: JsonValue | None = None
+    error: dict[str, JsonValue] | None = None
 
     @property
     def is_error(self) -> bool:
@@ -40,5 +40,4 @@ class JsonRpcNotification(BaseModel):
     """Server-initiated notification."""
 
     method: str
-    params: dict[str, Any] | None = None
-
+    params: dict[str, JsonValue] | None = None
