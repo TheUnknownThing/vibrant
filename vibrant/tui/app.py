@@ -532,6 +532,8 @@ class VibrantApp(App):
             self._transition_to_vibing(prefer_chat_history=True)
         elif cmd in {"run", "next", "task"}:
             await self.action_run_next_task()
+        elif cmd == "restart":
+            self._restart_failed_task(event.args or None)
         elif cmd == "refresh":
             self._refresh_project_views()
             self._set_status("Refreshed project views")
@@ -554,6 +556,7 @@ class VibrantApp(App):
                 "/model <name> - Set model\n"
                 "/vibe - Enter vibing phase\n"
                 "/run - Execute the next roadmap task\n"
+                "/restart [task-id] - Requeue a failed task\n"
                 "/refresh - Reload project state\n"
                 "/settings - Open settings\n"
                 "/history - Open Gatekeeper chat history\n"
@@ -1140,6 +1143,38 @@ class VibrantApp(App):
     def _notify_no_ready_task(self) -> None:
         self.notify("No ready roadmap task found.", severity="information")
         self._set_status("No ready roadmap task found")
+
+    def _restart_failed_task(self, task_id: str | None) -> bool:
+        orchestrator = self.orchestrator_facade
+        if orchestrator is None:
+            self.notify(
+                f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
+                severity="warning",
+            )
+            return False
+
+        resolved_task_id = (task_id or "").strip()
+        if not resolved_task_id:
+            vibing_screen = self.vibing_screen()
+            if vibing_screen is not None:
+                resolved_task_id = vibing_screen.task_status.selected_task_id or ""
+        if not resolved_task_id:
+            self.notify("Select a failed task or pass a task id to `/restart`.", severity="warning")
+            return False
+
+        try:
+            task = orchestrator.restart_failed_task(resolved_task_id)
+        except Exception as exc:
+            logger.exception("Failed to restart task")
+            self.notify(f"Failed to restart task {resolved_task_id}: {exc}", severity="error")
+            self._set_status(f"Failed to restart task {resolved_task_id}: {exc}")
+            return False
+
+        self._refresh_project_views()
+        self.notify(f"Task {task.id} queued for retry.")
+        self._set_status(f"Task {task.id} queued for retry")
+        self._start_automatic_workflow_if_needed()
+        return True
 
     def _sync_gatekeeper_conversation_binding(
         self,

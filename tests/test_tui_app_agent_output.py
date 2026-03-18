@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary
 from vibrant.tui.app import VibrantApp
+from vibrant.tui.widgets.input_bar import InputBar
 
 
 class _FakeSubscription:
@@ -132,3 +135,28 @@ def test_app_bar_falls_back_to_current_directory_as_subtitle(monkeypatch) -> Non
     app = VibrantApp()
 
     assert app.sub_title == "/tmp/vibrant-cwd"
+
+
+@pytest.mark.asyncio
+async def test_restart_slash_command_restarts_selected_failed_task(monkeypatch) -> None:
+    app = VibrantApp()
+    calls: list[str] = []
+    statuses: list[str] = []
+    notifications: list[tuple[str, str]] = []
+
+    def fake_restart(task_id: str):
+        calls.append(task_id)
+        return SimpleNamespace(id=task_id)
+
+    app.orchestrator_facade = SimpleNamespace(restart_failed_task=fake_restart)
+    app.vibing_screen = lambda: SimpleNamespace(task_status=SimpleNamespace(selected_task_id="task-1"))
+    monkeypatch.setattr(app, "_refresh_project_views", lambda: None)
+    monkeypatch.setattr(app, "_start_automatic_workflow_if_needed", lambda: None)
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+    monkeypatch.setattr(app, "notify", lambda message, *, severity="information", **kwargs: notifications.append((message, severity)))
+
+    await app.on_input_bar_slash_command(InputBar.SlashCommand("restart", "", "/restart"))
+
+    assert calls == ["task-1"]
+    assert notifications == [("Task task-1 queued for retry.", "information")]
+    assert statuses == ["Task task-1 queued for retry"]
