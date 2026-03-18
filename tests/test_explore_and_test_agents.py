@@ -47,7 +47,6 @@ def test_test_agent_invocation_plan_includes_pycua_stdio_when_enabled(tmp_path: 
     cfg = VibrantConfig.model_validate({"extra-config": {"test_agent_enable_pycua": True}})
 
     plan = build_test_agent_invocation_plan(
-        project_root=tmp_path,
         config=cfg,
         run_id="run-test-123",
     )

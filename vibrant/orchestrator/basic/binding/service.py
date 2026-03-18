@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from vibrant.providers.invocation import MCPAccessDescriptor
@@ -12,6 +12,9 @@ from vibrant.providers.invocation import MCPAccessDescriptor
 from ...interface.mcp.binding_registry import BINDING_HEADER_NAME
 from ...interface.mcp.common import MCPPrincipal
 from ...types import AgentMCPBinding
+
+if TYPE_CHECKING:
+    from ...interface.mcp import OrchestratorFastMCPHost, OrchestratorMCPServer
 
 
 @dataclass(slots=True)
@@ -28,18 +31,18 @@ class AgentSessionBindingService:
     def __init__(
         self,
         *,
-        mcp_server: Any,
-        mcp_host: Any | None = None,
+        mcp_server: OrchestratorMCPServer,
+        mcp_host: OrchestratorFastMCPHost | None = None,
     ) -> None:
         self._mcp_server = mcp_server
         self._mcp_host = mcp_host
 
     @property
-    def mcp_server(self) -> Any:
+    def mcp_server(self) -> OrchestratorMCPServer:
         return self._mcp_server
 
     @property
-    def mcp_host(self) -> Any | None:
+    def mcp_host(self) -> OrchestratorFastMCPHost | None:
         return self._mcp_host
 
     def bind_preset(

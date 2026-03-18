@@ -168,3 +168,15 @@ class TestConfigPathResolution:
         nested_dir.mkdir(parents=True)
 
         assert resolve_config_path(nested_dir) == project_root / ".vibrant" / "vibrant.toml"
+
+
+class TestConfigValidation:
+    def test_invalid_override_value_raises_vibrant_config_error(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        (project_root / ".git").mkdir(parents=True)
+
+        with pytest.raises(VibrantConfigError, match="Invalid configuration"):
+            load_config(
+                start_path=project_root,
+                overrides={"provider": {"kind": "codex"}, "unsupported": object()},
+            )

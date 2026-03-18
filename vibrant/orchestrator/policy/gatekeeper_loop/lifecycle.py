@@ -6,7 +6,7 @@ import asyncio
 import inspect
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from vibrant.agents.gatekeeper import (
@@ -14,9 +14,10 @@ from vibrant.agents.gatekeeper import (
     GatekeeperRequest,
 )
 from vibrant.models.agent import AgentInstanceProviderConfig, AgentRunRecord, ProviderResumeHandle
-from vibrant.agents.runtime import NormalizedRunResult
+from vibrant.agents.runtime import AgentHandle, NormalizedRunResult
 from vibrant.providers.base import CanonicalEvent
 from vibrant.providers.invocation_compiler import compile_provider_invocation
+from vibrant.type_defs import JSONMapping, JSONValue
 
 from ...basic.session import carry_forward_resume_handle
 from ...basic.stores import AgentInstanceStore, AgentRunStore
@@ -52,7 +53,7 @@ class GatekeeperLifecycleService:
         instance_store: AgentInstanceStore,
         run_store: AgentRunStore,
         session_loader: Callable[[], GatekeeperSessionSnapshot] | None = None,
-        session_saver: Callable[[GatekeeperSessionSnapshot], Any] | None = None,
+        session_saver: Callable[[GatekeeperSessionSnapshot], None] | None = None,
     ) -> None:
         self.project_root = project_root
         self.runtime_service = runtime_service
@@ -259,8 +260,8 @@ class GatekeeperLifecycleService:
         run_id: str,
         request_id: int | str,
         *,
-        result: Any | None = None,
-        error: dict[str, Any] | None = None,
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
     ) -> RuntimeHandleSnapshot:
         handle = self._active_handle
         if handle is None or self._active_handle_run_id != run_id:
@@ -312,7 +313,7 @@ class GatekeeperLifecycleService:
             run_record=run_record,
         )
 
-    async def _monitor_handle(self, run_id: str, handle) -> None:
+    async def _monitor_handle(self, run_id: str, handle: AgentHandle) -> None:
         try:
             result: NormalizedRunResult = await handle.wait()
         except Exception as exc:

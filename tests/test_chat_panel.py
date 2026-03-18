@@ -236,8 +236,7 @@ async def test_chat_panel_replays_bound_conversation_after_mount() -> None:
     panel = ChatPanel()
     conversation = AgentConversationView(
         conversation_id="gatekeeper-pre-mount",
-        agent_ids=["gatekeeper-agent"],
-        task_ids=[],
+        run_ids=[],
         active_turn_id=None,
         entries=[
             AgentConversationEntry(

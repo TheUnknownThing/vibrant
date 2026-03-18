@@ -13,15 +13,16 @@ import logging
 import os
 import signal
 from collections.abc import Mapping, Sequence
-from typing import Any, Callable, Coroutine
+from collections.abc import Awaitable, Callable
 
 from ...models.wire import JsonRpcNotification, JsonRpcRequest
+from ...type_defs import JSONObject, JSONValue, RequestId, is_json_object
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_REQUEST_TIMEOUT_S = 120
 SHUTDOWN_GRACE_S = 5
-RawEventCallback = Callable[[dict[str, Any]], None]
+RawEventCallback = Callable[[JSONObject], None]
 
 
 class CodexClientError(Exception):
@@ -39,7 +40,7 @@ class CodexClient:
         launch_args: Sequence[str] | None = None,
         launch_env: Mapping[str, str] | None = None,
         codex_home: str | None = None,
-        on_notification: Callable[[JsonRpcNotification], Coroutine[Any, Any, None]] | None = None,
+        on_notification: Callable[[JsonRpcNotification], Awaitable[None]] | None = None,
         on_stderr: Callable[[str], None] | None = None,
         on_raw_event: RawEventCallback | None = None,
     ) -> None:
@@ -57,7 +58,7 @@ class CodexClient:
         self._stderr_task: asyncio.Task[None] | None = None
 
         self._next_id = 1
-        self._pending: dict[int | str, asyncio.Future[Any]] = {}
+        self._pending: dict[RequestId, asyncio.Future[JSONValue]] = {}
         self._running = False
 
     async def start(self) -> None:
@@ -126,10 +127,10 @@ class CodexClient:
     async def send_request(
         self,
         method: str,
-        params: dict[str, Any] | None = None,
+        params: JSONObject | None = None,
         *,
         timeout: float = DEFAULT_REQUEST_TIMEOUT_S,
-    ) -> Any:
+    ) -> JSONValue:
         """Send a JSON-RPC request and wait for the response."""
         if not self.is_running:
             raise CodexClientError("Client is not running")
@@ -138,7 +139,7 @@ class CodexClient:
         self._next_id += 1
 
         request = JsonRpcRequest(id=req_id, method=method, params=params)
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[JSONValue] = asyncio.get_running_loop().create_future()
         self._pending[req_id] = future
 
         self._emit_raw_event(
@@ -158,7 +159,7 @@ class CodexClient:
             self._pending.pop(req_id, None)
             raise CodexClientError(f"Request {method} (id={req_id}) timed out after {timeout}s")
 
-    def send_notification(self, method: str, params: dict[str, Any] | None = None) -> None:
+    def send_notification(self, method: str, params: JSONObject | None = None) -> None:
         """Send a fire-and-forget notification (no id, no response)."""
         if not self.is_running:
             raise CodexClientError("Client is not running")
@@ -233,7 +234,7 @@ class CodexClient:
         except asyncio.CancelledError:
             return
 
-    async def _dispatch(self, msg: dict[str, Any]) -> None:
+    async def _dispatch(self, msg: JSONObject) -> None:
         """Route an incoming message to the correct handler."""
         if "id" in msg and "method" in msg:
             self._emit_raw_event("jsonrpc.server_request.received", msg)
@@ -265,7 +266,7 @@ class CodexClient:
                 except Exception:
                     logger.exception("Error in notification handler for %s", notification.method)
 
-    async def _handle_server_request(self, msg: dict[str, Any]) -> None:
+    async def _handle_server_request(self, msg: JSONObject) -> None:
         """Handle server-initiated requests (approval, user input)."""
         notification = JsonRpcNotification(
             method=msg["method"],
@@ -281,11 +282,11 @@ class CodexClient:
     def respond_to_server_request(
         self,
         jsonrpc_id: int | str,
-        result: Any = None,
-        error: dict[str, Any] | None = None,
+        result: JSONValue | None = None,
+        error: JSONObject | None = None,
     ) -> None:
         """Send a response back to a server-initiated request."""
-        response: dict[str, Any] = {"id": jsonrpc_id}
+        response: JSONObject = {"id": jsonrpc_id}
         if error:
             response["error"] = error
         else:
@@ -294,7 +295,7 @@ class CodexClient:
         self._write(json.dumps(response))
         logger.debug("→ response to server request id=%s", jsonrpc_id)
 
-    def _emit_raw_event(self, event: str, data: dict[str, Any]) -> None:
+    def _emit_raw_event(self, event: str, data: JSONObject) -> None:
         if self._on_raw_event is None:
             return
         try:

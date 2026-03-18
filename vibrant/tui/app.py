@@ -7,7 +7,7 @@ from contextlib import suppress
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
 
 from rich.markup import escape
 from textual import events
@@ -16,16 +16,8 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
-from vibrant.models.task import TaskInfo, TaskStatus
-from vibrant.orchestrator.types import (
-    AgentStreamEvent,
-    AttemptStatus,
-    ConversationSummary,
-    QuestionStatus,
-    QuestionView,
-    RuntimeExecutionResult,
-    WorkflowStatus,
-)
+from vibrant.models.task import TaskInfo
+from vibrant.orchestrator.types import AgentStreamEvent, AttemptStatus, ConversationSummary, QuestionStatus, QuestionView, WorkflowStatus
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
@@ -33,6 +25,7 @@ from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..models import AppSettings
 from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT, ConsensusDocument
 from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, OrchestratorSnapshot, create_orchestrator
+from ..orchestrator.interface.control_plane import InterfaceControlPlane
 from ..project_init import ensure_project_files, initialize_project
 from .screens import HelpScreen, InitializationScreen, PlanningScreen, VibingScreen
 from .widgets.chat_panel import ChatPanel
@@ -161,9 +154,9 @@ class VibrantApp(App):
         cwd: str | None = None,
         *,
         orchestrator_factory: OrchestratorFactory | None = None,
-        **kwargs: Any,
+        **app_kwargs: object,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(**app_kwargs)
         self._settings = settings or AppSettings()
         if cwd:
             self._settings.default_cwd = cwd
@@ -175,7 +168,7 @@ class VibrantApp(App):
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
         self._runtime_event_subscription = None
         self._gatekeeper_conversation_subscription = None
-        self._agent_output_conversation_subscriptions: dict[str, Any] = {}
+        self._agent_output_conversation_subscriptions: dict[str, StreamSubscription] = {}
         self._agent_output_loaded_conversation_ids: set[str] = set()
         self._gatekeeper_conversation_id: str | None = None
         self._workspace_screen: WorkspaceScreen | None = None
@@ -795,14 +788,17 @@ class VibrantApp(App):
     def _refresh_app_bar(self) -> None:
         self.sub_title = _display_path(self._active_directory())
 
-    def _orchestrator_control_plane(self) -> Any | None:
+    def _orchestrator_control_plane(self) -> InterfaceControlPlane | None:
         orchestrator = self.orchestrator
         if orchestrator is None:
             return None
         control_plane = getattr(orchestrator, "control_plane", None)
         if control_plane is not None:
             return control_plane
-        return getattr(orchestrator, "_control_plane", None)
+        fallback = getattr(orchestrator, "_control_plane", None)
+        if fallback is None:
+            return None
+        return fallback
 
     def _project_has_vibrant_state(self) -> bool:
         return (self._project_root / DEFAULT_CONFIG_DIR).exists()
@@ -1069,7 +1065,7 @@ class VibrantApp(App):
             return {}
         return self.orchestrator_facade.get_task_summaries()
 
-    def _task_id_for_runtime_event(self, event: dict[str, Any]) -> str | None:
+    def _task_id_for_runtime_event(self, event: CanonicalEvent) -> str | None:
         task_id = event.get("task_id")
         if isinstance(task_id, str) and task_id.strip():
             return task_id.strip()
@@ -1512,7 +1508,7 @@ def _display_path(path: Path) -> str:
     return path.as_posix()
 
 
-def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
+def _is_gatekeeper_event(event: CanonicalEvent) -> bool:
     role = event.get("role")
     if isinstance(role, str) and role == "gatekeeper":
         return True
@@ -1523,7 +1519,7 @@ def _is_gatekeeper_event(event: dict[str, Any]) -> bool:
     return isinstance(agent_id, str) and agent_id == "gatekeeper"
 
 
-def _event_subject(event: dict[str, Any]) -> str:
+def _event_subject(event: CanonicalEvent) -> str:
     task_id = event.get("task_id")
     if isinstance(task_id, str) and task_id.strip():
         return task_id.strip()

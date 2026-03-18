@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
 from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.orchestrator.interface.policy import PolicyCommandAdapter
 from vibrant.orchestrator.types import QuestionPriority
+from vibrant.orchestrator.types import QuestionView, ReviewResolutionRecord, WorkflowSnapshot
+from vibrant.consensus.roadmap import RoadmapDocument
+from vibrant.models.consensus import ConsensusDocument
 
 
 class OrchestratorMCPTools:
     """Semantic command handlers over the internal MCP command surface."""
 
-    def __init__(self, commands: Any) -> None:
+    def __init__(self, commands: PolicyCommandAdapter) -> None:
         self.commands = commands
 
     def update_consensus(
         self,
         *,
         context: str | None = None,
-    ) -> Any:
+    ) -> ConsensusDocument:
         return self.commands.update_consensus(context=context)
 
     def add_task(
@@ -35,7 +38,7 @@ class OrchestratorMCPTools:
         priority: int | None = None,
         max_retries: int = 3,
         index: int | None = None,
-    ) -> Any:
+    ) -> TaskInfo:
         task = TaskInfo(
             id=task_id,
             title=title,
@@ -62,7 +65,7 @@ class OrchestratorMCPTools:
         branch: str | None = None,
         priority: int | None = None,
         max_retries: int | None = None,
-    ) -> Any:
+    ) -> TaskInfo:
         return self.commands.update_task_definition(
             task_id,
             title=title,
@@ -75,7 +78,7 @@ class OrchestratorMCPTools:
             max_retries=max_retries,
         )
 
-    def reorder_tasks(self, task_ids: Sequence[str]) -> Any:
+    def reorder_tasks(self, task_ids: Sequence[str]) -> RoadmapDocument:
         return self.commands.reorder_tasks(list(task_ids))
 
     def request_user_decision(
@@ -89,7 +92,7 @@ class OrchestratorMCPTools:
         source_role: str = "gatekeeper",
         source_conversation_id: str | None = None,
         source_turn_id: str | None = None,
-    ) -> Any:
+    ) -> QuestionView:
         return self.commands.request_user_decision(
             text,
             priority=QuestionPriority(priority),
@@ -101,19 +104,19 @@ class OrchestratorMCPTools:
             source_turn_id=source_turn_id,
         )
 
-    def withdraw_question(self, question_id: str, *, reason: str | None = None) -> Any:
+    def withdraw_question(self, question_id: str, *, reason: str | None = None) -> QuestionView:
         return self.commands.withdraw_question(question_id, reason=reason)
 
-    def end_planning_phase(self) -> Any:
+    def end_planning_phase(self) -> WorkflowSnapshot:
         return self.commands.end_planning_phase()
 
-    def pause_workflow(self) -> Any:
+    def pause_workflow(self) -> WorkflowSnapshot:
         return self.commands.pause_workflow()
 
-    def resume_workflow(self) -> Any:
+    def resume_workflow(self) -> WorkflowSnapshot:
         return self.commands.resume_workflow()
 
-    def accept_review_ticket(self, ticket_id: str) -> Any:
+    def accept_review_ticket(self, ticket_id: str) -> ReviewResolutionRecord:
         return self.commands.accept_review_ticket(ticket_id)
 
     def retry_review_ticket(
@@ -123,7 +126,7 @@ class OrchestratorMCPTools:
         failure_reason: str,
         prompt_patch: str | None = None,
         acceptance_patch: Sequence[str] | None = None,
-    ) -> Any:
+    ) -> ReviewResolutionRecord:
         return self.commands.retry_review_ticket(
             ticket_id,
             failure_reason=failure_reason,
@@ -131,9 +134,9 @@ class OrchestratorMCPTools:
             acceptance_patch=list(acceptance_patch) if acceptance_patch is not None else None,
         )
 
-    def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> Any:
+    def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> ReviewResolutionRecord:
         return self.commands.escalate_review_ticket(ticket_id, reason=reason)
 
-    def update_roadmap(self, *, tasks: Sequence[dict[str, Any]], project: str | None = None) -> Any:
+    def update_roadmap(self, *, tasks: Sequence[TaskInfo], project: str | None = None) -> RoadmapDocument:
         normalized_tasks = [TaskInfo.model_validate(task) for task in tasks]
         return self.commands.replace_roadmap(tasks=normalized_tasks, project=project)

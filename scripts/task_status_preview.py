@@ -6,17 +6,19 @@ import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import TypeAlias
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 
 from vibrant.models.task import TaskInfo
 from vibrant.tui.screens.vibing import VibingScreen
+from vibrant.type_defs import JSONValue
 
 
 FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "task_status_preview.json"
 _DATETIME_KEYS = {"started_at", "finished_at"}
+MaterializedValue: TypeAlias = JSONValue | SimpleNamespace | list["MaterializedValue"]
 
 
 class _InstancesAPI:
@@ -63,7 +65,7 @@ class _RunsAPI:
     def __init__(
         self,
         runs_by_task: dict[str, SimpleNamespace],
-        events_by_run: dict[str, list[dict[str, Any]]],
+        events_by_run: dict[str, list[dict[str, JSONValue]]],
     ) -> None:
         self._runs_by_task = runs_by_task
         self._events_by_run = events_by_run
@@ -76,7 +78,7 @@ class _RunsAPI:
             return None
         return run
 
-    def events(self, run_id: str) -> list[dict[str, Any]]:
+    def events(self, run_id: str) -> list[dict[str, JSONValue]]:
         return list(self._events_by_run.get(run_id, ()))
 
 
@@ -151,7 +153,7 @@ def _load_preview_fixture(path: Path) -> tuple[list[TaskInfo], dict[str, str], P
     return tasks, agent_summaries, facade
 
 
-def _materialize(value: Any, *, key: str | None = None) -> Any:
+def _materialize(value: JSONValue, *, key: str | None = None) -> MaterializedValue:
     if isinstance(value, dict):
         return SimpleNamespace(**{name: _materialize(item, key=name) for name, item in value.items()})
     if isinstance(value, list):
@@ -161,7 +163,7 @@ def _materialize(value: Any, *, key: str | None = None) -> Any:
     return value
 
 
-def _materialize_event(value: Any, *, key: str | None = None) -> Any:
+def _materialize_event(value: JSONValue, *, key: str | None = None) -> JSONValue:
     if isinstance(value, dict):
         return {name: _materialize_event(item, key=name) for name, item in value.items()}
     if isinstance(value, list):

@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
 
 from ..json_store import read_json, write_json
 from ...types import AgentStreamEvent, utc_now
+from ....type_defs import JSONObject, is_json_object
 
 
 @dataclass(slots=True)
@@ -133,9 +133,9 @@ class ConversationStore:
         index[manifest.conversation_id] = asdict(manifest)
         write_json(self.index_path, index)
 
-    def _index(self) -> dict[str, dict[str, Any]]:
+    def _index(self) -> dict[str, JSONObject]:
         payload = read_json(self.index_path, default={})
-        if isinstance(payload, dict):
+        if is_json_object(payload):
             return payload
         return {}
 
@@ -143,5 +143,5 @@ class ConversationStore:
         return self.frames_dir / f"{conversation_id}.jsonl"
 
 
-def _manifest_from_raw(raw: dict[str, Any]) -> ConversationManifest:
+def _manifest_from_raw(raw: JSONObject) -> ConversationManifest:
     return ConversationManifest(**raw)

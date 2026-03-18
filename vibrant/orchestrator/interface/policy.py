@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
+from vibrant.type_defs import JSONMapping, JSONValue
 
 from ..policy.gatekeeper_loop import GatekeeperUserLoop
 from ..policy.task_loop import TaskLoop
@@ -32,8 +32,8 @@ class PolicyCommandAdapter:
         run_id: str,
         request_id: int | str,
         *,
-        result: object | None = None,
-        error: dict[str, object] | None = None,
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
     ) -> RuntimeHandleSnapshot:
         return await self.gatekeeper_loop.respond_to_request(
             run_id,
@@ -105,7 +105,7 @@ class PolicyCommandAdapter:
     def add_task(self, task: TaskInfo, *, index: int | None = None) -> TaskInfo:
         return self.gatekeeper_loop.add_task(task, index=index)
 
-    def update_task_definition(self, task_id: str, **patch: Any) -> TaskInfo:
+    def update_task_definition(self, task_id: str, **patch: object) -> TaskInfo:
         return self.gatekeeper_loop.update_task_definition(task_id, **patch)
 
     def reorder_tasks(self, ordered_task_ids: list[str]) -> RoadmapDocument:

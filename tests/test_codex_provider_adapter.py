@@ -5,16 +5,17 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from vibrant.models.agent import AgentRecord, AgentType
 from vibrant.models.wire import JsonRpcNotification
 from vibrant.providers.base import CodexAuthConfig, CodexAuthMode, RuntimeMode
-from vibrant.providers.codex.adapter import CodexProviderAdapter
+from vibrant.providers.codex.adapter import CodexProviderAdapter, _progress_text_from_item
 from vibrant.providers.codex.client import CodexClientError
 from vibrant.providers.invocation import ProviderInvocationPlan
+from vibrant.type_defs import JSONValue
 
 
 def _make_agent_record(
@@ -63,6 +64,20 @@ class FakeCodexClient:
 
 
 class TestCodexProviderAdapter:
+    def test_progress_text_from_item_keeps_hot_path_shallow(self) -> None:
+        payload = cast(
+            JSONValue,
+            {
+                "content": [
+                    {"text": "alpha"},
+                    {"text": "beta"},
+                ],
+                "metadata": {"raw": object()},
+            },
+        )
+
+        assert _progress_text_from_item(payload) == "alphabeta"
+
     @pytest.mark.asyncio
     async def test_start_session_passes_composed_launch_config_to_client(self):
         captured: dict[str, Any] = {}

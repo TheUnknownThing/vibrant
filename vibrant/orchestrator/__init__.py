@@ -1,6 +1,6 @@
 """Redesigned orchestrator package."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .types import AgentRunSnapshot, TaskResult
 
@@ -20,7 +20,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     if name in {"Orchestrator", "create_orchestrator"}:
         from .bootstrap import Orchestrator, create_orchestrator
 

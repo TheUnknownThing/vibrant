@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -68,8 +68,8 @@ class ChatPanel(Static):
 
     FLASH_DURATION_SECONDS = 1.5
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, **widget_kwargs: object) -> None:
+        super().__init__(**widget_kwargs)
         self._header_text = "[b]Gatekeeper[/b]"
         self._subtitle_text = "Type in the input bar to engage in conversation."
         self._question_summary_text = ""

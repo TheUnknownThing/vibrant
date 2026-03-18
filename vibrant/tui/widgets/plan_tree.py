@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -11,6 +11,7 @@ from textual.binding import Binding
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Markdown, Static, Tree
+from textual.widgets.tree import TreeNode
 
 from ...models.task import TaskInfo, TaskStatus
 
@@ -161,8 +162,8 @@ class PlanTree(Static):
     }
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, **widget_kwargs: object) -> None:
+        super().__init__(**widget_kwargs)
         self._tree: Tree[TaskTreeNodeData | None] | None = None
         self._tasks_by_id: dict[str, TaskInfo] = {}
         self._summaries_by_task_id: dict[str, str] = {}
@@ -303,7 +304,7 @@ class PlanTree(Static):
         self._refresh_dependency_labels(data.task.id)
         self.post_message(self.TaskSelected(data.task))
 
-    def _open_node_details(self, node: Any) -> None:
+    def _open_node_details(self, node: TreeNode[TaskTreeNodeData | None]) -> None:
         data = getattr(node, "data", None)
         if not isinstance(data, TaskTreeNodeData):
             return
@@ -327,7 +328,7 @@ class PlanTree(Static):
 
     def _add_task_node(
         self,
-        parent: Any,
+        parent: TreeNode[TaskTreeNodeData | None],
         task: TaskInfo,
     ) -> None:
         summary = self._summaries_by_task_id.get(task.id)

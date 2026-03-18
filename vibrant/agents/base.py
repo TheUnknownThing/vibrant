@@ -15,12 +15,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
 
 from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
-from vibrant.providers.base import CanonicalEvent, RuntimeMode
+from vibrant.providers.base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 from vibrant.providers.invocation import ProviderInvocationPlan
+from vibrant.type_defs import JSONValue
 
 from .utils import (
     extract_error_message,
@@ -47,7 +48,7 @@ class AgentRunResult:
     transcript: str = ""
     events: list[CanonicalEvent] = field(default_factory=list)
     agent_record: AgentRecord | None = None
-    turn_result: Any | None = None
+    turn_result: JSONValue | None = None
     exit_code: int | None = None
     pid: int | None = None
     error: str | None = None
@@ -66,9 +67,9 @@ class AgentBase(ABC):
         project_root: Path,
         config: VibrantConfig,
         *,
-        adapter_factory: Any,
-        on_canonical_event: Callable[[CanonicalEvent], Any] | None = None,
-        on_agent_record_updated: Callable[[AgentRecord], Any] | None = None,
+        adapter_factory: Callable[..., ProviderAdapter],
+        on_canonical_event: CanonicalEventHandler | None = None,
+        on_agent_record_updated: Callable[[AgentRecord], None] | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
         self.project_root = project_root
@@ -77,7 +78,7 @@ class AgentBase(ABC):
         self.on_canonical_event = on_canonical_event
         self.on_agent_record_updated = on_agent_record_updated
         self.timeout_seconds = timeout_seconds or float(config.agent_timeout_seconds)
-        self._live_adapter: Any | None = None
+        self.live_adapter: ProviderAdapter | None = None
 
     # ------------------------------------------------------------------
     # Abstract / required methods
@@ -109,7 +110,7 @@ class AgentBase(ABC):
         """
         return True
 
-    def get_thread_kwargs(self) -> dict[str, Any]:
+    def get_thread_kwargs(self) -> dict[str, JSONValue]:
         """Extra keyword arguments forwarded to ``adapter.start_thread``."""
         return {
             "model": self.config.model,
@@ -122,9 +123,9 @@ class AgentBase(ABC):
 
     def enrich_event(
         self,
-        event: dict[str, Any],
+        event: CanonicalEvent,
         agent_record: AgentRecord,
-    ) -> dict[str, Any]:
+    ) -> CanonicalEvent:
         """Add agent-specific metadata to a canonical event before forwarding."""
         event.setdefault("agent_id", agent_record.identity.agent_id)
         event.setdefault("run_id", agent_record.identity.run_id)
@@ -134,7 +135,7 @@ class AgentBase(ABC):
     def extract_summary(
         self,
         transcript: str,
-        turn_result: Any | None,
+        turn_result: JSONValue | None,
     ) -> str | None:
         """Derive an agent summary from the transcript or turn result."""
         if transcript:
@@ -175,7 +176,7 @@ class AgentBase(ABC):
         transcript_chunks: list[str] = []
         turn_finished = asyncio.Event()
         runtime_error: str | None = None
-        adapter: Any | None = None
+        adapter: ProviderAdapter | None = None
 
         async def handle_event(event: CanonicalEvent) -> None:
             nonlocal runtime_error, adapter
@@ -196,7 +197,7 @@ class AgentBase(ABC):
                 request_id = event_copy.get("request_id")
                 request_kind = str(event_copy.get("request_kind") or "request")
                 runtime_error = f"{REQUEST_ERROR_MESSAGE} ({request_kind})"
-                if adapter is not None and request_id is not None:
+                if adapter is not None and isinstance(request_id, (int, str)):
                     await adapter.respond_to_request(
                         request_id,
                         error={"code": -32000, "message": runtime_error},
@@ -221,7 +222,7 @@ class AgentBase(ABC):
 
         thread_runtime_mode = self.get_thread_runtime_mode()
         turn_runtime_mode = self.get_turn_runtime_mode()
-        turn_result: Any | None = None
+        turn_result: JSONValue | None = None
 
         try:
             agent_record.transition_to(AgentStatus.CONNECTING)
@@ -247,7 +248,7 @@ class AgentBase(ABC):
                 agent_record=agent_record,
                 on_canonical_event=handle_event,
             )
-            self._live_adapter = adapter
+            self.live_adapter = adapter
             await adapter.start_session(cwd=working_dir)
             agent_record.lifecycle.pid = extract_pid(adapter)
             self._notify_record_updated(agent_record)
@@ -280,7 +281,7 @@ class AgentBase(ABC):
         finally:
             if adapter is not None:
                 await stop_adapter_safely(adapter)
-            self._live_adapter = None
+            self.live_adapter = None
 
         transcript = "".join(transcript_chunks).strip()
         exit_code = extract_exit_code(adapter)

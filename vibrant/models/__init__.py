@@ -5,9 +5,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import Any
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 from .agent import (
     AgentInstanceProviderConfig,
@@ -49,7 +47,7 @@ class ItemInfo(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     type: ItemType = ItemType.UNKNOWN
     content: str = ""
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
