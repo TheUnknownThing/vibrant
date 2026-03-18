@@ -12,16 +12,16 @@ from vibrant.providers.invocation_compiler import compile_provider_invocation
 
 def build_test_agent_invocation_plan(
     *,
-    project_root: Path,
     config: VibrantConfig,
     run_id: str,
     role: str = "test",
     extra_access: list[MCPAccessDescriptor] | None = None,
+    pycua_enabled: bool = False
 ) -> ProviderInvocationPlan:
     """Compile invocation plan for a test agent with optional pyCUA MCP access."""
 
     descriptors = list(extra_access or [])
-    if _pycua_enabled(project_root, config):
+    if pycua_enabled:
         descriptors.append(
             MCPAccessDescriptor(
                 binding_id=f"binding-{role}-{run_id}-pycua",
@@ -37,8 +37,3 @@ def build_test_agent_invocation_plan(
             )
         )
     return compile_provider_invocation(config.provider_kind, descriptors)
-
-
-def _pycua_enabled(project_root: Path, config: VibrantConfig) -> bool:
-    flag = config.extra_config.get("test_agent_enable_pycua", False)
-    return bool(flag) and (project_root / PYCUA_SUBMODULE_PATH).exists()

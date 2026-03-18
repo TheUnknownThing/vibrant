@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.registry import provider_transport
 
@@ -14,6 +15,9 @@ PYCUA_SUBMODULE_PATH = "tools/pyCUA"
 PYCUA_SERVER_ID = "pycua"
 PYCUA_TOOL_NAME = "computer"
 
+def pycua_enabled(project_root: Path, config: VibrantConfig) -> bool:
+    flag = config.extra_config.get("test_agent_enable_pycua", False)
+    return bool(flag) and (project_root / PYCUA_SUBMODULE_PATH).exists()
 
 class TestAgent(ReadOnlyAgentBase):
     """Agent that validates completed task work in a read-only workspace."""
