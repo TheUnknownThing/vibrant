@@ -326,7 +326,6 @@ class WorkspaceService:
         excluded_paths = list(_WORKSPACE_EXCLUDED_PATHS)
         excluded_paths.extend(self._project_relative_excluded_paths(self.worktree_root))
         excluded_paths.extend(self._project_relative_excluded_paths(self.artifacts_root))
-        excluded_paths.extend(self._known_workspace_root_excluded_paths())
         return tuple(f":(exclude){path}" for path in excluded_paths)
 
     @staticmethod
@@ -345,18 +344,6 @@ class WorkspaceService:
         if not normalized:
             return ()
         return (normalized, f"{normalized}/**")
-
-    def _known_workspace_root_excluded_paths(self) -> tuple[str, ...]:
-        excluded_paths: list[str] = []
-        seen: set[str] = set()
-        for workspace in self.workspace_store.list_all():
-            workspace_root = Path(workspace.path).expanduser().resolve().parent
-            for candidate in self._project_relative_excluded_paths(workspace_root):
-                if candidate in seen:
-                    continue
-                seen.add(candidate)
-                excluded_paths.append(candidate)
-        return tuple(excluded_paths)
 
     @staticmethod
     def _bot_git_env() -> dict[str, str]:
