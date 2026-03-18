@@ -17,6 +17,7 @@ def test_gatekeeper_prompt_uses_centralized_template(tmp_path):
     )
 
     gatekeeper = Gatekeeper(tmp_path, adapter_factory=_NoopAdapter)
+    system_prompt = gatekeeper.render_system_prompt()
     prompt = gatekeeper.render_prompt(
         GatekeeperRequest(
             trigger=GatekeeperTrigger.TASK_COMPLETION,
@@ -25,12 +26,13 @@ def test_gatekeeper_prompt_uses_centralized_template(tmp_path):
         )
     )
 
-    assert "You are a long-lived, project-scoped planning and review agent." in prompt
-    assert "## Current Consensus" in prompt
+    assert "You are a long-lived, project-scoped planning and review agent." in system_prompt
+    assert "## MCP Tools" in system_prompt
+    assert "Read `.vibrant/consensus.md` directly" in system_prompt
+    assert all(tool_name in system_prompt for tool_name in MCP_TOOL_NAMES)
+    assert "Use these tools for durable roadmap, workflow, question, and review decisions." in system_prompt
+    assert "api-design: Prefer additive API changes over rewrites." in system_prompt
     assert "## Current Roadmap" in prompt
-    assert "## MCP Tools" in prompt
-    assert all(tool_name in prompt for tool_name in MCP_TOOL_NAMES)
-    assert "Use these tools for durable roadmap, workflow, question, and review decisions." in prompt
     assert "when the MCP bridge is available" not in prompt
-    assert "api-design: Prefer additive API changes over rewrites." in prompt
+    assert "## Current Consensus" not in prompt
     assert "Implementation is ready for review." in prompt

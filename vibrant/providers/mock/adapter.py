@@ -47,6 +47,8 @@ class MockCodexAdapter(ProviderAdapter):
         self._request_resolved = asyncio.Event()
         self._turn_task: asyncio.Task[None] | None = None
         self._active_turn_id: str | None = None
+        self._thread_instructions: str | None = None
+        self._inject_thread_instructions_next_turn = False
         process = type("MockProcess", (), {"pid": 4512, "returncode": None})()
         self.client = type("MockClient", (), {"is_running": True, "_process": process})()
 
@@ -72,6 +74,9 @@ class MockCodexAdapter(ProviderAdapter):
         await self._emit({"type": "session.state.changed", "state": "stopped"})
 
     async def start_thread(self, **kwargs: JSONValue) -> JSONObject:
+        instructions = kwargs.get("instructions")
+        self._thread_instructions = instructions.strip() if isinstance(instructions, str) and instructions.strip() else None
+        self._inject_thread_instructions_next_turn = bool(self._thread_instructions)
         self.provider_thread_id = f"mock-thread-{uuid4().hex[:8]}"
         self.thread_path = str(self.cwd / ".vibrant" / "mock" / f"{self.provider_thread_id}.jsonl")
         self._persist_thread_metadata()
@@ -88,6 +93,9 @@ class MockCodexAdapter(ProviderAdapter):
         return {"thread": thread, **kwargs}
 
     async def resume_thread(self, provider_thread_id: str, **kwargs: JSONValue) -> JSONObject:
+        instructions = kwargs.get("instructions")
+        self._thread_instructions = instructions.strip() if isinstance(instructions, str) and instructions.strip() else None
+        self._inject_thread_instructions_next_turn = bool(self._thread_instructions)
         self.provider_thread_id = provider_thread_id
         self.thread_path = str(self.cwd / ".vibrant" / "mock" / f"{provider_thread_id}.jsonl")
         self._persist_thread_metadata()
@@ -112,6 +120,9 @@ class MockCodexAdapter(ProviderAdapter):
         **kwargs: JSONValue,
     ) -> JSONObject:
         prompt = _prompt_text(input_items)
+        if self._inject_thread_instructions_next_turn and self._thread_instructions:
+            prompt = f"{self._thread_instructions}\n\n{prompt}".strip()
+            self._inject_thread_instructions_next_turn = False
         turn_id = f"mock-turn-{uuid4().hex[:8]}"
         scenario = _parse_scenario(prompt)
         self._active_turn_id = turn_id
