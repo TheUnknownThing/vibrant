@@ -26,7 +26,7 @@ def build_test_prompt(
             "## Rules",
             "1. You are strictly read-only and must not create, edit, move, or delete files.",
             "2. Do NOT modify source files, git history, or orchestrator-owned `.vibrant` state.",
-            "3. Run the validation commands in order and stop only if a command cannot continue.",
+            "3. Select the validation steps that best verify the implementation and stop only if a step cannot continue.",
             "4. You may use the pyCUA MCP `computer` tool when explicitly needed for UI/system validation.",
             "5. Report whether validation passed or failed, which commands ran, and the first concrete failure if any.",
         ]

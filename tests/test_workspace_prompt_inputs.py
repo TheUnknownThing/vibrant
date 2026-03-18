@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from vibrant.orchestrator.basic.stores import WorkspaceStore
 from vibrant.orchestrator.basic.workspace import WorkspaceService
 
@@ -49,3 +51,23 @@ def test_sync_prompt_inputs_copies_untracked_referenced_file_into_workspace(tmp_
     assert copied_paths == ["2026-03-18.png"]
     assert mirrored_path.read_bytes() == b"png-bytes"
     assert _git(Path(workspace.path), "status", "--porcelain") == ""
+
+
+def test_prepare_task_workspace_rejects_dirty_tracked_prompt_reference(tmp_path: Path) -> None:
+    _initialize_git_repo(tmp_path)
+    tracked_path = tmp_path / "tracked.txt"
+    tracked_path.write_text("locally edited\n", encoding="utf-8")
+    workspace_service = WorkspaceService(
+        project_root=tmp_path,
+        worktree_root=tmp_path / ".vibrant" / "worktrees",
+        workspace_store=WorkspaceStore(tmp_path / ".vibrant" / "workspaces.json"),
+        artifacts_root=tmp_path / ".vibrant" / "review-diffs",
+    )
+
+    prompt = "Use the current contents of @tracked.txt to implement the task."
+
+    with pytest.raises(
+        RuntimeError,
+        match="Project repository has uncommitted changes outside orchestrator-owned paths.",
+    ):
+        workspace_service.prepare_task_workspace("task-1", prompt=prompt)

@@ -348,7 +348,7 @@ class WorkspaceService:
         excluded_paths = list(_WORKSPACE_EXCLUDED_PATHS)
         excluded_paths.extend(self._project_relative_excluded_paths(self.worktree_root))
         excluded_paths.extend(self._project_relative_excluded_paths(self.artifacts_root))
-        excluded_paths.extend(self._prompt_input_excluded_paths(prompt or ""))
+        excluded_paths.extend(self._prompt_input_untracked_excluded_paths(prompt or ""))
         return tuple(f":(exclude){path}" for path in excluded_paths)
 
     @staticmethod
@@ -391,8 +391,47 @@ class WorkspaceService:
             resolved_paths.append((resolved_candidate, relative_path))
         return resolved_paths
 
-    def _prompt_input_excluded_paths(self, prompt: str) -> tuple[str, ...]:
-        return self._pathspecs_for_relative_paths(relative_path for _, relative_path in self._prompt_input_paths(prompt))
+    def _prompt_input_untracked_excluded_paths(self, prompt: str) -> tuple[str, ...]:
+        return self._pathspecs_for_relative_paths(self._prompt_input_untracked_paths(prompt))
+
+    def _prompt_input_untracked_paths(self, prompt: str) -> tuple[Path, ...]:
+        untracked_paths: list[Path] = []
+        seen: set[Path] = set()
+        for source_path, relative_path in self._prompt_input_paths(prompt):
+            if source_path.is_dir():
+                candidates = self._git_stdout(
+                    self.project_root,
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "--",
+                    relative_path.as_posix(),
+                ).splitlines()
+                nested_paths = [
+                    Path(candidate.strip())
+                    for candidate in candidates
+                    if candidate.strip()
+                ]
+            elif self._is_tracked_path(relative_path):
+                nested_paths = []
+            else:
+                nested_paths = [relative_path]
+            for nested_path in nested_paths:
+                if nested_path in seen:
+                    continue
+                seen.add(nested_path)
+                untracked_paths.append(nested_path)
+        return tuple(untracked_paths)
+
+    def _is_tracked_path(self, relative_path: Path) -> bool:
+        tracked_paths = self._git_stdout(
+            self.project_root,
+            "ls-files",
+            "--cached",
+            "--",
+            relative_path.as_posix(),
+        )
+        return bool(tracked_paths.strip())
 
     @staticmethod
     def _pathspecs_for_relative_paths(paths: Iterable[Path]) -> tuple[str, ...]:
