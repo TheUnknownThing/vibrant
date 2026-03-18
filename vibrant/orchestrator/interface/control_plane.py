@@ -236,3 +236,6 @@ class InterfaceControlPlane:
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str):
         return self.backend.commands.escalate_review_ticket(ticket_id, reason=reason)
+
+    def restart_failed_task(self, task_id: str):
+        return self.backend.commands.restart_failed_task(task_id)

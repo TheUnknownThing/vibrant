@@ -174,3 +174,28 @@ def requeue_task_for_retry(loop: TaskLoop, task_id: str) -> TaskInfo:
     updated.status = TaskStatus.QUEUED
     updated.failure_reason = None
     return loop.roadmap_store.replace_task(updated, active_attempt_id=None)
+
+
+def restart_failed_task(loop: TaskLoop, task_id: str) -> TaskInfo:
+    from . import dispatch
+
+    task = require_task(loop, task_id)
+    if task.status is not TaskStatus.FAILED:
+        raise ValueError(f"Only failed tasks can be restarted: {task_id}")
+    updated = requeue_task_for_retry(loop, task_id)
+
+    workflow = loop.workflow_snapshot()
+    blocking_reason = dispatch.task_execution_block_reason(loop, workflow)
+    if blocking_reason is not None:
+        set_blocked_if_needed(loop, blocking_reason)
+        return updated
+
+    if loop._snapshot.stage is TaskLoopStage.BLOCKED:
+        next_stage = TaskLoopStage.REVIEW_PENDING if pending_review_ticket_ids(loop) else TaskLoopStage.IDLE
+        loop._set_snapshot(
+            stage=next_stage,
+            active_lease=None,
+            active_attempt_id=None,
+            blocking_reason=None,
+        )
+    return updated

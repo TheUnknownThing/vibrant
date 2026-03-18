@@ -172,3 +172,6 @@ class PolicyCommandAdapter:
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str) -> ReviewResolutionRecord:
         return self.task_loop.escalate_review_ticket(ticket_id, reason=reason)
+
+    def restart_failed_task(self, task_id: str) -> TaskInfo:
+        return self.task_loop.restart_failed_task(task_id)
