@@ -64,3 +64,33 @@ def build_gatekeeper_prompt(
             "5. Keep the conversation focused on project planning, review, and escalation.",
         ]
     )
+
+
+def build_gatekeeper_resume_prompt(
+    *,
+    project_name: str,
+    consensus_text: str,
+    roadmap_text: str,
+    trigger_value: str,
+    trigger_description: str,
+    agent_summary: str | None,
+) -> str:
+    """Render incremental input for a resumed Gatekeeper thread."""
+
+    summary_text = agent_summary.strip() if agent_summary else "N/A"
+    return "\n".join(
+        [
+            f"Resume the existing Gatekeeper conversation for Project {project_name}.",
+            "Prior thread context and instructions remain in effect.",
+            "Use this message as incremental input for the next turn, not as a new bootstrap prompt.",
+            "## Current Trigger",
+            f"{trigger_value}: {trigger_description}",
+            "## Current Consensus",
+            consensus_text,
+            "## Current Roadmap",
+            roadmap_text,
+            "## Agent Summary (if applicable)",
+            summary_text,
+            "Continue from the existing conversation and make the next durable planning or review decision.",
+        ]
+    )

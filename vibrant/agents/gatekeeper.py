@@ -23,7 +23,11 @@ from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root,
 from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentStatus, AgentType
 from vibrant.providers.base import CanonicalEvent, RuntimeMode
 from vibrant.providers.registry import provider_transport, resolve_configured_adapter_factory
-from vibrant.prompts import build_gatekeeper_prompt, build_user_answer_trigger_description
+from vibrant.prompts import (
+    build_gatekeeper_prompt,
+    build_gatekeeper_resume_prompt,
+    build_user_answer_trigger_description,
+)
 
 from .base import ReadOnlyAgentBase
 from .runtime import AgentHandle, BaseAgentRuntime, NormalizedRunResult
@@ -164,6 +168,18 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             mcp_tool_names=MCP_TOOL_NAMES,
         )
 
+    def render_resume_prompt(self, request: GatekeeperRequest) -> str:
+        consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
+        roadmap_text = _read_text(self.roadmap_path) or "No roadmap document exists yet."
+        return build_gatekeeper_resume_prompt(
+            project_name=self.project_root.name,
+            consensus_text=consensus_text,
+            roadmap_text=roadmap_text,
+            trigger_value=request.trigger.value,
+            trigger_description=request.trigger_description,
+            agent_summary=request.agent_summary,
+        )
+
     def _render_available_skills(self) -> str:
         skills_dir = self.vibrant_dir / "skills"
         if not skills_dir.exists():
@@ -205,6 +221,9 @@ class Gatekeeper:
     def render_prompt(self, request: GatekeeperRequest) -> str:
         return self.agent.render_prompt(request)
 
+    def render_resume_prompt(self, request: GatekeeperRequest) -> str:
+        return self.agent.render_resume_prompt(request)
+
     def build_run_record(
         self,
         request: GatekeeperRequest,
@@ -243,16 +262,19 @@ class Gatekeeper:
         on_record_updated: Callable[[AgentRunRecord], Any] | None = None,
         on_result: Callable[[GatekeeperRunResult], Any] | None = None,
     ) -> GatekeeperRunHandle:
-        prompt = self.render_prompt(request)
-        agent_record = self.build_run_record(request)
-        agent_record.context.prompt_used = prompt
-
         should_resume = (
             resume_latest_thread
             if resume_latest_thread is not None
             else request.trigger is GatekeeperTrigger.USER_CONVERSATION
         )
         resume_thread_id = self._find_latest_gatekeeper_thread_id() if should_resume else None
+        prompt = (
+            self.render_resume_prompt(request)
+            if resume_thread_id is not None
+            else self.render_prompt(request)
+        )
+        agent_record = self.build_run_record(request)
+        agent_record.context.prompt_used = prompt
         record_callback = on_record_updated or self._persist_agent_record
 
         handle = await self.runtime.start(

@@ -208,6 +208,11 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     assert adapter.resume_thread_calls[0]["provider_thread_id"] == "thread-existing"
     assert adapter.resume_thread_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
     assert adapter.start_turn_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
+    resumed_prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
+    assert "Resume the existing Gatekeeper conversation" in resumed_prompt
+    assert "Prior thread context and instructions remain in effect." in resumed_prompt
+    assert "You are a long-lived, project-scoped planning and review agent." not in resumed_prompt
+    assert "Review the new project direction." in resumed_prompt
     assert result.succeeded is True
     assert result.state is RunState.COMPLETED
     assert result.provider_thread.thread_id == "thread-existing"

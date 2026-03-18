@@ -8,6 +8,7 @@ import pytest
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.types import AttemptStatus
 from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary
+from vibrant.orchestrator.types import WorkflowStatus
 from vibrant.tui.app import VibrantApp
 from vibrant.tui.widgets.input_bar import InputBar
 
@@ -204,3 +205,44 @@ async def test_restart_slash_command_prefers_failed_task_over_selected_pending_t
     assert calls == ["task-1"]
     assert notifications == [("Task task-1 queued for retry.", "information")]
     assert statuses == ["Task task-1 queued for retry"]
+
+
+@pytest.mark.asyncio
+async def test_toggle_pause_pauses_and_resumes_live_policies(monkeypatch) -> None:
+    app = VibrantApp()
+    statuses: list[str] = []
+    notifications: list[tuple[str, str]] = []
+    facade_calls: list[tuple[str, str | None]] = []
+    workflow_status = WorkflowStatus.EXECUTING
+
+    async def fake_pause_policies(reason: str | None = None):
+        nonlocal workflow_status
+        facade_calls.append(("pause", reason))
+        workflow_status = WorkflowStatus.PAUSED
+        return {"gatekeeper": None, "attempts": []}
+
+    async def fake_resume_policies():
+        nonlocal workflow_status
+        facade_calls.append(("resume", None))
+        workflow_status = WorkflowStatus.EXECUTING
+        return {"workflow": workflow_status, "gatekeeper": None, "attempt": None}
+
+    app.orchestrator_facade = SimpleNamespace(
+        get_workflow_status=lambda: workflow_status,
+        pause_policies=fake_pause_policies,
+        resume_policies=fake_resume_policies,
+    )
+    monkeypatch.setattr(app, "_refresh_project_views", lambda: None)
+    monkeypatch.setattr(app, "_start_automatic_workflow_if_needed", lambda: facade_calls.append(("auto", None)))
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+    monkeypatch.setattr(app, "notify", lambda message, *, severity="information", **kwargs: notifications.append((message, severity)))
+
+    await app.action_toggle_pause()
+    await app.action_toggle_pause()
+
+    assert facade_calls == [("pause", "user_paused"), ("resume", None), ("auto", None)]
+    assert statuses == ["Workflow paused", "Workflow resumed (executing)"]
+    assert notifications == [
+        ("Workflow paused.", "information"),
+        ("Workflow resumed (executing).", "information"),
+    ]
