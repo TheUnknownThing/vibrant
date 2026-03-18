@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from vibrant.agents.base import AgentBase, AgentRunResult, REQUEST_ERROR_MESSAGE
+from vibrant.agents.code_agent import CodeAgent
 from vibrant.agents.runtime import BaseAgentRuntime, RunState
 from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentRecord, AgentType, ProviderResumeHandle
@@ -87,6 +89,25 @@ class _DuplicatingTranscriptAdapter(_FakeAdapter):
             {
                 "type": "task.progress",
                 "item": {"type": "assistant_message", "text": "Final answer."},
+            }
+        )
+        await self._on_canonical_event({"type": "turn.completed"})
+        return {}
+
+
+class _TaggedSummaryAdapter(_FakeAdapter):
+    async def start_turn(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        await self._on_canonical_event(
+            {
+                "type": "content.delta",
+                "delta": (
+                    "Work complete.\n"
+                    "<vibrant_summary>\n"
+                    "Implemented the task and ran focused validation.\n"
+                    "</vibrant_summary>\n"
+                    "Trailing notes."
+                ),
             }
         )
         await self._on_canonical_event({"type": "turn.completed"})
@@ -233,3 +254,23 @@ async def test_agent_base_summary_ignores_duplicate_task_progress_text() -> None
 
     assert result.state is RunState.COMPLETED
     assert result.summary == "Final answer."
+
+
+@pytest.mark.asyncio
+async def test_code_agent_summary_prefers_tagged_summary_block() -> None:
+    runtime = BaseAgentRuntime(
+        CodeAgent(
+            project_root=Path("/tmp/project"),
+            config=VibrantConfig(),
+            adapter_factory=lambda **kwargs: _TaggedSummaryAdapter(**kwargs),
+        )
+    )
+
+    handle = await runtime.start(
+        agent_record=_make_agent_record(),
+        prompt="Start",
+    )
+    result = await handle.wait()
+
+    assert result.state is RunState.COMPLETED
+    assert result.summary == "Implemented the task and ran focused validation."

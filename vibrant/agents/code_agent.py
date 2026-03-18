@@ -11,6 +11,7 @@ from vibrant.models.task import TaskInfo
 from vibrant.providers.registry import provider_transport
 
 from .base import AgentBase
+from .utils import extract_summary_from_turn_result, extract_tagged_summary_from_transcript
 
 if TYPE_CHECKING:
     from vibrant.orchestrator.types import WorkspaceHandle
@@ -25,6 +26,21 @@ class CodeAgent(AgentBase):
 
     def get_agent_type(self) -> AgentType:
         return AgentType.CODE
+
+    def extract_summary(
+        self,
+        transcript: str,
+        turn_result: object | None,
+    ) -> str | None:
+        tagged_summary = extract_tagged_summary_from_transcript(transcript)
+        if tagged_summary:
+            return tagged_summary
+
+        provider_summary = extract_summary_from_turn_result(turn_result)
+        if provider_summary:
+            return provider_summary
+
+        return transcript or None
 
     def build_run_record(
         self,
