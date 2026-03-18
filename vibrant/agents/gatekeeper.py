@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import hashlib
 import inspect
 import os
 import tempfile
@@ -46,7 +47,7 @@ ACCEPT_REVIEW_TICKET_MCP_TOOL = "vibrant.accept_review_ticket"
 RETRY_REVIEW_TICKET_MCP_TOOL = "vibrant.retry_review_ticket"
 ESCALATE_REVIEW_TICKET_MCP_TOOL = "vibrant.escalate_review_ticket"
 GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY = "gatekeeperSystemPromptVersion"
-GATEKEEPER_SYSTEM_PROMPT_VERSION = 1
+GATEKEEPER_SYSTEM_PROMPT_VERSION = 2
 
 MCP_TOOL_NAMES = (
     PLANNING_COMPLETE_MCP_TOOL,
@@ -140,16 +141,16 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         resumed: bool,
     ) -> bool:
         _ = resumed
-        handle = ProviderResumeHandle.from_provider_metadata(agent_record.provider)
-        if handle is None:
-            return False
-        resume_cursor = dict(handle.resume_cursor or {})
-        if resume_cursor.get(GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY) == GATEKEEPER_SYSTEM_PROMPT_VERSION:
-            return False
-        resume_cursor[GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY] = GATEKEEPER_SYSTEM_PROMPT_VERSION
-        handle.resume_cursor = resume_cursor
-        agent_record.provider.set_resume_handle(handle)
-        return True
+        return False
+
+    def on_turn_started(
+        self,
+        agent_record: AgentRunRecord,
+        *,
+        resumed: bool,
+    ) -> bool:
+        _ = resumed
+        return self._store_system_prompt_marker(agent_record)
 
     def build_run_record(
         self,
@@ -204,7 +205,24 @@ class GatekeeperAgent(ReadOnlyAgentBase):
 
     def _system_prompt_seeded(self, agent_record: AgentRunRecord) -> bool:
         resume_cursor = agent_record.provider.resume_cursor or {}
-        return resume_cursor.get(GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY) == GATEKEEPER_SYSTEM_PROMPT_VERSION
+        return resume_cursor.get(GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY) == self._system_prompt_marker()
+
+    def _system_prompt_marker(self) -> str:
+        prompt_hash = hashlib.sha256(self.render_system_prompt().encode("utf-8")).hexdigest()
+        return f"v{GATEKEEPER_SYSTEM_PROMPT_VERSION}:{prompt_hash}"
+
+    def _store_system_prompt_marker(self, agent_record: AgentRunRecord) -> bool:
+        handle = ProviderResumeHandle.from_provider_metadata(agent_record.provider)
+        if handle is None:
+            return False
+        marker = self._system_prompt_marker()
+        resume_cursor = dict(handle.resume_cursor or {})
+        if resume_cursor.get(GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY) == marker:
+            return False
+        resume_cursor[GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY] = marker
+        handle.resume_cursor = resume_cursor
+        agent_record.provider.set_resume_handle(handle)
+        return True
 
     def _render_available_skills(self) -> str:
         skills_dir = self.vibrant_dir / "skills"

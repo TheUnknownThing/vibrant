@@ -169,6 +169,20 @@ class AgentBase(ABC):
         _ = agent_record, resumed
         return False
 
+    def on_turn_started(
+        self,
+        agent_record: AgentRecord,
+        *,
+        resumed: bool,
+    ) -> bool:
+        """Hook called after the provider accepts the turn start request.
+
+        Return True when this hook mutates the agent record and the runtime
+        should persist/broadcast the updated record immediately.
+        """
+        _ = agent_record, resumed
+        return False
+
     # ------------------------------------------------------------------
     # Core run method
     # ------------------------------------------------------------------
@@ -299,6 +313,8 @@ class AgentBase(ABC):
                 reasoning_effort=self.config.reasoning_effort,
                 reasoning_summary=self.config.reasoning_summary,
             )
+            if self.on_turn_started(agent_record, resumed=resume_thread_id is not None):
+                self._notify_record_updated(agent_record)
             await asyncio.wait_for(
                 turn_finished.wait(), timeout=self.timeout_seconds
             )

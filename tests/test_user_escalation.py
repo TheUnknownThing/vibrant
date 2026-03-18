@@ -9,7 +9,6 @@ import pytest
 
 from vibrant.agents import (
     GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY,
-    GATEKEEPER_SYSTEM_PROMPT_VERSION,
     Gatekeeper,
     GatekeeperRequest,
     GatekeeperTrigger,
@@ -17,6 +16,10 @@ from vibrant.agents import (
 from vibrant.models.agent import AgentProviderMetadata, AgentRecord, AgentStatus, AgentType
 from vibrant.project_init import initialize_project
 from vibrant.providers.base import RuntimeMode
+
+
+def _seeded_marker(project_root: Path) -> str:
+    return Gatekeeper(project_root, adapter_factory=FollowUpAdapter).agent._system_prompt_marker()
 
 
 class FollowUpAdapter:
@@ -81,11 +84,12 @@ class FollowUpAdapter:
         self.agent_record.provider.provider_thread_id = thread_id
         self.agent_record.provider.resume_cursor = {
             "threadId": thread_id,
-            GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: GATEKEEPER_SYSTEM_PROMPT_VERSION,
+            GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: _seeded_marker(self.cwd),
         }
 
 
 def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: str) -> None:
+    seeded_marker = _seeded_marker(project_root)
     record = AgentRecord(
         identity={
             "run_id": agent_id,
@@ -98,7 +102,7 @@ def _write_gatekeeper_record(project_root: Path, *, agent_id: str, thread_id: st
             provider_thread_id=thread_id,
             resume_cursor={
                 "threadId": thread_id,
-                GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: GATEKEEPER_SYSTEM_PROMPT_VERSION,
+                GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY: seeded_marker,
             },
         ),
     )
