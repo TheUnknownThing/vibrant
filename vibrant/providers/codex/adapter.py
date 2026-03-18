@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import inspect
 from pathlib import Path
-from typing import Callable, TypedDict
+from typing import Callable, TypeGuard, TypedDict
 
 from ...runtime_logging.ndjson_logger import CanonicalLogger, NativeLogger
 from ...models.agent import AgentRecord, ProviderResumeHandle
@@ -986,8 +986,18 @@ def _turn_status_from_payload(payload: JSONValue) -> str | None:
     return None
 
 
+def _is_string_mapping(value: object) -> TypeGuard[Mapping[str, object]]:
+    """Return whether ``value`` is a mapping keyed by strings.
+
+    This helper intentionally avoids recursively validating nested values so
+    hot-path progress extraction can stay shallow.
+    """
+
+    return isinstance(value, Mapping) and all(isinstance(key, str) for key in value)
+
+
 def _progress_text_from_item(item_payload: JSONValue) -> str | None:
-    if not is_json_mapping(item_payload):
+    if not _is_string_mapping(item_payload):
         return None
     text = item_payload.get("text")
     if isinstance(text, str) and text:
@@ -998,7 +1008,7 @@ def _progress_text_from_item(item_payload: JSONValue) -> str | None:
     if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
         parts: list[str] = []
         for entry in content:
-            if isinstance(entry, Mapping):
+            if _is_string_mapping(entry):
                 part = entry.get("text")
                 if isinstance(part, str) and part:
                     parts.append(part)

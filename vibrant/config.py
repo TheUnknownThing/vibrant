@@ -209,7 +209,7 @@ class VibrantConfig(BaseModel):
                 merged.update(value)
             else:
                 if not isinstance(value, (str, int, float, bool, list, dict)) and value is not None:
-                    raise TypeError(f"Unsupported config value type for key {key!r}: {type(value)!r}")
+                    raise ValueError(f"Unsupported config value type for key {key!r}: {type(value)!r}")
                 merged[key] = value
         return merged
 
