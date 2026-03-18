@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, get_type_hints
+from typing import get_type_hints
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import AuthorizationError
@@ -16,6 +16,7 @@ from starlette.middleware import Middleware as ASGIMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from vibrant.orchestrator.types import AgentMCPBinding
+from vibrant.type_defs import JSONValue
 
 from .binding_registry import BINDING_HEADER_NAME, MCPBindingRegistry, RegisteredMCPBinding
 from .common import MCPResourceDefinition, MCPToolDefinition
@@ -43,7 +44,7 @@ _RESOURCE_URIS: dict[str, str] = {
 _WILDCARD_HOSTS = {"0.0.0.0", "::"}
 
 
-def _copy_callable_metadata(wrapper: Callable[..., Any], original: Callable[..., Any]) -> None:
+def _copy_callable_metadata(wrapper: Callable[..., object], original: Callable[..., object]) -> None:
     """Preserve signature metadata so FastMCP derives the right schemas."""
 
     annotations = _resolved_annotations(original)
@@ -62,7 +63,7 @@ def _copy_callable_metadata(wrapper: Callable[..., Any], original: Callable[...,
     )
 
 
-def _resolved_annotations(original: Callable[..., Any]) -> dict[str, Any]:
+def _resolved_annotations(original: Callable[..., object]) -> dict[str, object]:
     """Resolve postponed annotations before FastMCP asks Pydantic for schemas."""
 
     annotations = dict(getattr(original, "__annotations__", {}))
@@ -102,9 +103,9 @@ class _BindingMiddleware(Middleware):
 
     async def on_request(
         self,
-        context: MiddlewareContext[Any],
-        call_next: CallNext[Any, Any],
-    ) -> Any:
+        context: MiddlewareContext[object],
+        call_next: CallNext[object, object],
+    ) -> object:
         _require_binding(self._binding_registry)
         return await call_next(context)
 
@@ -220,8 +221,8 @@ class OrchestratorFastMCPHost:
                 auth=self._resource_auth(definition),
             )(resource_callable)
 
-    def _tool_auth(self, definition: MCPToolDefinition) -> Callable[[Any], bool]:
-        def check(_ctx: Any) -> bool:
+    def _tool_auth(self, definition: MCPToolDefinition) -> Callable[[object], bool]:
+        def check(_ctx: object) -> bool:
             binding = _require_binding(self.binding_registry)
             return definition.name in binding.visible_tools and binding.principal.allows(
                 *definition.required_scopes
@@ -229,8 +230,8 @@ class OrchestratorFastMCPHost:
 
         return check
 
-    def _resource_auth(self, definition: MCPResourceDefinition) -> Callable[[Any], bool]:
-        def check(_ctx: Any) -> bool:
+    def _resource_auth(self, definition: MCPResourceDefinition) -> Callable[[object], bool]:
+        def check(_ctx: object) -> bool:
             binding = _require_binding(self.binding_registry)
             return definition.name in binding.visible_resources and binding.principal.allows(
                 *definition.required_scopes
@@ -238,8 +239,8 @@ class OrchestratorFastMCPHost:
 
         return check
 
-    def _build_tool_callable(self, definition: MCPToolDefinition) -> Callable[..., Any]:
-        async def wrapper(**kwargs: Any) -> Any:
+    def _build_tool_callable(self, definition: MCPToolDefinition) -> Callable[..., JSONValue]:
+        async def wrapper(**kwargs: JSONValue) -> JSONValue:
             binding = _require_binding(self.binding_registry)
             return await self.semantic_server.call_tool(
                 definition.name,
@@ -250,8 +251,8 @@ class OrchestratorFastMCPHost:
         _copy_callable_metadata(wrapper, definition.handler)
         return wrapper
 
-    def _build_resource_callable(self, definition: MCPResourceDefinition) -> Callable[..., Any]:
-        async def wrapper(**kwargs: Any) -> Any:
+    def _build_resource_callable(self, definition: MCPResourceDefinition) -> Callable[..., ResourceResult]:
+        async def wrapper(**kwargs: JSONValue) -> ResourceResult:
             binding = _require_binding(self.binding_registry)
             value = await self.semantic_server.read_resource(
                 definition.name,

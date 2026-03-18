@@ -29,7 +29,7 @@ class _LiveRun:
     agent_record: AgentRunRecord
     runtime: AgentRuntime
     handle: AgentHandle
-    on_record_updated: Callable[[AgentRunRecord], Any] | None = None
+    on_record_updated: AgentRecordCallback | None = None
     sequence: int = 0
 
 

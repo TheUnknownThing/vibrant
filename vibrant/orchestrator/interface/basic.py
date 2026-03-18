@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Sequence
 
 from ..basic.artifacts import build_workflow_snapshot
 from ..basic.conversation import ConversationStore

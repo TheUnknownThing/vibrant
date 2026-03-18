@@ -37,7 +37,7 @@ from dataclasses import dataclass
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal, NotRequired, Required, TypeAlias, TypedDict
+from typing import Literal, NotRequired, Required, TypeAlias, TypedDict
 
 from vibrant.type_defs import AsyncNone, JSONMapping, JSONObject, JSONValue, RequestId
 
@@ -370,14 +370,14 @@ class ProviderAdapter(ABC):
         self._canonical_event_handler = handler
 
     @abstractmethod
-    async def start_session(self, *, cwd: str | None = None, **kwargs: Any) -> Any:
+    async def start_session(self, *, cwd: str | None = None, **kwargs: JSONValue) -> JSONValue:
         """Start the underlying provider session/process.
 
         After this returns, the adapter must be ready for thread operations.
         """
 
     @abstractmethod
-    async def stop_session(self) -> Any:
+    async def stop_session(self) -> JSONValue | None:
         """Stop the underlying provider session/process.
 
         Implementations should make this safe after success, failure, or
@@ -385,7 +385,7 @@ class ProviderAdapter(ABC):
         """
 
     @abstractmethod
-    async def start_thread(self, **kwargs: Any) -> Any:
+    async def start_thread(self, **kwargs: JSONValue) -> JSONValue:
         """Open a fresh provider thread/conversation handle.
 
         Resumable providers must eventually surface a durable thread id either
@@ -403,8 +403,8 @@ class ProviderAdapter(ABC):
         input_items: Sequence[JSONMapping],
         runtime_mode: RuntimeMode,
         approval_policy: str,
-        **kwargs: Any,
-    ) -> Any:
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         """Start a turn with structured input items and sandbox controls.
 
         A started turn must eventually resolve by emitting ``turn.completed``
@@ -433,9 +433,9 @@ class ProviderAdapter(ABC):
         self,
         request_id: RequestId,
         *,
-        result: Any | None = None,
-        error: Mapping[str, Any] | None = None,
-    ) -> Any:
+        result: JSONValue | None = None,
+        error: JSONMapping | None = None,
+    ) -> JSONValue | None:
         """Respond to a server-initiated JSON-RPC request.
 
         Providers that surface ``request.opened`` events must implement this

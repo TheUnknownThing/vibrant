@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from typing import Any
 
 import uvicorn
+from starlette.types import ASGIApp
 
 
 class _EmbeddedUvicornServer(uvicorn.Server):
@@ -44,7 +44,7 @@ class LoopbackHTTPTransport:
             return None
         return f"http://{self.host}:{self.port}{self.path}"
 
-    async def start(self, app: Any) -> str:
+    async def start(self, app: ASGIApp) -> str:
         """Start serving the provided ASGI app on loopback HTTP."""
 
         if self.running:

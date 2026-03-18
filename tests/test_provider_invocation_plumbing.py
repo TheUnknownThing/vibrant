@@ -103,7 +103,7 @@ class _RuntimeAgent:
         self.calls: list[dict[str, Any]] = []
         self.on_agent_record_updated = None
         self.on_canonical_event = None
-        self._live_adapter = None
+        self.live_adapter = None
 
     async def run(self, **kwargs: Any) -> AgentRunResult:
         self.calls.append(dict(kwargs))

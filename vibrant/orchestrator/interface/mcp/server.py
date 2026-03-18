@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+
+from vibrant.orchestrator.interface.backend import OrchestratorBackend
+from vibrant.type_defs import JSONObject, JSONValue
 
 from .common import (
     CONSENSUS_WRITE_SCOPE,
@@ -26,7 +28,7 @@ from .tools import OrchestratorMCPTools
 class OrchestratorMCPServer:
     """Typed tool/resource registry backed by orchestrator services."""
 
-    def __init__(self, backend: Any) -> None:
+    def __init__(self, backend: OrchestratorBackend) -> None:
         self.backend = backend
         self.resources = OrchestratorMCPResources(backend.queries)
         self.tools = OrchestratorMCPTools(backend.commands)
@@ -41,8 +43,8 @@ class OrchestratorMCPServer:
     def resource_definitions(self) -> Mapping[str, MCPResourceDefinition]:
         return self._resource_defs
 
-    def list_tools(self, *, principal: MCPPrincipal | None = None) -> list[dict[str, Any]]:
-        definitions = []
+    def list_tools(self, *, principal: MCPPrincipal | None = None) -> list[JSONObject]:
+        definitions: list[JSONObject] = []
         for definition in self._tool_defs.values():
             if principal is not None and not principal.allows(*definition.required_scopes):
                 continue
@@ -55,8 +57,8 @@ class OrchestratorMCPServer:
             )
         return definitions
 
-    def list_resources(self, *, principal: MCPPrincipal | None = None) -> list[dict[str, Any]]:
-        definitions = []
+    def list_resources(self, *, principal: MCPPrincipal | None = None) -> list[JSONObject]:
+        definitions: list[JSONObject] = []
         for definition in self._resource_defs.values():
             if principal is not None and not principal.allows(*definition.required_scopes):
                 continue
@@ -69,7 +71,14 @@ class OrchestratorMCPServer:
             )
         return definitions
 
-    async def call_tool(self, name: str, /, *, principal: MCPPrincipal | None = None, **kwargs: Any) -> Any:
+    async def call_tool(
+        self,
+        name: str,
+        /,
+        *,
+        principal: MCPPrincipal | None = None,
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         definition = self._tool_defs.get(name)
         if definition is None:
             raise MCPNotFoundError(f"Unknown MCP tool: {name}")
@@ -79,7 +88,14 @@ class OrchestratorMCPServer:
             result = await result
         return serialize_value(result)
 
-    async def read_resource(self, name: str, /, *, principal: MCPPrincipal | None = None, **kwargs: Any) -> Any:
+    async def read_resource(
+        self,
+        name: str,
+        /,
+        *,
+        principal: MCPPrincipal | None = None,
+        **kwargs: JSONValue,
+    ) -> JSONValue:
         definition = self._resource_defs.get(name)
         if definition is None:
             raise MCPNotFoundError(f"Unknown MCP resource: {name}")

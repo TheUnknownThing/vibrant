@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from vibrant.agents.code_agent import CodeAgent
 from vibrant.agents.test_agent import TestAgent
-from vibrant.agents.runtime import BaseAgentRuntime
+from vibrant.agents.runtime import AgentHandle, BaseAgentRuntime
 from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig
 from vibrant.models.agent import AgentInstanceProviderConfig, AgentRunRecord, ProviderResumeHandle
 from vibrant.models.task import TaskInfo
@@ -590,7 +590,7 @@ class ExecutionCoordinator:
             runtime_mode=self.config.sandbox_mode,
         )
 
-    async def _monitor_handle(self, run_id: str, handle: Any) -> None:
+    async def _monitor_handle(self, run_id: str, handle: AgentHandle) -> None:
         try:
             await handle.wait()
         finally:

@@ -33,6 +33,7 @@ from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
 from ..models import AppSettings
 from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT, ConsensusDocument
 from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, OrchestratorSnapshot, create_orchestrator
+from ..orchestrator.interface.control_plane import InterfaceControlPlane
 from ..project_init import ensure_project_files, initialize_project
 from .screens import HelpScreen, InitializationScreen, PlanningScreen, VibingScreen
 from .widgets.chat_panel import ChatPanel
@@ -789,14 +790,19 @@ class VibrantApp(App):
     def _refresh_app_bar(self) -> None:
         self.sub_title = _display_path(self._active_directory())
 
-    def _orchestrator_control_plane(self) -> Any | None:
+    def _orchestrator_control_plane(self) -> InterfaceControlPlane | None:
         orchestrator = self.orchestrator
         if orchestrator is None:
             return None
         control_plane = getattr(orchestrator, "control_plane", None)
         if control_plane is not None:
+            assert isinstance(control_plane, InterfaceControlPlane)
             return control_plane
-        return getattr(orchestrator, "_control_plane", None)
+        fallback = getattr(orchestrator, "_control_plane", None)
+        if fallback is None:
+            return None
+        assert isinstance(fallback, InterfaceControlPlane)
+        return fallback
 
     def _project_has_vibrant_state(self) -> bool:
         return (self._project_root / DEFAULT_CONFIG_DIR).exists()

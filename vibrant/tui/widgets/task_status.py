@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -16,6 +16,7 @@ from textual.widgets import ProgressBar, Static
 from ...agents.utils import extract_error_message, extract_text_from_progress_item
 from ...models.task import TaskInfo, TaskStatus
 from ...providers.base import CanonicalEvent
+from ...type_defs import JSONValue
 
 if TYPE_CHECKING:
     from ...orchestrator import OrchestratorFacade
@@ -127,7 +128,7 @@ class TaskStatusView(Static):
     }
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self._facade: OrchestratorFacade | None = None
         self._is_loading = True
@@ -959,7 +960,7 @@ def _read_canonical_event_log(path: str) -> list[CanonicalEvent]:
         event_type = str(payload.get("event") or "").strip()
         if not event_type:
             continue
-        event: dict[str, Any] = {"type": event_type}
+        event: dict[str, JSONValue] = {"type": event_type}
         timestamp = payload.get("timestamp")
         if isinstance(timestamp, str) and timestamp:
             event["timestamp"] = timestamp
@@ -970,7 +971,7 @@ def _read_canonical_event_log(path: str) -> list[CanonicalEvent]:
     return events
 
 
-def _nested_attr(instance: object | None, path: tuple[str, ...], default: Any = None) -> Any:
+def _nested_attr(instance: object | None, path: tuple[str, ...], default: object = None) -> object:
     current = instance
     for part in path:
         if current is None:

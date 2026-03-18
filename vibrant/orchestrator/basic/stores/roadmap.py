@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from vibrant.consensus.roadmap import RoadmapDocument, RoadmapParser
 from vibrant.models.task import TaskInfo, TaskStatus
@@ -11,6 +11,22 @@ from ..json_store import read_json, write_json
 
 
 _UNSET = object()
+
+
+class RoadmapTaskMeta(TypedDict):
+    definition_version: int
+    active_attempt_id: str | None
+
+
+class RoadmapTaskPatch(TypedDict, total=False):
+    title: str
+    acceptance_criteria: list[str]
+    branch: str
+    prompt: str
+    skills: list[str]
+    dependencies: list[str]
+    priority: int
+    max_retries: int
 
 
 class RoadmapStore:
@@ -58,7 +74,7 @@ class RoadmapStore:
         self._save_meta(meta)
         return written
 
-    def update_task_definition(self, task_id: str, patch: dict[str, Any] | None = None) -> TaskInfo:
+    def update_task_definition(self, task_id: str, patch: RoadmapTaskPatch) -> TaskInfo:
         document = self.load()
         task = _require_task(document, task_id)
         allowed_fields = {
@@ -72,7 +88,7 @@ class RoadmapStore:
             "max_retries",
         }
         changed = False
-        combined_patch = dict(patch or {})
+        combined_patch = dict(patch)
         combined_patch = {key: value for key, value in combined_patch.items() if value is not None}
         for key, value in combined_patch.items():
             if key not in allowed_fields:
@@ -163,7 +179,7 @@ class RoadmapStore:
         self.parser.validate_dependency_graph(document.tasks)
         return self.write(document)
 
-    def _load_meta(self) -> dict[str, dict[str, Any]]:
+    def _load_meta(self) -> dict[str, RoadmapTaskMeta]:
         raw = read_json(self.meta_path, default={})
         if not isinstance(raw, dict):
             return {}
@@ -173,7 +189,7 @@ class RoadmapStore:
             if isinstance(task_id, str) and isinstance(payload, dict)
         }
 
-    def _save_meta(self, meta: dict[str, dict[str, Any]]) -> None:
+    def _save_meta(self, meta: dict[str, RoadmapTaskMeta]) -> None:
         write_json(self.meta_path, meta)
 
 

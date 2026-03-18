@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeAlias
 
 from vibrant.type_defs import JSONValue
+
+
+MCPHandler: TypeAlias = Callable[..., object | Awaitable[object]]
 
 
 READ_SCOPE = "orchestrator.read"
@@ -50,7 +53,7 @@ class MCPResourceDefinition:
     name: str
     description: str
     required_scopes: tuple[str, ...]
-    handler: object
+    handler: MCPHandler
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +61,7 @@ class MCPToolDefinition:
     name: str
     description: str
     required_scopes: tuple[str, ...]
-    handler: object
+    handler: MCPHandler
 
 
 class BackendProtocol(Protocol):

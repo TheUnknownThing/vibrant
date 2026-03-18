@@ -78,7 +78,7 @@ class AgentBase(ABC):
         self.on_canonical_event = on_canonical_event
         self.on_agent_record_updated = on_agent_record_updated
         self.timeout_seconds = timeout_seconds or float(config.agent_timeout_seconds)
-        self._live_adapter: ProviderAdapter | None = None
+        self.live_adapter: ProviderAdapter | None = None
 
     # ------------------------------------------------------------------
     # Abstract / required methods
@@ -248,7 +248,7 @@ class AgentBase(ABC):
                 agent_record=agent_record,
                 on_canonical_event=handle_event,
             )
-            self._live_adapter = adapter
+            self.live_adapter = adapter
             await adapter.start_session(cwd=working_dir)
             agent_record.lifecycle.pid = extract_pid(adapter)
             self._notify_record_updated(agent_record)
@@ -281,7 +281,7 @@ class AgentBase(ABC):
         finally:
             if adapter is not None:
                 await stop_adapter_safely(adapter)
-            self._live_adapter = None
+            self.live_adapter = None
 
         transcript = "".join(transcript_chunks).strip()
         exit_code = extract_exit_code(adapter)

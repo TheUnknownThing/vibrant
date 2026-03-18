@@ -6,14 +6,14 @@ from collections.abc import Iterable, Mapping, Sequence
 import re
 from vibrant.agents.runtime import AgentHandle, AgentRecordCallback, AgentRuntime, ProviderThreadHandle
 from vibrant.models.agent import AgentRecord
-from typing import Any, TypeAlias
-from vibrant.type_defs import is_json_mapping
+from typing import TypeAlias
+from vibrant.type_defs import JSONMapping, JSONValue, JSONObject, is_json_mapping
 
 from .base import ProviderKind
 from .invocation import MCPAccessDescriptor, ProviderInvocationPlan
 from .registry import normalize_provider_kind
 
-MCPAccessInput: TypeAlias = MCPAccessDescriptor | Mapping[str, Any]
+MCPAccessInput: TypeAlias = MCPAccessDescriptor | JSONMapping
 
 
 def compile_provider_invocation(
@@ -209,7 +209,7 @@ def _resolve_binding_id(descriptors: Sequence[MCPAccessDescriptor]) -> str | Non
 
 def _serialize_descriptors(
     descriptors: Sequence[MCPAccessDescriptor],
-) -> dict[str, Any] | list[dict[str, Any]]:
+) -> JSONObject | list[JSONObject]:
     serialized = [descriptor.to_mapping() for descriptor in descriptors]
     if len(serialized) == 1:
         return serialized[0]
@@ -231,7 +231,7 @@ def _validate_codex_server_ids(accesses: Sequence[MCPAccessDescriptor]) -> None:
         raise ValueError(f"Duplicate MCP server_id values are not allowed: {joined}")
 
 
-def _toml_literal(value: Any) -> str:
+def _toml_literal(value: JSONValue) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
