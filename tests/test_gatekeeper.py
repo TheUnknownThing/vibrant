@@ -167,7 +167,9 @@ def test_prompt_template_renders_for_each_trigger(tmp_path, trigger, description
     assert PLANNING_COMPLETE_MCP_TOOL in system_prompt
     assert all(tool_name in system_prompt for tool_name in MCP_TOOL_NAMES)
     assert "## Current Consensus" not in prompt
-    if summary:
+    if trigger is GatekeeperTrigger.USER_CONVERSATION:
+        assert "## Agent Summary (if applicable)" not in prompt
+    elif summary:
         assert summary in prompt
     else:
         assert "N/A" in prompt
