@@ -33,7 +33,7 @@ class TextPart(Markdown):
         self.text = text
 
     def _refresh(self) -> None:
-        self.update(self.text)
+        self.call_after_refresh(self.update, self.text)
 
     def plain_text(self) -> str:
         return self.text
