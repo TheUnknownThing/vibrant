@@ -16,8 +16,16 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
-from vibrant.models.task import TaskInfo
-from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary, QuestionStatus, QuestionView, RuntimeExecutionResult, WorkflowStatus
+from vibrant.models.task import TaskInfo, TaskStatus
+from vibrant.orchestrator.types import (
+    AgentStreamEvent,
+    AttemptStatus,
+    ConversationSummary,
+    QuestionStatus,
+    QuestionView,
+    RuntimeExecutionResult,
+    WorkflowStatus,
+)
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
@@ -1155,9 +1163,7 @@ class VibrantApp(App):
 
         resolved_task_id = (task_id or "").strip()
         if not resolved_task_id:
-            vibing_screen = self.vibing_screen()
-            if vibing_screen is not None:
-                resolved_task_id = vibing_screen.task_status.selected_task_id or ""
+            resolved_task_id = self._default_restart_task_id(orchestrator) or ""
         if not resolved_task_id:
             self.notify("Select a failed task or pass a task id to `/restart`.", severity="warning")
             return False
@@ -1175,6 +1181,46 @@ class VibrantApp(App):
         self._set_status(f"Task {task.id} queued for retry")
         self._start_automatic_workflow_if_needed()
         return True
+
+    def _default_restart_task_id(self, orchestrator: OrchestratorFacade) -> str | None:
+        selected_task_id = None
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is not None:
+            selected_task_id = vibing_screen.task_status.selected_task_id
+        get_task = getattr(orchestrator, "get_task", None)
+        if selected_task_id:
+            if not callable(get_task):
+                return selected_task_id
+            selected_task = get_task(selected_task_id)
+            if selected_task is not None and selected_task.status is TaskStatus.FAILED:
+                return selected_task_id
+
+        get_roadmap = getattr(orchestrator, "get_roadmap", None)
+        roadmap = get_roadmap() if callable(get_roadmap) else None
+        failed_tasks = [task for task in roadmap.tasks if task.status is TaskStatus.FAILED] if roadmap is not None else []
+        if not failed_tasks:
+            return None
+        if len(failed_tasks) == 1:
+            return failed_tasks[0].id
+
+        failed_task_ids = {task.id for task in failed_tasks}
+        latest_failed_task_id: str | None = None
+        latest_failed_updated_at = ""
+        list_attempt_executions = getattr(orchestrator, "list_attempt_executions", None)
+        try:
+            executions = list_attempt_executions() if callable(list_attempt_executions) else []
+        except Exception:
+            executions = []
+        for execution in executions:
+            if execution.task_id not in failed_task_ids or execution.status is not AttemptStatus.FAILED:
+                continue
+            updated_at = execution.updated_at or ""
+            if updated_at >= latest_failed_updated_at:
+                latest_failed_updated_at = updated_at
+                latest_failed_task_id = execution.task_id
+        if latest_failed_task_id is not None:
+            return latest_failed_task_id
+        return failed_tasks[0].id
 
     def _sync_gatekeeper_conversation_binding(
         self,
