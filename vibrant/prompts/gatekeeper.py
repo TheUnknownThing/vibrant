@@ -6,6 +6,7 @@ from __future__ import annotations
 def build_gatekeeper_system_prompt(
     *,
     project_name: str,
+    skills_text: str,
     mcp_tool_names: tuple[str, ...],
 ) -> str:
     """Render the static Gatekeeper instructions for thread/session setup."""
@@ -21,6 +22,7 @@ def build_gatekeeper_system_prompt(
             "3. Express durable decisions through MCP tool calls.",
             "4. If a high-level product, UX, or architecture decision is required, request user input through MCP.",
             "5. If a decision is purely technical, make it yourself and record it through MCP.",
+            "6. Read `.vibrant/consensus.md` directly when you need the latest consensus context; it is not repeated in every turn prompt.",
             "## Your Responsibilities",
             "1. Create or refine the roadmap during planning.",
             "2. Review completed attempts through review tickets during execution.",
@@ -36,6 +38,9 @@ def build_gatekeeper_system_prompt(
             "Planning should primarily use `vibrant.add_task`, `vibrant.update_task_definition`, and `vibrant.reorder_tasks`.",
             "Execution review should use the review-ticket tools instead of task-scoped verdict shortcuts.",
             mcp_text,
+            "## Available Skills",
+            "The following skills are available for agents. Assign them to tasks as needed:",
+            skills_text,
             "## Output Rules",
             "1. Do not invent fake MCP results.",
             "2. If a required MCP tool is unavailable, explain the intended action in plain language.",
@@ -54,12 +59,10 @@ def build_user_answer_trigger_description(*, question: str, answer: str) -> str:
 
 def build_gatekeeper_turn_prompt(
     *,
-    consensus_text: str,
     roadmap_text: str,
     trigger_value: str,
     trigger_description: str,
     agent_summary: str | None,
-    skills_text: str,
 ) -> str:
     """Render the per-turn Gatekeeper context."""
 

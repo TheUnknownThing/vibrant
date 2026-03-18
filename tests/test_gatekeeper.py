@@ -157,12 +157,13 @@ def test_prompt_template_renders_for_each_trigger(tmp_path, trigger, description
 
     assert f"{trigger.value}: {description}" in prompt
     assert "You are read-only. Do not edit repository files or .vibrant state directly." in system_prompt
-    assert "## Current Consensus" in prompt
+    assert "Read `.vibrant/consensus.md` directly" in system_prompt
+    assert "testing-strategy: Write focused tests before broader validation." in system_prompt
     assert "## Current Roadmap" in prompt
     assert "## MCP Tools" in system_prompt
     assert PLANNING_COMPLETE_MCP_TOOL in system_prompt
     assert all(tool_name in system_prompt for tool_name in MCP_TOOL_NAMES)
-    assert "testing-strategy: Write focused tests before broader validation." in prompt
+    assert "## Current Consensus" not in prompt
     if summary:
         assert summary in prompt
     else:
@@ -216,7 +217,8 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     assert "instructions" not in adapter.resume_thread_calls[0]
     assert adapter.start_turn_calls[0]["runtime_mode"] is RuntimeMode.READ_ONLY
     prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
-    assert "## Current Consensus" in prompt
+    assert "## Current Roadmap" in prompt
+    assert "## Current Consensus" not in prompt
     assert "You are read-only. Do not edit repository files or .vibrant state directly." not in prompt
     assert result.succeeded is True
     assert result.state is RunState.COMPLETED
@@ -244,8 +246,10 @@ async def test_gatekeeper_seeds_system_prompt_only_when_starting_new_thread(tmp_
     adapter = FakeGatekeeperAdapter.instances[0]
     assert "instructions" in adapter.start_thread_calls[0]
     assert "You are a long-lived, project-scoped planning and review agent." in adapter.start_thread_calls[0]["instructions"]
+    assert "Read `.vibrant/consensus.md` directly" in adapter.start_thread_calls[0]["instructions"]
     prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
-    assert "## Current Consensus" in prompt
+    assert "## Current Roadmap" in prompt
+    assert "## Current Consensus" not in prompt
     assert "## MCP Tools" not in prompt
     assert result.succeeded is True
 

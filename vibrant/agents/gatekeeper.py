@@ -108,7 +108,6 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             timeout_seconds=timeout_seconds,
         )
         self.vibrant_dir = self.project_root / DEFAULT_CONFIG_DIR
-        self.consensus_path = self.vibrant_dir / "consensus.md"
         self.roadmap_path = self.vibrant_dir / "roadmap.md"
 
     def get_agent_type(self) -> AgentType:
@@ -187,22 +186,20 @@ class GatekeeperAgent(ReadOnlyAgentBase):
         return self.build_run_record(request)
 
     def render_system_prompt(self) -> str:
+        skills_text = self._render_available_skills()
         return build_gatekeeper_system_prompt(
             project_name=self.project_root.name,
+            skills_text=skills_text,
             mcp_tool_names=MCP_TOOL_NAMES,
         )
 
     def render_prompt(self, request: GatekeeperRequest) -> str:
-        consensus_text = _read_text(self.consensus_path) or "No consensus document exists yet."
         roadmap_text = _read_text(self.roadmap_path) or "No roadmap document exists yet."
-        skills_text = self._render_available_skills()
         return build_gatekeeper_turn_prompt(
-            consensus_text=consensus_text,
             roadmap_text=roadmap_text,
             trigger_value=request.trigger.value,
             trigger_description=request.trigger_description,
             agent_summary=request.agent_summary,
-            skills_text=skills_text,
         )
 
     def _system_prompt_seeded(self, agent_record: AgentRunRecord) -> bool:
