@@ -188,6 +188,34 @@ class TestCodexProviderAdapter:
         assert "modelProvider" not in client.calls[0][1]
 
     @pytest.mark.asyncio
+    async def test_start_turn_injects_thread_instructions_into_input(self):
+        client = FakeCodexClient()
+        client.responses["thread/start"] = {"thread": {"id": "thread_abc123"}}
+        adapter = CodexProviderAdapter(client=client)
+
+        await adapter.start_thread(
+            model="gpt-5.3-codex",
+            cwd="/tmp/project",
+            runtime_mode=RuntimeMode.WORKSPACE_WRITE,
+            approval_policy="never",
+            instructions="You are the Gatekeeper for Project X.",
+        )
+        await adapter.start_turn(
+            input_items=[{"type": "text", "text": "Current roadmap", "text_elements": []}],
+            runtime_mode=RuntimeMode.READ_ONLY,
+            approval_policy="never",
+        )
+
+        assert client.calls[-1][0] == "turn/start"
+        turn_payload = client.calls[-1][1]
+        assert "input" in turn_payload
+        assert isinstance(turn_payload["input"], list)
+        assert turn_payload["input"][0]["type"] == "text"
+        assert turn_payload["input"][0]["text"] == "You are the Gatekeeper for Project X."
+        assert turn_payload["input"][1]["type"] == "text"
+        assert turn_payload["input"][1]["text"] == "Current roadmap"
+
+    @pytest.mark.asyncio
     async def test_notification_delta_maps_to_canonical_content_delta(self):
         events: list[dict[str, Any]] = []
         adapter = CodexProviderAdapter(client=FakeCodexClient(), on_canonical_event=events.append)

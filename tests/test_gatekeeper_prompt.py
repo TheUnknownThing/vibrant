@@ -36,3 +36,21 @@ def test_gatekeeper_prompt_uses_centralized_template(tmp_path):
     assert "when the MCP bridge is available" not in prompt
     assert "## Current Consensus" not in prompt
     assert "Implementation is ready for review." in prompt
+    assert "## Agent Summary (if applicable)" in prompt
+
+
+def test_user_conversation_prompt_omits_agent_summary(tmp_path):
+    initialize_project(tmp_path)
+
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=_NoopAdapter)
+    user_text = "Tell me who you are and what you can do. Don't answer anything else."
+    prompt = gatekeeper.render_prompt(
+        GatekeeperRequest(
+            trigger=GatekeeperTrigger.USER_CONVERSATION,
+            trigger_description=user_text,
+            agent_summary=user_text,
+        )
+    )
+
+    assert f"## Trigger\nuser_conversation: {user_text}" in prompt
+    assert "## Agent Summary (if applicable)" not in prompt

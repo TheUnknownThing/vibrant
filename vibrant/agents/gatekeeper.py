@@ -202,6 +202,7 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             trigger_value=request.trigger.value,
             trigger_description=request.trigger_description,
             agent_summary=request.agent_summary,
+            show_agent_summary=request.trigger is not GatekeeperTrigger.USER_CONVERSATION,
         )
 
     def render_resume_prompt(self, request: GatekeeperRequest) -> str:
@@ -356,7 +357,7 @@ class Gatekeeper:
         request = GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
             trigger_description=build_user_answer_trigger_description(question=question, answer=answer),
-            agent_summary=answer,
+            agent_summary=None,
         )
         return await self.run(request, resume_latest_thread=True)
 
@@ -371,7 +372,7 @@ class Gatekeeper:
         request = GatekeeperRequest(
             trigger=GatekeeperTrigger.USER_CONVERSATION,
             trigger_description=build_user_answer_trigger_description(question=question, answer=answer),
-            agent_summary=answer,
+            agent_summary=None,
         )
         return await self.start_run(
             request,

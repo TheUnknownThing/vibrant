@@ -62,6 +62,8 @@ class CodexProviderAdapter(ProviderAdapter):
         self.thread_metadata: JSONObject = {}
         self.current_turn_id: str | None = None
         self._item_states: dict[str, JSONObject] = {}
+        self._thread_instructions: str | None = None
+        self._inject_thread_instructions_next_turn = False
         self._session_started = False
         self._pending_requests: dict[RequestId, _PendingRequest] = {}
         self._awaiting_thread_started_for: str | None = None
@@ -223,10 +225,21 @@ class CodexProviderAdapter(ProviderAdapter):
     ) -> JSONValue:
         client = self._ensure_client()
         runtime_mode = RuntimeMode(runtime_mode)
+        input_payload = [dict(item) for item in input_items]
+        if self._inject_thread_instructions_next_turn and self._thread_instructions:
+            input_payload.insert(
+                0,
+                {
+                    "type": "text",
+                    "text": self._thread_instructions,
+                    "text_elements": [],
+                },
+            )
+            self._inject_thread_instructions_next_turn = False
         effort = kwargs.pop("effort", kwargs.pop("reasoning_effort", None))
         summary = kwargs.pop("summary", kwargs.pop("reasoning_summary", None))
         payload = {
-            "input": [dict(item) for item in input_items],
+            "input": input_payload,
             "sandboxPolicy": runtime_mode.codex_turn_sandbox_policy,
             "approvalPolicy": approval_policy,
             **kwargs,
@@ -547,6 +560,7 @@ class CodexProviderAdapter(ProviderAdapter):
         runtime_mode = RuntimeMode(data.pop("runtime_mode", RuntimeMode.WORKSPACE_WRITE))
         approval_policy = data.pop("approval_policy", "never")
         agent_record = data.pop("agent_record", None) or self.agent_record
+        instructions = data.pop("instructions", None)
         cwd = data.pop("cwd", self._cwd)
         persist_extended_history = data.pop("persist_extended_history", True)
         extra_config = dict(data.pop("extra_config", {}) or {})
@@ -554,7 +568,15 @@ class CodexProviderAdapter(ProviderAdapter):
         reasoning_effort = data.pop("reasoning_effort", None)
         reasoning_summary = data.pop("reasoning_summary", None)
 
+        normalized_instructions = (
+            instructions.strip() if isinstance(instructions, str) and instructions.strip() else None
+        )
+        self._thread_instructions = normalized_instructions
+        self._inject_thread_instructions_next_turn = bool(normalized_instructions)
+
         payload = {**data, "approvalPolicy": approval_policy, "sandbox": runtime_mode.codex_thread_sandbox}
+        if normalized_instructions is not None:
+            payload["instructions"] = normalized_instructions
         if cwd is not None:
             payload["cwd"] = str(Path(cwd))
         if model_provider is not None:
