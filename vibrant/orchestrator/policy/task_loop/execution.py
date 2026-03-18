@@ -44,6 +44,18 @@ if TYPE_CHECKING:
     from ...interface.mcp import OrchestratorFastMCPHost
 
 
+def _attempt_code_conversation_id(attempt_id: str) -> str:
+    """Return the agent-log conversation id for the code stage of an attempt."""
+
+    return f"attempt-{attempt_id}-code"
+
+
+def _attempt_test_conversation_id(attempt_id: str) -> str:
+    """Return the agent-log conversation id for the validation stage of an attempt."""
+
+    return f"attempt-{attempt_id}-test"
+
+
 @dataclass(slots=True)
 class ExecutionCoordinator:
     """Run code-stage mechanics for one task attempt."""
@@ -103,7 +115,7 @@ class ExecutionCoordinator:
         )
         self._persist_run(agent_record)
 
-        conversation_id = f"attempt-{attempt.attempt_id}"
+        conversation_id = _attempt_code_conversation_id(attempt.attempt_id)
         self.conversation_stream.bind_run(
             conversation_id=conversation_id,
             run_id=agent_record.identity.run_id,
@@ -395,7 +407,7 @@ class ExecutionCoordinator:
         )
         self._persist_run(agent_record)
 
-        conversation_id = attempt.conversation_id or f"attempt-{attempt.attempt_id}"
+        conversation_id = attempt.conversation_id or _attempt_code_conversation_id(attempt.attempt_id)
         self.conversation_stream.bind_run(
             conversation_id=conversation_id,
             run_id=agent_record.identity.run_id,
@@ -479,12 +491,16 @@ class ExecutionCoordinator:
         )
         self._persist_run(test_record)
 
-        conversation_id = attempt.conversation_id
-        if conversation_id is not None:
-            self.conversation_stream.bind_run(
-                conversation_id=conversation_id,
-                run_id=test_record.identity.run_id,
-            )
+        conversation_id = _attempt_test_conversation_id(attempt.attempt_id)
+        self.conversation_stream.bind_run(
+            conversation_id=conversation_id,
+            run_id=test_record.identity.run_id,
+        )
+        self.conversation_stream.record_host_message(
+            conversation_id=conversation_id,
+            role="system",
+            text=f"Starting validation for attempt {attempt.attempt_id} on task {attempt.task_id}.",
+        )
 
         runtime = BaseAgentRuntime(self._build_test_agent())
         binding_service, mcp_host = self._require_mcp_bridge()
