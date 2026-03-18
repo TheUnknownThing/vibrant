@@ -16,7 +16,7 @@ from ...types import (
     WorkspaceStatus,
 )
 
-_EXCLUDED_PATHS = (".vibrant", ".vibrant/**")
+_WORKSPACE_EXCLUDED_PATHS = (".vibrant", ".vibrant/**")
 _BOT_NAME = "Vibrant"
 _BOT_EMAIL = "vibrant@example.invalid"
 _MAX_REPORTED_ORCHESTRATOR_PATHS = 5
@@ -101,7 +101,7 @@ class WorkspaceService:
 
         head_commit = self._git_stdout(workspace_root, "rev-parse", "HEAD")
         if self._has_relevant_changes(workspace_root):
-            self._git(workspace_root, "add", "-A", "--", ".", *self._excluded_pathspec())
+            self._git(workspace_root, "add", "-A", "--", ".", *self._workspace_excluded_pathspec())
             if not self._git_success(workspace_root, "diff", "--cached", "--quiet", "--exit-code"):
                 self._git(
                     workspace_root,
@@ -248,7 +248,7 @@ class WorkspaceService:
             "--worktree",
             "--",
             ".",
-            *self._excluded_pathspec(),
+            *self._target_excluded_pathspec(),
         )
 
     def _require_workspace(self, workspace_id: str) -> WorkspaceHandle:
@@ -269,10 +269,10 @@ class WorkspaceService:
             "--porcelain",
             "--",
             ".",
-            *self._excluded_pathspec(),
+            *self._target_excluded_pathspec(),
         )
         if status.strip():
-            raise RuntimeError("Project repository has uncommitted changes outside .vibrant.")
+            raise RuntimeError("Project repository has uncommitted changes outside orchestrator-owned paths.")
 
     def _resolve_target_ref(self) -> str:
         return self._git_stdout(self.project_root, "symbolic-ref", "--quiet", "--short", "HEAD")
@@ -292,7 +292,7 @@ class WorkspaceService:
             "--porcelain",
             "--",
             ".",
-            *self._excluded_pathspec(),
+            *self._workspace_excluded_pathspec(),
         )
         return bool(status.strip())
 
@@ -322,9 +322,28 @@ class WorkspaceService:
                 changed_paths.append(normalized)
         return changed_paths
 
+    def _target_excluded_pathspec(self) -> tuple[str, ...]:
+        excluded_paths = list(_WORKSPACE_EXCLUDED_PATHS)
+        excluded_paths.extend(self._project_relative_excluded_paths(self.worktree_root))
+        excluded_paths.extend(self._project_relative_excluded_paths(self.artifacts_root))
+        return tuple(f":(exclude){path}" for path in excluded_paths)
+
     @staticmethod
-    def _excluded_pathspec() -> tuple[str, ...]:
-        return tuple(f":(exclude){path}" for path in _EXCLUDED_PATHS)
+    def _workspace_excluded_pathspec() -> tuple[str, ...]:
+        return tuple(f":(exclude){path}" for path in _WORKSPACE_EXCLUDED_PATHS)
+
+    def _project_relative_excluded_paths(self, path: Path) -> tuple[str, ...]:
+        resolved_path = path.expanduser().resolve()
+        try:
+            relative_path = resolved_path.relative_to(self.project_root)
+        except ValueError:
+            return ()
+        if not relative_path.parts:
+            return ()
+        normalized = relative_path.as_posix().strip("/")
+        if not normalized:
+            return ()
+        return (normalized, f"{normalized}/**")
 
     @staticmethod
     def _bot_git_env() -> dict[str, str]:
