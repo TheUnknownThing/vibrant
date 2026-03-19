@@ -106,6 +106,7 @@ class VibingScreen(Static):
         background: $surface;
         margin-top: 1;
     }
+
     """
 
     _VALID_TABS = {"task-status", "chat-history", "consensus", "agent-logs"}

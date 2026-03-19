@@ -177,6 +177,7 @@ class VibrantApp(App):
         self._roadmap_runner_task: asyncio.Task[None] | None = None
         self._gatekeeper_request_task: asyncio.Task[None] | None = None
         self._known_pending_questions: tuple[str, ...] = ()
+        self._gatekeeper_state_initialized = False
         self._paused_return_status: WorkflowStatus | None = None
         self._banner_text: str | None = None
         self._todo_exit_message: str | None = None
@@ -760,6 +761,8 @@ class VibrantApp(App):
 
     def _initialize_project_setup(self) -> None:
         self._close_orchestrator_subscriptions()
+        self._known_pending_questions = ()
+        self._gatekeeper_state_initialized = False
         project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._project_root = project_root
         vibrant_dir = project_root / DEFAULT_CONFIG_DIR
@@ -1102,10 +1105,7 @@ class VibrantApp(App):
                 self.notify("Workflow completed.")
                 self._set_status("Workflow completed")
             elif self._pending_question_records():
-                assert orchestrator is not None
-                banner = orchestrator.get_user_input_banner()
-                self.notify(banner, severity="warning")
-                self._set_status(banner)
+                self._set_status("awaiting user input")
             else:
                 self._notify_no_ready_task()
             return
@@ -1133,10 +1133,7 @@ class VibrantApp(App):
                 self.notify(f"Task {task_label} is awaiting review.")
             self._set_status(f"Task {task_label} awaiting review")
         elif result.outcome == "awaiting_user":
-            self.notify(
-                orchestrator.get_user_input_banner() if orchestrator else "User input required.",
-                severity="warning",
-            )
+            self._set_status("awaiting user input")
         elif result.outcome == "failed":
             error = result.error or "Task failed."
             self.notify(str(error), severity="error")
@@ -1311,30 +1308,22 @@ class VibrantApp(App):
             self._paused_return_status = normalized_status
 
         new_questions = [question for question in questions if question not in self._known_pending_questions]
-        flash = force_flash or bool(new_questions)
+        flash = force_flash or (self._gatekeeper_state_initialized and bool(new_questions))
         with suppress(Exception):
             chat_panel.set_gatekeeper_state(
                 status=normalized_status or status,
                 question_records=question_records,
                 flash=flash,
             )
-
         if questions and not self._gatekeeper_is_busy():
-            banner = (
-                self.orchestrator_facade.get_user_input_banner()
-                if self.orchestrator_facade is not None
-                else "⚠ Gatekeeper needs your input — see Chat panel"
-            )
-            self._set_banner(banner)
+            self._set_banner(None)
             input_bar.set_enabled(True)
-            input_bar.set_context("gatekeeper", "awaiting answer")
+            input_bar.set_context("gatekeeper", "awaiting user input")
             input_bar.set_placeholder(self._default_input_placeholder())
-            if flash:
-                self.notify(banner, severity="warning")
-                self._set_status(banner)
-                if self._notification_bell_enabled():
-                    with suppress(Exception):
-                        self.bell()
+            self._set_status("awaiting user input")
+            if flash and self._notification_bell_enabled():
+                with suppress(Exception):
+                    self.bell()
         elif self._gatekeeper_is_busy():
             self._set_banner("Gatekeeper is responding…")
             input_bar.set_enabled(False)
@@ -1357,6 +1346,7 @@ class VibrantApp(App):
             input_bar.set_placeholder(self._default_input_placeholder())
 
         self._known_pending_questions = tuple(questions)
+        self._gatekeeper_state_initialized = True
 
     def _default_input_placeholder(self) -> str:
         return (
