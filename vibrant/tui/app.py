@@ -16,12 +16,12 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
-from vibrant.models.task import TaskInfo
+from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.types import AgentStreamEvent, AttemptStatus, ConversationSummary, QuestionStatus, QuestionView, WorkflowStatus
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
-from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
+from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, VibrantConfig, find_project_root, load_config
 from ..models import AppSettings
 from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT, ConsensusDocument
 from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, OrchestratorSnapshot, create_orchestrator
@@ -142,6 +142,8 @@ class VibrantApp(App):
                 and self._gatekeeper_is_busy()
             )
         if action in {"show_task_status", "show_chat_history", "show_agent_logs"}:
+            if action == "show_agent_logs":
+                return vibing_screen is not None and self._agent_logs_tab_available()
             return vibing_screen is not None
         if action == "toggle_consensus":
             return planning_screen is not None or vibing_screen is not None
@@ -153,6 +155,7 @@ class VibrantApp(App):
         settings: AppSettings | None = None,
         cwd: str | None = None,
         *,
+        dev_mode: bool = False,
         orchestrator_factory: OrchestratorFactory | None = None,
         **app_kwargs: object,
     ) -> None:
@@ -162,8 +165,10 @@ class VibrantApp(App):
             self._settings.default_cwd = cwd
 
         self.sub_title = _display_path(self._active_directory())
+        self._dev_mode = dev_mode
         self.orchestrator: Orchestrator | None = None
         self.orchestrator_facade: OrchestratorFacade | None = None
+        self._project_config: VibrantConfig | None = None
         self._project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._orchestrator_factory = orchestrator_factory or create_orchestrator
         self._runtime_event_subscription = None
@@ -320,8 +325,11 @@ class VibrantApp(App):
 
     def action_cycle_agent_output(self) -> None:
         vibing_screen = self.vibing_screen()
-        if vibing_screen is None:
-            self.notify("Agent logs are only available in the vibing screen.", severity="warning")
+        if vibing_screen is None or not self._agent_logs_tab_available():
+            self.notify(
+                "Agent logs are disabled. Enable `[ui] show-agent-logs` or run with `--dev`.",
+                severity="warning",
+            )
             return
         vibing_screen.agent_output.action_cycle_agent()
 
@@ -357,8 +365,11 @@ class VibrantApp(App):
 
     def action_show_agent_logs(self) -> None:
         vibing_screen = self.vibing_screen()
-        if vibing_screen is None:
-            self.notify("Agent logs are only available in the vibing screen.", severity="warning")
+        if vibing_screen is None or not self._agent_logs_tab_available():
+            self.notify(
+                "Agent logs are disabled. Enable `[ui] show-agent-logs` or run with `--dev`.",
+                severity="warning",
+            )
             return
         vibing_screen.show_agent_logs()
         self._set_status("Opened Agent Logs tab")
@@ -548,8 +559,11 @@ class VibrantApp(App):
             self._set_status("Opened Gatekeeper chat history")
         elif cmd == "logs":
             vibing_screen = self.vibing_screen()
-            if vibing_screen is None:
-                self.notify("Agent logs are only available in the vibing screen.", severity="warning")
+            if vibing_screen is None or not self._agent_logs_tab_available():
+                self.notify(
+                    "Agent logs are disabled. Enable `[ui] show-agent-logs` or run with `--dev`.",
+                    severity="warning",
+                )
                 return
             vibing_screen.show_agent_logs()
             self._set_status("Opened Agent Logs tab")
@@ -763,6 +777,7 @@ class VibrantApp(App):
         self._close_orchestrator_subscriptions()
         self._known_pending_questions = ()
         self._gatekeeper_state_initialized = False
+        self._project_config = None
         project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._project_root = project_root
         vibrant_dir = project_root / DEFAULT_CONFIG_DIR
@@ -773,6 +788,7 @@ class VibrantApp(App):
 
         try:
             ensure_project_files(project_root)
+            self._project_config = load_config(start_path=project_root)
             self.orchestrator = self._orchestrator_factory(project_root)
             self.orchestrator_facade = OrchestratorFacade(self.orchestrator)
             self._attach_orchestrator_subscriptions()
@@ -780,7 +796,19 @@ class VibrantApp(App):
             logger.exception("Failed to initialize project lifecycle")
             self.orchestrator = None
             self.orchestrator_facade = None
+            self._project_config = None
             self.notify(f"Failed to load project state: {exc}", severity="error")
+
+    def _agent_logs_tab_available(self) -> bool:
+        if self._project_config is None:
+            return self._dev_mode
+        return self._project_config.tui_agent_logs_visible(dev_mode=self._dev_mode)
+
+    @staticmethod
+    def _normalize_vibing_tab(tab_id: str, *, agent_logs_visible: bool) -> str:
+        if tab_id == "agent-logs" and not agent_logs_visible:
+            return "task-status"
+        return tab_id
 
     def _active_directory(self) -> Path:
         return Path(self._settings.default_cwd or os.getcwd()).expanduser().resolve(strict=False)
@@ -860,12 +888,30 @@ class VibrantApp(App):
             if not isinstance(self._workspace_screen, PlanningScreen):
                 self._mount_workspace(PlanningScreen())
         else:
+            agent_logs_visible = self._agent_logs_tab_available()
             initial_tab = "chat-history" if prefer_chat_history else "task-status"
             if isinstance(self._workspace_screen, VibingScreen):
-                if prefer_chat_history:
+                active_tab = self._normalize_vibing_tab(
+                    self._workspace_screen.active_tab,
+                    agent_logs_visible=agent_logs_visible,
+                )
+                if self._workspace_screen.agent_logs_visible != agent_logs_visible:
+                    initial_tab = "chat-history" if prefer_chat_history else active_tab
+                    self._mount_workspace(
+                        VibingScreen(
+                            initial_tab=initial_tab,
+                            show_agent_logs=agent_logs_visible,
+                        )
+                    )
+                elif prefer_chat_history:
                     self._workspace_screen.show_chat_history()
             else:
-                self._mount_workspace(VibingScreen(initial_tab=initial_tab))
+                self._mount_workspace(
+                    VibingScreen(
+                        initial_tab=initial_tab,
+                        show_agent_logs=agent_logs_visible,
+                    )
+                )
 
         if self._workspace_screen is None:
             return
@@ -1316,6 +1362,7 @@ class VibrantApp(App):
                 flash=flash,
             )
         if questions and not self._gatekeeper_is_busy():
+            self.sub_title = "awaiting user input"
             self._set_banner(None)
             input_bar.set_enabled(True)
             input_bar.set_context("gatekeeper", "awaiting user input")
@@ -1325,11 +1372,13 @@ class VibrantApp(App):
                 with suppress(Exception):
                     self.bell()
         elif self._gatekeeper_is_busy():
+            self._refresh_app_bar()
             self._set_banner("Gatekeeper is responding…")
             input_bar.set_enabled(False)
             input_bar.set_context("gatekeeper", "running… · Esc to interrupt")
             input_bar.set_placeholder("Gatekeeper is responding… Press Esc to interrupt.")
         else:
+            self._refresh_app_bar()
             self._set_banner(None)
             if normalized_status is WorkflowStatus.INIT:
                 input_bar.set_enabled(True)

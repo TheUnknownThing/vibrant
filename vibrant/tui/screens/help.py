@@ -37,7 +37,7 @@ class HelpScreen(ModalScreen[None]):
 ## Screens
 - **Initialization**: create a `.vibrant` workspace in the current or selected directory
 - **Planning**: talk with the Gatekeeper until it finalizes the roadmap and moves into execution
-- **Vibing**: monitor tasks, review consensus, inspect agent logs, and keep chatting with the Gatekeeper
+- **Vibing**: monitor tasks, review consensus, optionally inspect agent logs, and keep chatting with the Gatekeeper
 
 ## Keys
 - `F1` help
@@ -45,7 +45,7 @@ class HelpScreen(ModalScreen[None]):
 - `F5` show Task Status tab in vibing
 - `F6` show Chat History tab in vibing
 - `F7` toggle the Consensus panel / tab
-- `F8` show Agent Logs in vibing
+- `F8` show Agent Logs in vibing when enabled
 - `F10` quit
 
 ## Commands
@@ -54,7 +54,7 @@ class HelpScreen(ModalScreen[None]):
 - `/refresh` reload project state
 - `/settings` open settings
 - `/history` open the Gatekeeper chat tab
-- `/logs` open the Agent Logs tab
+- `/logs` open the Agent Logs tab when enabled
 
 Press `Esc` or `F1` to close this help.
 """,

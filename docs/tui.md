@@ -45,11 +45,11 @@ consensus.
 The screen, shown in the right part of the image above, is divided into these sections:
 - Appbar (top): As always, shows project name (pwd dir name) after Vibrant version.
 - Task Bar (left): Shows queued, running, and blocked tasks. Selecting a task updates the Task Status tab.
-- Main Screen (right-top): Shows one of four tabs:
+- Main Screen (right-top): Shows one of three or four tabs:
   - Task Status: shows the progress of the current task, and is the default tab when entering the vibing phase.
   - Chat History: shows the Gatekeeper conversation, and is the default tab when entering from the planning phase.
   - Consensus: shows the consensus document.
-  - Agent Logs: shows provider and canonical debug logs.
+  - Agent Logs: shows provider and canonical debug logs. This tab is hidden by default and appears automatically in `vibrant --dev`, or when `.vibrant/vibrant.toml` sets `[ui].show-agent-logs = true`.
 
 Before the roadmap is generated, both the Task Status and the Chat History
 tabs show a "Generating Roadmap" loading spinner.
@@ -71,7 +71,7 @@ Each message block has:
 The shared input box supports:
 
 - `Ctrl+Backspace` to delete the previous word
-- slash-command autocomplete for commands such as `/logs`
+- slash-command autocomplete for commands such as `/logs` when the target panel is enabled
 - `@path` autocomplete rooted at the project directory
 - message history navigation with the Up and Down arrow keys while the input is focused
 
@@ -82,4 +82,15 @@ The shared input box supports:
 - `f5`: Toggle Task (Vibing, switch to one of the four tabs in the main screen)
 - `f6`: Toggle Chat History (In Vibing, switch to one of the four tabs in the main screen)
 - `f7`: Toggle Consensus (In Planning, side panel; In Vibing, switch to one of the four tabs in the main screen)
-- `f8`: Toggle Agent Logs (In Vibing, switch to one of the four tabs in the main screen)
+- `f8`: Toggle Agent Logs (In Vibing, switch to the Agent Logs tab when enabled)
+
+## UI Configuration
+
+The vibing screen supports a project-level UI override in `.vibrant/vibrant.toml`:
+
+```toml
+[ui]
+show-agent-logs = true
+```
+
+When `show-agent-logs` is unset, the default is `false` unless the app is started with `vibrant --dev`.

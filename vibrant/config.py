@@ -185,6 +185,11 @@ class VibrantConfig(BaseModel):
         validation_alias=AliasChoices("test_commands", "test-commands"),
         serialization_alias="test-commands",
     )
+    show_agent_logs: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("show_agent_logs", "show-agent-logs"),
+        serialization_alias="show-agent-logs",
+    )
     extra_config: dict[str, JsonValue] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("extra_config", "extra-config"),
@@ -205,6 +210,7 @@ class VibrantConfig(BaseModel):
                 "runtime",
                 "orchestrator",
                 "validation",
+                "ui",
             } and isinstance(value, Mapping):
                 merged.update(value)
             else:
@@ -212,6 +218,13 @@ class VibrantConfig(BaseModel):
                     raise ValueError(f"Unsupported config value type for key {key!r}: {type(value)!r}")
                 merged[key] = value
         return merged
+
+    def tui_agent_logs_visible(self, *, dev_mode: bool) -> bool:
+        """Return whether the agent logs tab should be visible in the TUI."""
+
+        if self.show_agent_logs is not None:
+            return self.show_agent_logs
+        return dev_mode
 
     def resolve_conversation_directory(self, project_root: Path) -> Path:
         """Resolve the configured conversation directory against the project root."""

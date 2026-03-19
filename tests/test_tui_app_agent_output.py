@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from vibrant.config import VibrantConfig
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.types import AttemptStatus
 from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary, QuestionPriority, QuestionStatus, QuestionView, WorkflowStatus
@@ -161,6 +162,22 @@ def test_app_bar_falls_back_to_current_directory_as_subtitle(monkeypatch) -> Non
     app = VibrantApp()
 
     assert app.sub_title == "/tmp/vibrant-cwd"
+
+
+def test_agent_logs_visibility_defaults_to_dev_mode() -> None:
+    assert VibrantApp(dev_mode=False)._agent_logs_tab_available() is False
+    assert VibrantApp(dev_mode=True)._agent_logs_tab_available() is True
+
+
+def test_agent_logs_visibility_respects_project_override() -> None:
+    app = VibrantApp(dev_mode=True)
+    app._project_config = VibrantConfig(show_agent_logs=False)
+
+    assert app._agent_logs_tab_available() is False
+
+    app._project_config = VibrantConfig(show_agent_logs=True)
+
+    assert app._agent_logs_tab_available() is True
 
 
 def test_refresh_gatekeeper_state_uses_app_bar_and_chat_highlight_for_pending_questions(monkeypatch) -> None:
