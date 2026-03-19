@@ -6,7 +6,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from vibrant.agents.gatekeeper import Gatekeeper
-from vibrant.config import DEFAULT_CONFIG_DIR, VibrantConfig, find_project_root, load_config
+from vibrant.config import (
+    DEFAULT_CONFIG_DIR,
+    VibrantConfig,
+    VibrantConfigPatch,
+    find_project_root,
+    load_config,
+    update_config as persist_config_patch,
+)
 from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.project_init import ensure_project_files
 from vibrant.providers.registry import resolve_configured_adapter_factory
@@ -235,6 +242,21 @@ class Orchestrator:
     def _refresh(self) -> RoadmapDocument:
         self._config = load_config(start_path=self.project_root)
         return self._roadmap_store.load()
+
+    def get_config(self) -> VibrantConfig:
+        """Return a defensive copy of the current orchestrator config."""
+
+        return self._config.model_copy(deep=True)
+
+    def update_config(self, patch: VibrantConfigPatch) -> VibrantConfig:
+        """Persist a config patch and refresh runtime references used for new runs."""
+
+        updated = persist_config_patch(start_path=self.project_root, patch=patch)
+        self._config = updated
+        self._execution_coordinator.config = updated
+        self._gatekeeper.config = updated
+        self._gatekeeper.agent.config = updated
+        return self.get_config()
 
     async def shutdown(self) -> None:
         await self.mcp_host.stop()

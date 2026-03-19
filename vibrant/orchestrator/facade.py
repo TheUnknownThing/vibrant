@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from vibrant.config import RoadmapExecutionMode
+from vibrant.config import RoadmapExecutionMode, VibrantConfig, VibrantConfigPatch
 from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument
@@ -191,6 +191,12 @@ class OrchestratorFacade:
         if isinstance(mode, RoadmapExecutionMode):
             return mode
         return RoadmapExecutionMode(str(mode).strip().lower())
+
+    def get_config(self) -> VibrantConfig:
+        return self._orchestrator.get_config()
+
+    def update_config(self, patch: VibrantConfigPatch) -> VibrantConfig:
+        return self._orchestrator.update_config(patch)
 
     def list_roles(self) -> list[RoleSnapshot]:
         return self._control_plane.list_roles()

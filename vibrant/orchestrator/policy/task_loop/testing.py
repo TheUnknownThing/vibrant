@@ -16,10 +16,11 @@ def build_test_agent_invocation_plan(
     run_id: str,
     role: str = "test",
     extra_access: list[MCPAccessDescriptor] | None = None,
-    pycua_enabled: bool = False
+    pycua_enabled: bool = False,
 ) -> ProviderInvocationPlan:
     """Compile invocation plan for a test agent with optional pyCUA MCP access."""
 
+    pycua_enabled = pycua_enabled or bool(config.extra_config.get("test_agent_enable_pycua", False))
     descriptors = list(extra_access or [])
     if pycua_enabled:
         descriptors.append(

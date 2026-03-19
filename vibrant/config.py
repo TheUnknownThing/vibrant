@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import enum
+import json
+import re
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -221,6 +223,59 @@ class VibrantConfig(BaseModel):
         )
 
 
+class VibrantConfigPatch(BaseModel):
+    """Typed patch for orchestrator-owned runtime config fields."""
+
+    model: str | None = None
+    approval_policy: str | None = None
+    reasoning_effort: str | None = None
+
+    def has_changes(self) -> bool:
+        """Return whether the patch contains at least one non-empty update."""
+
+        return any(
+            value is not None
+            for value in (
+                self.model,
+                self.approval_policy,
+                self.reasoning_effort,
+            )
+        )
+
+
+_PROVIDER_SECTION_KEYS = (
+    "kind",
+    "codex-binary",
+    "launch-args",
+    "codex-home",
+    "mock-responses",
+    "claude-cli-path",
+    "claude-settings",
+    "claude-add-dirs",
+    "claude-allowed-tools",
+    "claude-disallowed-tools",
+    "claude-fallback-model",
+    "claude-setting-sources",
+    "model",
+    "model-provider",
+    "approval-policy",
+    "reasoning-effort",
+    "reasoning-summary",
+    "sandbox-mode",
+    "turn-sandbox-policy",
+    "extra-config",
+)
+_ORCHESTRATOR_SECTION_KEYS = (
+    "concurrency-limit",
+    "agent-timeout-seconds",
+    "worktree-directory",
+    "conversation-directory",
+    "execution-mode",
+)
+_VALIDATION_SECTION_KEYS = ("test-commands",)
+_BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 def _resolve_start_directory(start_path: Path | None) -> Path:
     """Return the normalized directory used for project-root discovery."""
 
@@ -296,15 +351,96 @@ def load_config(
         ) from exc
 
 
+def save_config(
+    config: VibrantConfig,
+    *,
+    start_path: Path | None = None,
+) -> Path:
+    """Persist a validated config to ``.vibrant/vibrant.toml``."""
+
+    config_path = resolve_config_path(start_path=start_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(_render_config_toml(config), encoding="utf-8")
+    return config_path
+
+
+def update_config(
+    *,
+    start_path: Path | None = None,
+    patch: VibrantConfigPatch,
+) -> VibrantConfig:
+    """Apply a typed patch to the project config and persist the result."""
+
+    if not patch.has_changes():
+        return load_config(start_path=start_path)
+
+    current = load_config(start_path=start_path)
+    updated = current.model_copy(update=patch.model_dump(exclude_none=True))
+    save_config(updated, start_path=start_path)
+    return updated
+
+
+def _render_config_toml(config: VibrantConfig) -> str:
+    payload = config.model_dump(mode="json", by_alias=True, exclude_none=True)
+    rendered_sections = [
+        _render_toml_section("provider", _PROVIDER_SECTION_KEYS, payload),
+        _render_toml_section("orchestrator", _ORCHESTRATOR_SECTION_KEYS, payload),
+        _render_toml_section("validation", _VALIDATION_SECTION_KEYS, payload),
+    ]
+    return "\n\n".join(section for section in rendered_sections if section).rstrip() + "\n"
+
+
+def _render_toml_section(
+    name: str,
+    ordered_keys: tuple[str, ...],
+    payload: dict[str, JSONValue],
+) -> str:
+    lines = [f"[{name}]"]
+    for key in ordered_keys:
+        if key not in payload:
+            continue
+        lines.append(f"{_format_toml_key(key)} = {_format_toml_value(payload[key])}")
+    return "\n".join(lines)
+
+
+def _format_toml_key(key: str) -> str:
+    if _BARE_TOML_KEY_PATTERN.match(key):
+        return key
+    return json.dumps(key)
+
+
+def _format_toml_value(value: JsonValue) -> str:
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_format_toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        rendered_items = ", ".join(
+            f"{_format_toml_key(str(key))} = {_format_toml_value(item)}"
+            for key, item in value.items()
+        )
+        return "{ " + rendered_items + " }"
+    raise TypeError(f"Unsupported TOML value: {value!r}")
+
+
 __all__ = [
     "DEFAULT_CONVERSATION_DIRECTORY",
     "DEFAULT_CONFIG_RELATIVE_PATH",
     "DEFAULT_WORKTREE_DIRECTORY",
     "RoadmapExecutionMode",
     "VibrantConfig",
+    "VibrantConfigPatch",
     "VibrantConfigError",
     "find_project_root",
     "load_config",
+    "save_config",
     "resolve_project_path",
     "resolve_config_path",
+    "update_config",
 ]
