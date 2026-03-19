@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -406,6 +407,8 @@ def _tool_body(entry: AgentConversationEntry) -> str:
     result = payload.get("result")
     if isinstance(result, str) and result.strip():
         return result.strip()
+    if result is not None:
+        return json.dumps(result, indent=2, sort_keys=True)
 
     text = entry.text.strip()
     title = _tool_name(entry)
@@ -622,7 +625,13 @@ def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamE
         return
 
     if event.type.endswith(".delta"):
-        target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
+        target = _find_open_entry(
+            entries,
+            role=role,
+            kind=kind,
+            turn_id=event.turn_id,
+            item_id=event.item_id,
+        )
         if target is None:
             entries.append(
                 AgentConversationEntry(
@@ -630,17 +639,23 @@ def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamE
                     kind=kind,
                     turn_id=event.turn_id,
                     text=event.text or "",
-                    payload=event.payload,
+                    payload=_entry_payload(event.payload, event.item_id),
                     started_at=event.created_at,
                     finished_at=None,
                 )
             )
             return
         target.text = f"{target.text}{event.text or ''}"
-        target.payload = event.payload or target.payload
+        target.payload = _merged_entry_payload(target.payload, event.payload, event.item_id)
         return
 
-    target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
+    target = _find_open_entry(
+        entries,
+        role=role,
+        kind=kind,
+        turn_id=event.turn_id,
+        item_id=event.item_id,
+    )
     if target is None:
         entries.append(
             AgentConversationEntry(
@@ -648,16 +663,16 @@ def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamE
                 kind=kind,
                 turn_id=event.turn_id,
                 text=event.text or "",
-                payload=event.payload,
+                payload=_entry_payload(event.payload, event.item_id),
                 started_at=event.created_at,
-                finished_at=event.created_at,
+                finished_at=None if event.type == "conversation.tool_call.started" else event.created_at,
             )
         )
         return
 
     if event.text and not (target.text == event.text or target.text.endswith(event.text)):
         target.text = f"{target.text}{event.text}"
-    target.payload = event.payload or target.payload
+    target.payload = _merged_entry_payload(target.payload, event.payload, event.item_id)
     target.finished_at = event.created_at
 
 
@@ -697,6 +712,7 @@ def _find_open_entry(
     role: str,
     kind: str,
     turn_id: str | None,
+    item_id: str | None,
 ) -> AgentConversationEntry | None:
     if not entries:
         return None
@@ -706,7 +722,32 @@ def _find_open_entry(
         return None
     if entry.turn_id != turn_id or entry.finished_at is not None:
         return None
+    if item_id is not None and _entry_item_id(entry) not in {None, item_id}:
+        return None
     return entry
+
+
+def _entry_item_id(entry: AgentConversationEntry) -> str | None:
+    payload = entry.payload or {}
+    item_id = payload.get("item_id")
+    if isinstance(item_id, str) and item_id:
+        return item_id
+    return None
+
+
+def _entry_payload(payload: object, item_id: str | None) -> object:
+    if item_id is None:
+        return payload
+    if not isinstance(payload, dict):
+        return {"item_id": item_id}
+    if payload.get("item_id") == item_id:
+        return payload
+    return {**payload, "item_id": item_id}
+
+
+def _merged_entry_payload(current: object, incoming: object, item_id: str | None) -> object:
+    payload = incoming or current
+    return _entry_payload(payload, item_id)
 
 
 def indent(text: str) -> str:

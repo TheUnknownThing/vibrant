@@ -262,24 +262,36 @@ class ConversationStreamService:
             return
 
         if frame.type.endswith(".delta"):
-            target = _find_open_entry(entries, role=role, kind=kind, turn_id=frame.turn_id)
+            target = _find_open_entry(
+                entries,
+                role=role,
+                kind=kind,
+                turn_id=frame.turn_id,
+                item_id=frame.item_id,
+            )
             if target is None:
                 target = AgentConversationEntry(
                     role=role,
                     kind=kind,
                     turn_id=frame.turn_id,
                     text=frame.text or "",
-                    payload=frame.payload,
+                    payload=_entry_payload(frame.payload, frame.item_id),
                     started_at=frame.created_at,
                     finished_at=None,
                 )
                 entries.append(target)
             else:
                 target.text = f"{target.text}{frame.text or ''}"
-                target.payload = frame.payload or target.payload
+                target.payload = _merged_entry_payload(target.payload, frame.payload, frame.item_id)
             return
 
-        target = _find_open_entry(entries, role=role, kind=kind, turn_id=frame.turn_id)
+        target = _find_open_entry(
+            entries,
+            role=role,
+            kind=kind,
+            turn_id=frame.turn_id,
+            item_id=frame.item_id,
+        )
         if target is None:
             entries.append(
                 AgentConversationEntry(
@@ -287,9 +299,9 @@ class ConversationStreamService:
                     kind=kind,
                     turn_id=frame.turn_id,
                     text=frame.text or "",
-                    payload=frame.payload,
+                    payload=_entry_payload(frame.payload, frame.item_id),
                     started_at=frame.created_at,
-                    finished_at=frame.created_at,
+                    finished_at=None if frame.type == "conversation.tool_call.started" else frame.created_at,
                 )
             )
             return
@@ -297,7 +309,7 @@ class ConversationStreamService:
             target.text == frame.text or target.text.endswith(frame.text)
         ):
             target.text = f"{target.text}{frame.text}"
-        target.payload = frame.payload or target.payload
+        target.payload = _merged_entry_payload(target.payload, frame.payload, frame.item_id)
         target.finished_at = frame.created_at
 
 
@@ -339,6 +351,7 @@ def _find_open_entry(
     role: Literal["assistant", "tool"],
     kind: Literal["message", "thinking", "tool_call"],
     turn_id: str | None,
+    item_id: str | None,
 ) -> AgentConversationEntry | None:
     # Only the trailing open block can absorb more streamed content. Once a
     # later block has been appended, keep the transcript chronological by
@@ -350,4 +363,33 @@ def _find_open_entry(
         return None
     if entry.turn_id != turn_id or entry.finished_at is not None:
         return None
+    if item_id is not None and _entry_item_id(entry) not in {None, item_id}:
+        return None
     return entry
+
+
+def _entry_item_id(entry: AgentConversationEntry) -> str | None:
+    payload = entry.payload or {}
+    item_id = payload.get("item_id")
+    if isinstance(item_id, str) and item_id:
+        return item_id
+    return None
+
+
+def _entry_payload(payload: JSONMapping | None, item_id: str | None) -> JSONMapping | None:
+    if item_id is None:
+        return payload
+    if payload is None:
+        return {"item_id": item_id}
+    if payload.get("item_id") == item_id:
+        return payload
+    return {**payload, "item_id": item_id}
+
+
+def _merged_entry_payload(
+    current: JSONMapping | None,
+    incoming: JSONMapping | None,
+    item_id: str | None,
+) -> JSONMapping | None:
+    payload = incoming or current
+    return _entry_payload(payload, item_id)

@@ -88,6 +88,117 @@ def test_conversation_view_applies_streamed_gatekeeper_messages():
     assert view._conversation.entries[1].finished_at == "2026-03-13T00:00:02Z"
 
 
+def test_conversation_view_keeps_tool_call_open_until_completion() -> None:
+    view = ConversationView()
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-1",
+            source_event_id=None,
+            sequence=1,
+            agent_id="gatekeeper-agent",
+            run_id="gatekeeper-run-1",
+            turn_id="turn-1",
+            item_id="tool-1",
+            type="conversation.tool_call.started",
+            text="functions.exec_command",
+            payload={
+                "tool_name": "functions.exec_command",
+                "item_id": "tool-1",
+                "arguments": {"cmd": "echo test"},
+            },
+            created_at="2026-03-13T00:00:00Z",
+        )
+    )
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-2",
+            source_event_id=None,
+            sequence=2,
+            agent_id="gatekeeper-agent",
+            run_id="gatekeeper-run-1",
+            turn_id="turn-1",
+            item_id="tool-1",
+            type="conversation.tool_call.completed",
+            text=None,
+            payload={
+                "tool_name": "functions.exec_command",
+                "item_id": "tool-1",
+                "result": {"exitCode": 0, "output": "test"},
+            },
+            created_at="2026-03-13T00:00:01Z",
+        )
+    )
+
+    assert view._conversation is not None
+    assert len(view._conversation.entries) == 1
+    assert view._conversation.entries[0].finished_at == "2026-03-13T00:00:01Z"
+    assert view._conversation.entries[0].payload == {
+        "tool_name": "functions.exec_command",
+        "item_id": "tool-1",
+        "result": {"exitCode": 0, "output": "test"},
+    }
+
+
+def test_conversation_view_starts_new_reasoning_block_for_new_item_id() -> None:
+    view = ConversationView()
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-1",
+            source_event_id=None,
+            sequence=1,
+            agent_id="gatekeeper-agent",
+            run_id="gatekeeper-run-1",
+            turn_id="turn-1",
+            item_id="reason-1",
+            type="conversation.assistant.thinking.delta",
+            text="First block.",
+            payload={"item_id": "reason-1"},
+            created_at="2026-03-13T00:00:00Z",
+        )
+    )
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-2",
+            source_event_id=None,
+            sequence=2,
+            agent_id="gatekeeper-agent",
+            run_id="gatekeeper-run-1",
+            turn_id="turn-1",
+            item_id="reason-2",
+            type="conversation.progress",
+            text=None,
+            payload={
+                "item_type": "reasoning",
+                "item": {"id": "reason-2", "type": "reasoning", "summary": ["Second block."]},
+            },
+            created_at="2026-03-13T00:00:01Z",
+        )
+    )
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-3",
+            source_event_id=None,
+            sequence=3,
+            agent_id="gatekeeper-agent",
+            run_id="gatekeeper-run-1",
+            turn_id="turn-1",
+            item_id="reason-2",
+            type="conversation.assistant.thinking.delta",
+            text="Second block.",
+            payload={"item_id": "reason-2"},
+            created_at="2026-03-13T00:00:02Z",
+        )
+    )
+
+    assert view._conversation is not None
+    assert [entry.text for entry in view._conversation.entries] == ["First block.", "Second block."]
+
+
 def test_conversation_view_records_request_events_as_status_entries():
     view = ConversationView()
     view.ingest_stream_event(
@@ -451,3 +562,32 @@ def test_render_blocks_groups_assistant_turn_parts_and_omits_turn_status() -> No
     assert isinstance(blocks[1].parts[1], ToolCallPart)
     assert blocks[1].parts[2].plain_text() == "diff --git a/file.py b/file.py"
     assert blocks[1].parts[3].plain_text() == "I found the risky changes."
+
+
+def test_render_blocks_renders_non_string_tool_results() -> None:
+    conversation = AgentConversationView(
+        conversation_id="gatekeeper-1",
+        run_ids=["gatekeeper-run-1"],
+        active_turn_id=None,
+        entries=[
+            AgentConversationEntry(
+                role="tool",
+                kind="tool_call",
+                turn_id="turn-1",
+                text="functions.exec_command",
+                payload={
+                    "tool_name": "functions.exec_command",
+                    "result": {"exitCode": 0, "output": "test"},
+                },
+                started_at="2026-03-13T00:00:02Z",
+                finished_at="2026-03-13T00:00:03Z",
+            )
+        ],
+        updated_at="2026-03-13T00:00:03Z",
+    )
+
+    blocks = _render_blocks(conversation)
+
+    assert len(blocks) == 1
+    assert blocks[0].parts[0].plain_text() == "Tool · functions.exec_command · done"
+    assert blocks[0].parts[1].plain_text() == '{\n  "exitCode": 0,\n  "output": "test"\n}'
