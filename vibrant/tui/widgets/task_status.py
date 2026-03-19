@@ -55,7 +55,12 @@ class _RunEventCacheEntry:
     canonical_event_log: str
     file_size: int
     mtime_ns: int
+    read_offset: int
+    pending_fragment: str
     events: list[CanonicalEvent]
+    thinking_text: str = ""
+    thinking_status: str = "idle"
+    recent_activity: list[str] = field(default_factory=list)
 
 
 class TaskStatusView(Static):
@@ -158,7 +163,7 @@ class TaskStatusView(Static):
                 yield Static("", id="task-status-activity-details", classes="task-status-section", markup=False)
 
     def on_mount(self) -> None:
-        self._refresh_view()
+        self._refresh_view(refresh_execution=True)
 
     @property
     def selected_task_id(self) -> str | None:
@@ -169,20 +174,37 @@ class TaskStatusView(Static):
     def bind(self, facade: OrchestratorFacade | None) -> None:
         """Bind the panel to the current orchestrator facade."""
 
+        if self._facade is facade:
+            return
         self._facade = facade
-        if self._tasks and not self._is_loading:
-            self._refresh_view()
 
-    def sync(self, tasks: Sequence[TaskInfo], *, selected_task_id: str | None = None) -> str | None:
+    def sync(
+        self,
+        tasks: Sequence[TaskInfo],
+        *,
+        selected_task_id: str | None = None,
+        refresh_execution: bool = True,
+    ) -> str | None:
         """Refresh the panel from the latest roadmap tasks."""
 
+        next_tasks = tuple(tasks)
+        previous_tasks = self._tasks
+        previous_selected_task_id = self._selected_task_id
         self._is_loading = False
-        self._tasks = tuple(tasks)
+        self._tasks = next_tasks
         self._tasks_by_id = {task.id: task for task in self._tasks}
         self._selected_task_id = self._resolve_selected_task_id(selected_task_id)
         if not self._tasks:
             self._empty_message = "No roadmap tasks found."
-        self._refresh_view()
+
+        tasks_changed = previous_tasks != self._tasks
+        selected_changed = previous_selected_task_id != self._selected_task_id
+        should_refresh_execution = refresh_execution or tasks_changed or selected_changed or not self._execution_text
+
+        if not tasks_changed and not selected_changed and not should_refresh_execution:
+            return self._selected_task_id
+
+        self._refresh_view(refresh_execution=should_refresh_execution)
         return self._selected_task_id
 
     def clear_tasks(self, message: str = "No roadmap tasks found.") -> None:
@@ -193,7 +215,7 @@ class TaskStatusView(Static):
         self._tasks_by_id = {}
         self._selected_task_id = None
         self._empty_message = message
-        self._refresh_view()
+        self._refresh_view(refresh_execution=True)
 
     def set_generating_roadmap(self, is_loading: bool) -> None:
         """Toggle the roadmap-loading placeholder."""
@@ -201,7 +223,7 @@ class TaskStatusView(Static):
         self._is_loading = is_loading
         if is_loading:
             self._empty_message = "Task status will appear here once the roadmap is ready."
-        self._refresh_view()
+        self._refresh_view(refresh_execution=True)
 
     def select_task(self, task_id: str | None) -> str | None:
         """Select one task by id and refresh the panel."""
@@ -211,8 +233,15 @@ class TaskStatusView(Static):
         if self._selected_task_id == task_id:
             return self._selected_task_id
         self._selected_task_id = task_id
-        self._refresh_view()
+        self._refresh_view(refresh_execution=True)
         return self._selected_task_id
+
+    def refresh_selected_task_execution(self) -> None:
+        """Refresh only the selected task's execution details."""
+
+        if self._is_loading or not self._tasks:
+            return
+        self._refresh_view(refresh_execution=True)
 
     def get_progress_summary_text(self) -> str:
         """Return the rendered progress summary, for tests and previews."""
@@ -234,7 +263,7 @@ class TaskStatusView(Static):
 
         return self._activity_text
 
-    def _refresh_view(self) -> None:
+    def _refresh_view(self, *, refresh_execution: bool) -> None:
         if self._is_loading:
             self._state_text = "Generating roadmap"
             self._progress_summary_text = ""
@@ -264,13 +293,14 @@ class TaskStatusView(Static):
             return
 
         progress = _build_progress(self._tasks)
-        execution = self._execution_snapshot(task)
 
         self._state_text = f"Selected task: {task.id}"
         self._progress_summary_text = _render_progress_summary(progress)
         self._task_details_text = _render_task_details(task, progress, self._tasks)
-        self._execution_text = _render_execution_details(task, execution)
-        self._activity_text = _render_recent_activity(task, execution)
+        if refresh_execution:
+            execution = self._execution_snapshot(task)
+            self._execution_text = _render_execution_details(task, execution)
+            self._activity_text = _render_recent_activity(task, execution)
         self._show_task_body(progress)
 
     def _show_empty_state(self, message: str) -> None:
@@ -362,9 +392,11 @@ class TaskStatusView(Static):
         )
         snapshot.output = _resolve_agent_output(facade, output_agent_id, snapshot.active_instance, snapshot.latest_instance)
 
-        events = self._events_for_run(snapshot.latest_run, snapshot.latest_instance)
+        event_cache = self._event_cache_for_run(snapshot.latest_run, snapshot.latest_instance)
+        events = event_cache.events if event_cache is not None else []
 
-        thinking_text, thinking_status = _thinking_from_events(events)
+        thinking_text = event_cache.thinking_text if event_cache is not None else ""
+        thinking_status = event_cache.thinking_status if event_cache is not None else "idle"
         output_thinking = _agent_output_thinking(snapshot.output)
         if output_thinking:
             thinking_text = output_thinking
@@ -375,38 +407,44 @@ class TaskStatusView(Static):
         live_response = _agent_output_partial_text(snapshot.output)
         if live_response:
             snapshot.live_response = live_response
-        snapshot.recent_activity = _recent_activity_from_events(events)
+        snapshot.recent_activity = list(event_cache.recent_activity) if event_cache is not None else _recent_activity_from_events(events)
         return snapshot
 
-    def _events_for_run(self, run: object | None, instance: object | None) -> list[CanonicalEvent]:
+    def _event_cache_for_run(self, run: object | None, instance: object | None) -> _RunEventCacheEntry | None:
         facade = self._facade
         if facade is None:
-            return []
+            return None
 
         run_id = _run_id(run)
         canonical_event_log = _run_canonical_event_log(run) or _instance_canonical_event_log(instance)
         file_stats = self._canonical_event_log_stats(canonical_event_log)
-        if run_id is not None:
-            cached = self._run_event_cache.get(run_id)
-            if (
-                cached is not None
-                and file_stats is not None
-                and cached.canonical_event_log == canonical_event_log
-                and cached.file_size == file_stats[0]
-                and cached.mtime_ns == file_stats[1]
-            ):
-                return cached.events
+        cache_key = run_id or canonical_event_log
+        cached = self._run_event_cache.get(cache_key) if cache_key is not None else None
 
-        events = _read_canonical_event_log(canonical_event_log) if canonical_event_log else []
+        if (
+            cached is not None
+            and file_stats is not None
+            and cached.canonical_event_log == canonical_event_log
+            and cached.file_size == file_stats[0]
+            and cached.mtime_ns == file_stats[1]
+        ):
+            return cached
 
-        if file_stats is not None and canonical_event_log and run_id is not None:
-            self._run_event_cache[run_id] = _RunEventCacheEntry(
-                canonical_event_log=canonical_event_log,
-                file_size=file_stats[0],
-                mtime_ns=file_stats[1],
-                events=events,
-            )
-        return events
+        if canonical_event_log is None or file_stats is None:
+            return None
+
+        refreshed = _refresh_run_event_cache_entry(
+            canonical_event_log,
+            file_size=file_stats[0],
+            mtime_ns=file_stats[1],
+            cached=cached,
+        )
+        if refreshed is None:
+            return None
+
+        if cache_key is not None:
+            self._run_event_cache[cache_key] = refreshed
+        return refreshed
 
     @staticmethod
     def _canonical_event_log_stats(canonical_event_log: str | None) -> tuple[int, int] | None:
@@ -428,6 +466,13 @@ def _list_task_instances(facade: OrchestratorFacade, task_id: str) -> list[objec
 
 
 def _latest_run_for_task(facade: OrchestratorFacade, task_id: str) -> object | None:
+    latest_run_for_task = getattr(facade, "latest_run_for_task", None)
+    if callable(latest_run_for_task):
+        try:
+            return latest_run_for_task(task_id)
+        except Exception:
+            return None
+
     try:
         runs = facade.list_runs(task_id=task_id)
     except Exception:
@@ -680,13 +725,9 @@ def _thinking_from_events(events: Sequence[CanonicalEvent]) -> tuple[str, str]:
 def _recent_activity_from_events(events: Sequence[CanonicalEvent]) -> list[str]:
     lines: list[str] = []
     for event in events:
-        lines.extend(_activity_lines_from_event(event))
+        _append_recent_activity(lines, event)
 
-    deduped: list[str] = []
-    for line in lines:
-        if line and (not deduped or deduped[-1] != line):
-            deduped.append(line)
-    return deduped
+    return lines
 
 
 def _request_activity_label(event: CanonicalEvent) -> str:
@@ -945,31 +986,165 @@ def _agent_output_thinking_status(output: object | None) -> str:
 
 def _read_canonical_event_log(path: str) -> list[CanonicalEvent]:
     try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        content = Path(path).read_text(encoding="utf-8")
     except OSError:
         return []
 
+    events, _ = _parse_canonical_event_chunks(content)
+    return events
+
+
+def _refresh_run_event_cache_entry(
+    canonical_event_log: str,
+    *,
+    file_size: int,
+    mtime_ns: int,
+    cached: _RunEventCacheEntry | None,
+) -> _RunEventCacheEntry | None:
+    if (
+        cached is not None
+        and cached.canonical_event_log == canonical_event_log
+        and file_size >= cached.read_offset
+        and file_size >= cached.file_size
+    ):
+        appended = _read_canonical_event_log_tail(canonical_event_log, cached.read_offset)
+        if appended is not None:
+            events, pending_fragment = _parse_canonical_event_chunks(appended, initial_fragment=cached.pending_fragment)
+            if not events and pending_fragment == cached.pending_fragment and file_size == cached.file_size:
+                return cached
+            thinking_text = cached.thinking_text
+            thinking_status = cached.thinking_status
+            recent_activity = list(cached.recent_activity)
+            for event in events:
+                thinking_text, thinking_status = _update_thinking_state(thinking_text, thinking_status, event)
+                _append_recent_activity(recent_activity, event)
+            return _RunEventCacheEntry(
+                canonical_event_log=canonical_event_log,
+                file_size=file_size,
+                mtime_ns=mtime_ns,
+                read_offset=file_size,
+                pending_fragment=pending_fragment,
+                events=[*cached.events, *events],
+                thinking_text=thinking_text,
+                thinking_status=thinking_status,
+                recent_activity=recent_activity,
+            )
+
+    try:
+        content = Path(canonical_event_log).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    events, pending_fragment = _parse_canonical_event_chunks(content)
+    thinking_text = ""
+    thinking_status = "idle"
+    recent_activity: list[str] = []
+    for event in events:
+        thinking_text, thinking_status = _update_thinking_state(thinking_text, thinking_status, event)
+        _append_recent_activity(recent_activity, event)
+    return _RunEventCacheEntry(
+        canonical_event_log=canonical_event_log,
+        file_size=file_size,
+        mtime_ns=mtime_ns,
+        read_offset=file_size,
+        pending_fragment=pending_fragment,
+        events=events,
+        thinking_text=thinking_text,
+        thinking_status=thinking_status,
+        recent_activity=recent_activity,
+    )
+
+
+def _read_canonical_event_log_tail(path: str, offset: int) -> str | None:
+    try:
+        with Path(path).open("rb") as handle:
+            handle.seek(offset)
+            return handle.read().decode("utf-8")
+    except OSError:
+        return None
+
+
+def _parse_canonical_event_chunks(
+    content: str,
+    *,
+    initial_fragment: str = "",
+) -> tuple[list[CanonicalEvent], str]:
+    buffer = f"{initial_fragment}{content}"
+    lines = buffer.splitlines()
+    trailing_fragment = ""
+    if buffer and not buffer.endswith(("\n", "\r")) and lines:
+        trailing_fragment = lines.pop()
+
     events: list[CanonicalEvent] = []
     for line in lines:
-        normalized = line.strip()
-        if not normalized:
-            continue
-        try:
-            payload = json.loads(normalized)
-        except json.JSONDecodeError:
-            continue
-        event_type = str(payload.get("event") or "").strip()
-        if not event_type:
-            continue
-        event: dict[str, JSONValue] = {"type": event_type}
-        timestamp = payload.get("timestamp")
-        if isinstance(timestamp, str) and timestamp:
-            event["timestamp"] = timestamp
-        data = payload.get("data")
-        if isinstance(data, dict):
-            event.update(data)
-        events.append(event)
-    return events
+        event = _parse_canonical_event_line(line)
+        if event is not None:
+            events.append(event)
+
+    if trailing_fragment:
+        trailing_event = _parse_canonical_event_line(trailing_fragment)
+        if trailing_event is not None:
+            events.append(trailing_event)
+            trailing_fragment = ""
+
+    return events, trailing_fragment
+
+
+def _parse_canonical_event_line(line: str) -> CanonicalEvent | None:
+    normalized = line.strip()
+    if not normalized:
+        return None
+    try:
+        payload = json.loads(normalized)
+    except json.JSONDecodeError:
+        return None
+    event_type = str(payload.get("event") or "").strip()
+    if not event_type:
+        return None
+    event: dict[str, JSONValue] = {"type": event_type}
+    timestamp = payload.get("timestamp")
+    if isinstance(timestamp, str) and timestamp:
+        event["timestamp"] = timestamp
+    data = payload.get("data")
+    if isinstance(data, dict):
+        event.update(data)
+    return event
+
+
+def _update_thinking_state(thinking_text: str, thinking_status: str, event: CanonicalEvent) -> tuple[str, str]:
+    event_type = str(event.get("type") or "")
+    if event_type == "reasoning.summary.delta":
+        delta = str(event.get("delta") or "")
+        if delta:
+            return f"{thinking_text}{delta}", "running"
+        return thinking_text, thinking_status
+
+    if event_type != "task.progress":
+        return thinking_text, thinking_status
+
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return thinking_text, thinking_status
+    if str(item.get("type") or "").strip().lower() != "reasoning":
+        return thinking_text, thinking_status
+
+    summary = item.get("summary")
+    if isinstance(summary, list):
+        parts = [str(part).strip() for part in summary if str(part).strip()]
+        if parts:
+            return "\n".join(parts), "completed"
+    if isinstance(summary, str) and summary.strip():
+        return summary.strip(), "completed"
+
+    text = extract_text_from_progress_item(item)
+    if text.strip():
+        return text.strip(), "completed"
+    return thinking_text, thinking_status
+
+
+def _append_recent_activity(lines: list[str], event: CanonicalEvent) -> None:
+    for line in _activity_lines_from_event(event):
+        if line and (not lines or lines[-1] != line):
+            lines.append(line)
 
 
 def _nested_attr(instance: object | None, path: tuple[str, ...], default: object = None) -> object:

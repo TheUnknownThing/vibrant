@@ -263,6 +263,40 @@ def test_handle_task_result_awaiting_user_updates_status_without_popup(monkeypat
     assert notifications == []
 
 
+def test_handle_runtime_event_skips_project_snapshot_for_task_progress(monkeypatch) -> None:
+    app = VibrantApp()
+    refreshed_task_ids: list[str | None] = []
+
+    monkeypatch.setattr(
+        app,
+        "_refresh_selected_task_status_execution",
+        lambda *, task_id=None: refreshed_task_ids.append(task_id),
+    )
+    monkeypatch.setattr(
+        app,
+        "_project_snapshot",
+        lambda: pytest.fail("task.progress should not rebuild the full project snapshot"),
+    )
+
+    app._handle_runtime_event({"type": "task.progress", "task_id": "task-7", "agent_id": "agent-7"})
+
+    assert refreshed_task_ids == ["task-7"]
+
+
+def test_refresh_selected_task_status_execution_ignores_unselected_task() -> None:
+    app = VibrantApp()
+    refresh_calls: list[str] = []
+    task_status = SimpleNamespace(
+        selected_task_id="task-1",
+        refresh_selected_task_execution=lambda: refresh_calls.append("refresh"),
+    )
+    app.vibing_screen = lambda: SimpleNamespace(task_status=task_status)
+
+    app._refresh_selected_task_status_execution(task_id="task-2")
+
+    assert refresh_calls == []
+
+
 @pytest.mark.asyncio
 async def test_restart_slash_command_restarts_selected_failed_task(monkeypatch) -> None:
     app = VibrantApp()

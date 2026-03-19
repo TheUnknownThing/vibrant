@@ -607,6 +607,7 @@ class VibrantApp(App):
     def _handle_runtime_event(self, event: CanonicalEvent) -> None:
         event_type = str(event.get("type") or "")
         gatekeeper_event = _is_gatekeeper_event(event)
+        event_task_id = self._task_id_for_runtime_event(event)
         if gatekeeper_event:
             self._sync_gatekeeper_conversation_binding()
             if event_type in {"content.delta", "assistant.message.delta", "assistant.thinking.delta"}:
@@ -626,16 +627,15 @@ class VibrantApp(App):
             self._refresh_gatekeeper_views(force_flash=True)
             return
 
+        if event_type == "task.progress":
+            if not gatekeeper_event:
+                self._refresh_selected_task_status_execution(task_id=event_task_id)
+            return
+
         snapshot = self._project_snapshot()
         if snapshot is None:
             self._clear_project_dependent_views()
             self._refresh_gatekeeper_views(rebind_conversation=False)
-            return
-
-        if event_type == "task.progress":
-            self._refresh_roadmap_views(snapshot)
-            if not gatekeeper_event:
-                self._refresh_agent_output_registry(snapshot)
             return
 
         if event_type == "turn.started":
@@ -643,13 +643,15 @@ class VibrantApp(App):
                 self._refresh_gatekeeper_views()
             else:
                 self._refresh_agent_output_registry(snapshot)
-                self._refresh_roadmap_views(snapshot)
+                self._refresh_roadmap_views(snapshot, refresh_task_status_execution=False)
+                self._refresh_selected_task_status_execution(task_id=event_task_id)
             return
 
         if event_type in {"turn.completed", "task.completed", "runtime.error"}:
             if not gatekeeper_event:
                 self._refresh_agent_output_registry(snapshot)
-                self._refresh_roadmap_views(snapshot)
+                self._refresh_roadmap_views(snapshot, refresh_task_status_execution=False)
+                self._refresh_selected_task_status_execution(task_id=event_task_id)
             self._refresh_consensus_views(snapshot)
             self._refresh_gatekeeper_views()
             return
@@ -970,7 +972,12 @@ class VibrantApp(App):
                 self._sync_gatekeeper_conversation_binding()
         self._refresh_gatekeeper_state(force_flash=force_flash)
 
-    def _refresh_roadmap_views(self, snapshot: OrchestratorSnapshot | None) -> None:
+    def _refresh_roadmap_views(
+        self,
+        snapshot: OrchestratorSnapshot | None,
+        *,
+        refresh_task_status_execution: bool = True,
+    ) -> None:
         vibing_screen = self.vibing_screen()
         if vibing_screen is None:
             return
@@ -995,7 +1002,24 @@ class VibrantApp(App):
             roadmap_tasks,
             facade=self.orchestrator_facade,
             agent_summaries=task_summaries,
+            refresh_task_status_execution=refresh_task_status_execution,
         )
+
+    def _refresh_selected_task_status_execution(
+        self,
+        *,
+        task_id: str | None = None,
+    ) -> None:
+        vibing_screen = self.vibing_screen()
+        if vibing_screen is None:
+            return
+
+        selected_task_id = vibing_screen.task_status.selected_task_id
+        if task_id is not None and selected_task_id != task_id:
+            return
+
+        with suppress(Exception):
+            vibing_screen.task_status.refresh_selected_task_execution()
 
     def _refresh_agent_output_registry(
         self,
@@ -1047,7 +1071,8 @@ class VibrantApp(App):
             return
 
         self._refresh_agent_output_registry(snapshot)
-        self._refresh_roadmap_views(snapshot)
+        self._refresh_roadmap_views(snapshot, refresh_task_status_execution=False)
+        self._refresh_selected_task_status_execution()
         if include_consensus:
             self._refresh_consensus_views(snapshot)
         self._refresh_gatekeeper_views()
