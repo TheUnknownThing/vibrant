@@ -36,12 +36,14 @@ def build_task_execution_prompt(
             "2. Do NOT modify files outside your task scope.",
             "3. Do NOT modify orchestrator-owned `.vibrant` state such as roadmap, consensus, workflow, or review files.",
             "4. If those orchestrator-owned files should change, describe the proposed change in your summary instead of editing them.",
-            "5. When you are done, provide a summary (~500 words) of:",
+            "5. End your response with exactly one `<vibrant_summary>...</vibrant_summary>` block.",
+            "6. Only the text inside `<vibrant_summary>` and `</vibrant_summary>` is captured as the implementation summary.",
+            "7. Inside that tagged summary block, provide a summary (~500 words) of:",
             "   - What you changed and why",
             "   - What tests you wrote or ran",
             "   - How your implementation satisfies each acceptance criterion",
             "   - Any proposed roadmap, consensus, workflow, or review-state changes",
             "   - Any issues or concerns for the next agent",
-            f"6. Commit your changes with a descriptive message prefixed with `[vibrant:{task_id}]`.",
+            f"8. Commit your changes with a descriptive message prefixed with `[vibrant:{task_id}]`.",
         ]
     )

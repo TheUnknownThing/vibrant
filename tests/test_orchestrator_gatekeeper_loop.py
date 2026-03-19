@@ -262,10 +262,14 @@ async def test_gatekeeper_pause_and_resume_reuses_logical_run_id(tmp_path: Path,
     )
 
     agent_record = captured["agent_record"]
+    prompt = captured["prompt"]
     assert paused.session.lifecycle_state is GatekeeperLifecycleStatus.STOPPED
     assert paused.session.run_id == "gatekeeper-session-1"
     assert lifecycle.snapshot().run_id == "gatekeeper-session-1"
     assert agent_record.identity.run_id == "gatekeeper-session-1"
+    assert "Resume the existing Gatekeeper conversation" in prompt
+    assert "Prior thread context and instructions remain in effect." in prompt
+    assert "You are a long-lived, project-scoped planning and review agent." not in prompt
 
 
 @pytest.mark.asyncio

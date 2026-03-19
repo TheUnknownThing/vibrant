@@ -25,6 +25,7 @@ from vibrant.models.agent import AgentProviderMetadata, AgentRunRecord, AgentSta
 from vibrant.providers.base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 from vibrant.providers.registry import provider_transport, resolve_configured_adapter_factory
 from vibrant.prompts import (
+    build_gatekeeper_resume_prompt,
     build_gatekeeper_system_prompt,
     build_gatekeeper_turn_prompt,
     build_user_answer_trigger_description,
@@ -204,6 +205,16 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             show_agent_summary=request.trigger is not GatekeeperTrigger.USER_CONVERSATION,
         )
 
+    def render_resume_prompt(self, request: GatekeeperRequest) -> str:
+        roadmap_text = _read_text(self.roadmap_path) or "No roadmap document exists yet."
+        return build_gatekeeper_resume_prompt(
+            project_name=self.project_root.name,
+            roadmap_text=roadmap_text,
+            trigger_value=request.trigger.value,
+            trigger_description=request.trigger_description,
+            agent_summary=request.agent_summary,
+        )
+
     def _system_prompt_seeded(self, agent_record: AgentRunRecord) -> bool:
         resume_cursor = agent_record.provider.resume_cursor or {}
         return resume_cursor.get(GATEKEEPER_SYSTEM_PROMPT_CURSOR_KEY) == self._system_prompt_marker()
@@ -266,6 +277,9 @@ class Gatekeeper:
     def render_prompt(self, request: GatekeeperRequest) -> str:
         return self.agent.render_prompt(request)
 
+    def render_resume_prompt(self, request: GatekeeperRequest) -> str:
+        return self.agent.render_resume_prompt(request)
+
     def render_system_prompt(self) -> str:
         return self.agent.render_system_prompt()
 
@@ -307,10 +321,7 @@ class Gatekeeper:
         on_record_updated: Callable[[AgentRunRecord], None] | None = None,
         on_result: Callable[[GatekeeperRunResult], AsyncNone] | None = None,
     ) -> GatekeeperRunHandle:
-        prompt = self.render_prompt(request)
         agent_record = self.build_run_record(request)
-        agent_record.context.prompt_used = prompt
-
         should_resume = (
             resume_latest_thread
             if resume_latest_thread is not None
@@ -319,6 +330,8 @@ class Gatekeeper:
         resume_handle = self._find_latest_gatekeeper_resume_handle() if should_resume else None
         if resume_handle is not None:
             agent_record.provider.set_resume_handle(resume_handle)
+        prompt = self.render_resume_prompt(request) if resume_handle is not None else self.render_prompt(request)
+        agent_record.context.prompt_used = prompt
         record_callback = on_record_updated or self._persist_agent_record
 
         handle = await self.runtime.start(
