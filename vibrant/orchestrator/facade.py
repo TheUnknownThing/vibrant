@@ -129,8 +129,7 @@ class _RunReadView:
         return self.facade.list_runs(agent_id=agent_id, include_completed=include_completed)
 
     def latest_for_task(self, task_id: str, *, role: str | None = None) -> AgentRunSnapshot | None:
-        runs = self.for_task(task_id, role=role)
-        return runs[-1] if runs else None
+        return self.facade.latest_run_for_task(task_id, role=role)
 
 
 class OrchestratorFacade:
@@ -253,6 +252,48 @@ class OrchestratorFacade:
 
     def get_run(self, run_id: str) -> AgentRunSnapshot | None:
         return self._control_plane.get_run(run_id)
+
+    def latest_run_for_task(
+        self,
+        task_id: str,
+        *,
+        role: str | None = None,
+    ) -> AgentRunSnapshot | None:
+        normalized_task_id = task_id.strip() if isinstance(task_id, str) else ""
+        if not normalized_task_id:
+            return None
+
+        normalized_role = role.strip().lower() if isinstance(role, str) and role.strip() else None
+        candidate_run_ids = [
+            run_id
+            for run_id, mapped_task_id in self.get_run_task_ids().items()
+            if mapped_task_id == normalized_task_id
+        ]
+        if not candidate_run_ids:
+            return None
+
+        active_candidates = [
+            run
+            for run in self.list_active_runs()
+            if run.identity.run_id in candidate_run_ids
+            and (normalized_role is None or run.identity.role == normalized_role)
+        ]
+        if active_candidates:
+            active_candidates.sort(key=_run_sort_key)
+            return active_candidates[-1]
+
+        candidates: list[AgentRunSnapshot] = []
+        for run_id in candidate_run_ids:
+            run = self.get_run(run_id)
+            if run is None:
+                continue
+            if normalized_role is not None and run.identity.role != normalized_role:
+                continue
+            candidates.append(run)
+        if not candidates:
+            return None
+        candidates.sort(key=_run_sort_key)
+        return candidates[-1]
 
     def get_attempt_execution(self, attempt_id: str):
         return self._control_plane.get_attempt_execution(attempt_id)
@@ -581,3 +622,10 @@ class OrchestratorFacade:
 
     def gatekeeper_busy(self) -> bool:
         return self._control_plane.gatekeeper_busy()
+
+
+def _run_sort_key(run: AgentRunSnapshot) -> tuple[float, str]:
+    timestamp = run.runtime.started_at or run.runtime.finished_at
+    if timestamp is None:
+        return (0.0, run.identity.run_id)
+    return (timestamp.timestamp(), run.identity.run_id)

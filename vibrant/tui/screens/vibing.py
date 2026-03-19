@@ -193,6 +193,7 @@ class VibingScreen(Static):
         *,
         facade: OrchestratorFacade | None,
         agent_summaries: dict[str, str] | None = None,
+        refresh_task_status_execution: bool = True,
     ) -> None:
         """Refresh the task tree and task-status panel from the latest roadmap state."""
 
@@ -204,7 +205,11 @@ class VibingScreen(Static):
             self.task_status.clear_tasks("No roadmap tasks found.")
             return
 
-        selected_task_id = self.task_status.sync(task_list, selected_task_id=self._selected_task_id)
+        selected_task_id = self.task_status.sync(
+            task_list,
+            selected_task_id=self._selected_task_id,
+            refresh_execution=refresh_task_status_execution,
+        )
         self._selected_task_id = selected_task_id
         self.plan_tree.update_tasks(
             task_list,
