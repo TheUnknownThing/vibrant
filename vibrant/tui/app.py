@@ -554,7 +554,8 @@ class VibrantApp(App):
             return
 
         input_bar.set_enabled(False)
-        input_bar.set_context("gatekeeper", "sending…")
+        model_name = self.orchestrator_facade.get_config().model if self.orchestrator_facade else "N/A"
+        input_bar.set_context(model_name, "sending…")
         self._set_status("Sending message to Gatekeeper…")
         self._launch_gatekeeper_message(event.text)
         self._refresh_gatekeeper_state()
@@ -1394,10 +1395,12 @@ class VibrantApp(App):
                 question_records=question_records,
                 flash=flash,
             )
+        model_name = self.orchestrator_facade.get_config().model if self.orchestrator_facade else "N/A"
+        
         if questions and not self._gatekeeper_is_busy():
             self._set_banner(None)
             input_bar.set_enabled(True)
-            input_bar.set_context("gatekeeper", "awaiting user input")
+            input_bar.set_context(model_name, "awaiting user input")
             input_bar.set_placeholder(self._default_input_placeholder())
             self._set_status("awaiting user input")
             if flash and self._notification_bell_enabled():
@@ -1406,22 +1409,22 @@ class VibrantApp(App):
         elif self._gatekeeper_is_busy():
             self._set_banner("Gatekeeper is responding…")
             input_bar.set_enabled(False)
-            input_bar.set_context("gatekeeper", "running… · Esc to interrupt")
+            input_bar.set_context(model_name, "running… · Esc to interrupt")
             input_bar.set_placeholder("Gatekeeper is responding… Press Esc to interrupt.")
         else:
             self._set_banner(None)
             if normalized_status is WorkflowStatus.INIT:
                 input_bar.set_enabled(True)
-                input_bar.set_context("gatekeeper", "describe your goal")
+                input_bar.set_context(model_name, "describe your goal")
             elif normalized_status is WorkflowStatus.PLANNING:
                 input_bar.set_enabled(True)
-                input_bar.set_context("gatekeeper", "planning")
+                input_bar.set_context(model_name, "planning")
             elif normalized_status is WorkflowStatus.PAUSED:
                 input_bar.set_enabled(True)
-                input_bar.set_context("workflow", "paused")
+                input_bar.set_context(model_name, "paused")
             else:
                 input_bar.set_enabled(True)
-                input_bar.set_context("gatekeeper", "feedback")
+                input_bar.set_context(model_name, "feedback")
             input_bar.set_placeholder(self._default_input_placeholder())
 
         self._known_pending_questions = tuple(questions)
