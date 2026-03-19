@@ -7,8 +7,14 @@ import pytest
 
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.types import AttemptStatus
-from vibrant.orchestrator.types import AgentStreamEvent, ConversationSummary
-from vibrant.orchestrator.types import WorkflowStatus
+from vibrant.orchestrator.types import (
+    AgentStreamEvent,
+    ConversationSummary,
+    QuestionPriority,
+    QuestionStatus,
+    QuestionView,
+    WorkflowStatus,
+)
 from vibrant.tui.app import VibrantApp
 from vibrant.tui.widgets.input_bar import InputBar
 
@@ -55,6 +61,30 @@ class _FakeAgentOutput:
 
     def ingest_stream_event(self, event: AgentStreamEvent) -> None:
         self.ingested_events.append(event)
+
+
+class _FakeChatPanel:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def set_gatekeeper_state(self, **kwargs: object) -> None:
+        self.calls.append(kwargs)
+
+
+class _FakeInputPanel:
+    def __init__(self) -> None:
+        self.enabled: bool | None = None
+        self.context: tuple[str | None, str] | None = None
+        self.placeholder: str | None = None
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+
+    def set_context(self, model: str | None = None, status: str = "") -> None:
+        self.context = (model, status)
+
+    def set_placeholder(self, text: str) -> None:
+        self.placeholder = text
 
 
 def _summary(conversation_id: str) -> ConversationSummary:
@@ -138,6 +168,99 @@ def test_app_bar_falls_back_to_current_directory_as_subtitle(monkeypatch) -> Non
     app = VibrantApp()
 
     assert app.sub_title == "/tmp/vibrant-cwd"
+
+
+def test_refresh_gatekeeper_state_uses_app_bar_and_chat_highlight_for_pending_questions(monkeypatch) -> None:
+    app = VibrantApp(cwd="/tmp/vibrant-active-dir")
+    chat_panel = _FakeChatPanel()
+    input_panel = _FakeInputPanel()
+    statuses: list[str] = []
+    notifications: list[tuple[str, str]] = []
+    banners: list[str | None] = []
+    question = QuestionView(
+        question_id="question-1",
+        text="Should we keep the existing layout?",
+        priority=QuestionPriority.BLOCKING,
+        blocking_scope="workflow",
+        status=QuestionStatus.PENDING,
+    )
+
+    app.orchestrator_facade = SimpleNamespace(
+        get_workflow_status=lambda: WorkflowStatus.EXECUTING,
+        gatekeeper_busy=lambda: False,
+    )
+    monkeypatch.setattr(app, "_chat_panel", lambda: chat_panel)
+    monkeypatch.setattr(app, "_input_bar", lambda: input_panel)
+    monkeypatch.setattr(app, "_list_question_records", lambda: [question])
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+    monkeypatch.setattr(app, "_set_banner", banners.append)
+    monkeypatch.setattr(app, "_notification_bell_enabled", lambda: False)
+    monkeypatch.setattr(app, "notify", lambda message, *, severity="information", **kwargs: notifications.append((message, severity)))
+
+    app._refresh_gatekeeper_state(force_flash=True)
+
+    assert app.sub_title == "/tmp/vibrant-active-dir"
+    assert chat_panel.calls == [
+        {
+            "status": WorkflowStatus.EXECUTING,
+            "question_records": [question],
+            "flash": True,
+        }
+    ]
+    assert input_panel.enabled is True
+    assert input_panel.context == ("gatekeeper", "awaiting user input")
+    assert input_panel.placeholder == InputBar.DEFAULT_PLACEHOLDER
+    assert banners == [None]
+    assert statuses == ["awaiting user input"]
+    assert notifications == []
+
+
+def test_refresh_gatekeeper_state_does_not_flash_existing_questions_on_first_sync(monkeypatch) -> None:
+    app = VibrantApp(cwd="/tmp/vibrant-active-dir")
+    chat_panel = _FakeChatPanel()
+    input_panel = _FakeInputPanel()
+    question = QuestionView(
+        question_id="question-1",
+        text="Should we keep the existing layout?",
+        priority=QuestionPriority.BLOCKING,
+        blocking_scope="workflow",
+        status=QuestionStatus.PENDING,
+    )
+
+    app.orchestrator_facade = SimpleNamespace(
+        get_workflow_status=lambda: WorkflowStatus.EXECUTING,
+        gatekeeper_busy=lambda: False,
+    )
+    monkeypatch.setattr(app, "_chat_panel", lambda: chat_panel)
+    monkeypatch.setattr(app, "_input_bar", lambda: input_panel)
+    monkeypatch.setattr(app, "_list_question_records", lambda: [question])
+    monkeypatch.setattr(app, "_set_status", lambda _: None)
+    monkeypatch.setattr(app, "_set_banner", lambda _: None)
+    monkeypatch.setattr(app, "_notification_bell_enabled", lambda: False)
+
+    app._refresh_gatekeeper_state()
+
+    assert chat_panel.calls == [
+        {
+            "status": WorkflowStatus.EXECUTING,
+            "question_records": [question],
+            "flash": False,
+        }
+    ]
+
+
+def test_handle_task_result_awaiting_user_updates_status_without_popup(monkeypatch) -> None:
+    app = VibrantApp()
+    statuses: list[str] = []
+    notifications: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+    monkeypatch.setattr(app, "notify", lambda message, *, severity="information", **kwargs: notifications.append((message, severity)))
+
+    app._handle_task_result(SimpleNamespace(task_id="task-1", outcome="awaiting_user", error=None, worktree_path=None))
+
+    assert statuses == ["awaiting user input"]
+    assert notifications == []
 
 
 @pytest.mark.asyncio

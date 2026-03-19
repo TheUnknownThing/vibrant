@@ -153,9 +153,9 @@ class TaskStatusView(Static):
                 yield ProgressBar(total=1, show_percentage=False, show_eta=False, id="task-status-progress-bar")
             yield Static("", id="task-status-progress-copy")
             with VerticalScroll(id="task-status-scroll"):
-                yield Static("", id="task-status-task-details", classes="task-status-section")
-                yield Static("", id="task-status-execution-details", classes="task-status-section")
-                yield Static("", id="task-status-activity-details", classes="task-status-section")
+                yield Static("", id="task-status-task-details", classes="task-status-section", markup=False)
+                yield Static("", id="task-status-execution-details", classes="task-status-section", markup=False)
+                yield Static("", id="task-status-activity-details", classes="task-status-section", markup=False)
 
     def on_mount(self) -> None:
         self._refresh_view()
@@ -721,11 +721,12 @@ def _activity_lines_from_event(event: CanonicalEvent) -> list[str]:
     if item_type == "reasoning":
         return []
     if item_type in {"commandexecution", "command_execution"}:
-        command = item.get("command")
+        command = str(item.get("command") or "").strip()
+        command_top_line = command.splitlines()[0] if command else "<no command>"
         exit_code = item.get("exitCode")
         duration_ms = item.get("durationMs")
         status = "running" if exit_code is None else "ok" if exit_code == 0 else "failed"
-        line = f"Command [{status}] {command or 'command'}"
+        line = f"Command [{status}] {command_top_line}"
         if isinstance(duration_ms, int):
             line = f"{line} ({duration_ms}ms)"
         return [line]

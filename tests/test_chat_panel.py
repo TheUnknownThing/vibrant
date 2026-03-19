@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from textual.app import App, ComposeResult
+from textual.widgets import Static
 
 from vibrant.orchestrator.types import (
     AgentConversationEntry,
@@ -149,6 +150,113 @@ def test_conversation_view_splits_staggered_thinking_around_tool_output():
     assert view._conversation.entries[2].text == "Second thought."
 
 
+def test_conversation_view_starts_new_entry_after_invisible_progress_event() -> None:
+    view = ConversationView()
+    for sequence, event_type, text, payload, item_id in (
+        (1, "conversation.assistant.message.delta", "First sentence.", None, "msg-1"),
+        (
+            2,
+            "conversation.progress",
+            None,
+            {"item_type": "reasoning", "item": {"id": "progress-1", "type": "reasoning", "text": "Hidden"}},
+            "progress-1",
+        ),
+        (3, "conversation.assistant.message.delta", "Second sentence.", None, "msg-1"),
+    ):
+        view.ingest_stream_event(
+            AgentStreamEvent(
+                conversation_id="gatekeeper-1",
+                entry_id=f"evt-{sequence}",
+                source_event_id=None,
+                sequence=sequence,
+                agent_id="gatekeeper-agent",
+                run_id="gatekeeper-run-1",
+                turn_id="turn-1",
+                item_id=item_id,
+                type=event_type,
+                text=text,
+                payload=payload,
+                created_at=f"2026-03-13T00:00:0{sequence}Z",
+            )
+        )
+
+    assert view._conversation is not None
+    assert [entry.kind for entry in view._conversation.entries] == ["message", "message"]
+    assert [entry.text for entry in view._conversation.entries] == ["First sentence.", "Second sentence."]
+
+
+def test_conversation_view_merges_mcp_tool_usage_into_tool_entry() -> None:
+    view = ConversationView()
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-1",
+            source_event_id=None,
+            sequence=1,
+            agent_id="gatekeeper-agent",
+            run_id="gatekeeper-run-1",
+            turn_id="turn-1",
+            item_id="tool-1",
+            type="conversation.tool_call.started",
+            text="vibrant.read_resource",
+            payload={
+                "tool_name": "vibrant.read_resource",
+                "arguments": {
+                    "kind": "mcp.resource.read",
+                    "binding_id": "binding-1",
+                    "uri": "resource://roadmap",
+                },
+            },
+            created_at="2026-03-13T00:00:01Z",
+        )
+    )
+    view.ingest_stream_event(
+        AgentStreamEvent(
+            conversation_id="gatekeeper-1",
+            entry_id="evt-2",
+            source_event_id=None,
+            sequence=2,
+            agent_id="gatekeeper-agent",
+            run_id="gatekeeper-run-1",
+            turn_id="turn-1",
+            item_id="tool-1",
+            type="conversation.tool_call.completed",
+            text=None,
+            payload={
+                "tool_name": "vibrant.read_resource",
+                "result": {
+                    "binding_id": "binding-1",
+                    "resource_name": "roadmap",
+                    "resource_uri": "resource://roadmap",
+                    "payload": "hello world",
+                },
+            },
+            created_at="2026-03-13T00:00:02Z",
+        )
+    )
+
+    assert view._conversation is not None
+    assert len(view._conversation.entries) == 1
+    entry = view._conversation.entries[0]
+    assert entry.kind == "tool_call"
+    assert entry.text == ""
+    assert entry.payload is not None
+    assert entry.payload["arguments"] == {
+        "kind": "mcp.resource.read",
+        "binding_id": "binding-1",
+        "uri": "resource://roadmap",
+    }
+    assert entry.payload["mcp_usage"]["resource_uri"] == "resource://roadmap"
+
+    conversation = view.snapshot_conversation()
+    blocks = _render_blocks(conversation)
+
+    assert len(blocks) == 1
+    assert isinstance(blocks[0].parts[0], ToolCallPart)
+    assert isinstance(blocks[0].parts[1], TextPart)
+    assert '"payload": "hello world"' in blocks[0].parts[1].plain_text()
+
+
 def test_chat_panel_uses_question_records_for_summary():
     panel = ChatPanel()
     panel.set_gatekeeper_state(
@@ -175,13 +283,10 @@ def test_chat_panel_uses_question_records_for_summary():
 
     summary = panel.get_question_summary_text()
 
-    assert "What should happen after login?" in summary
-    assert "Take the user to the dashboard." in summary
-    assert "Should the roadmap include mobile support?" in summary
-    assert "awaiting your answer" in summary
+    assert summary == ""
 
 
-def test_chat_panel_summary_shows_recent_withdrawn_questions() -> None:
+def test_chat_panel_summary_only_shows_pending_questions() -> None:
     panel = ChatPanel()
     panel.set_gatekeeper_state(
         status="executing",
@@ -222,11 +327,7 @@ def test_chat_panel_summary_shows_recent_withdrawn_questions() -> None:
 
     summary = panel.get_question_summary_text()
 
-    assert "Legacy question" not in summary
-    assert "Keep desktop only?" in summary
-    assert "Do we need offline mode?" in summary
-    assert "Should we add import/export in v1?" in summary
-    assert "Status: no longer needed" in summary
+    assert summary == ""
 
 
 
@@ -329,6 +430,58 @@ async def test_chat_panel_renders_conversation_with_renderer_blocks() -> None:
         assert blocks[1].query_one(ReasoningPart).plain_text().startswith("Reasoning...")
         assert blocks[1].query_one(ToolCallPart).plain_text() == "Tool · git diff · done"
         assert list(blocks[1].query(TextPart))[-1].source == "I found the **risky** changes."
+
+
+@pytest.mark.asyncio
+async def test_chat_panel_renders_pending_question_as_inline_gatekeeper_block() -> None:
+    conversation = AgentConversationView(
+        conversation_id="gatekeeper-1",
+        run_ids=["gatekeeper-run-1"],
+        active_turn_id=None,
+        entries=[
+            AgentConversationEntry(
+                role="assistant",
+                kind="message",
+                turn_id="turn-1",
+                text="I need one decision before I continue.",
+                payload=None,
+                started_at="2026-03-13T00:00:04Z",
+                finished_at="2026-03-13T00:00:04Z",
+            ),
+        ],
+        updated_at="2026-03-13T00:00:04Z",
+    )
+
+    app = ChatPanelHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        panel = app.query_one(ChatPanel)
+
+        panel.bind_conversation(conversation)
+        panel.set_gatekeeper_state(
+            status="executing",
+            question_records=[
+                QuestionView(
+                    question_id="q-1",
+                    text="Choose Option A or Option B.",
+                    priority=QuestionPriority.BLOCKING,
+                    blocking_scope="workflow",
+                    status=QuestionStatus.PENDING,
+                )
+            ],
+            flash=False,
+        )
+        await pilot.pause()
+
+        region = panel.query_one(ConversationRegion)
+        blocks = list(region.query(MessageBlockWidget))
+
+        assert len(blocks) == 2
+        assert blocks[0].has_class("assistant-msg") is True
+        assert blocks[1].has_class("assistant-msg") is True
+        assert blocks[1].has_class("question-msg") is True
+        assert blocks[1].query_one(".conversation-role", Static).render().plain == "Gatekeeper Question"
+        assert list(blocks[1].query(TextPart))[-1].source == "Choose Option A or Option B."
 
 
 def test_render_blocks_groups_assistant_turn_parts_and_omits_turn_status() -> None:
