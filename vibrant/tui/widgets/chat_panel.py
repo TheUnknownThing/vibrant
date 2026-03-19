@@ -95,6 +95,7 @@ class ChatPanel(Static):
 
         if self._conversation is not None:
             self._conversation.ingest_stream_event(event)
+            self._bound_conversation = self._conversation.snapshot_conversation()
 
     def clear_conversation(self) -> None:
         """Clear the active conversation view."""

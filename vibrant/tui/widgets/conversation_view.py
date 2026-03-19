@@ -356,6 +356,11 @@ class ConversationView(Static):
         self._conversation = None
         self._render_once()
 
+    def snapshot_conversation(self) -> AgentConversationView | None:
+        """Return a detached copy of the currently rendered conversation."""
+
+        return _clone_conversation(self._conversation)
+
     def _render_once(self) -> None:
         if not self.is_mounted or self._scroll is None:
             return
