@@ -722,7 +722,7 @@ def _activity_lines_from_event(event: CanonicalEvent) -> list[str]:
         return []
     if item_type in {"commandexecution", "command_execution"}:
         command = str(item.get("command") or "").strip()
-        command_top_line = command.splitlines()[0]
+        command_top_line = command.splitlines()[0] if command else "<no command>"
         exit_code = item.get("exitCode")
         duration_ms = item.get("durationMs")
         status = "running" if exit_code is None else "ok" if exit_code == 0 else "failed"
