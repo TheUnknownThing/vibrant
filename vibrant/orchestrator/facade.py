@@ -10,6 +10,7 @@ from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
+from vibrant.orchestrator.bootstrap import Orchestrator
 
 from .policy.gatekeeper_loop.questions import current_pending_question, select_pending_question_by_text
 from .policy.gatekeeper_loop.transitions import (
@@ -135,7 +136,7 @@ class _RunReadView:
 class OrchestratorFacade:
     """UI-facing facade backed by the layered interface adapter."""
 
-    def __init__(self, orchestrator) -> None:
+    def __init__(self, orchestrator: Orchestrator) -> None:
         self._orchestrator = orchestrator
         self._control_plane = orchestrator._control_plane
         self.roles = _RoleReadView(self)
