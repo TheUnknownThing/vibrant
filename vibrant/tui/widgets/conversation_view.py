@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -10,6 +12,9 @@ from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Markdown, Static
 
 from ...orchestrator.types import AgentConversationEntry, AgentConversationView, AgentStreamEvent
+
+ENTRY_PROJECTION_KEY = "_projection"
+MCP_USAGE_KEY = "mcp_usage"
 
 MessageRole = Literal["user", "assistant", "system"]
 ReasoningStatus = Literal["in_progress", "completed"]
@@ -403,14 +408,18 @@ def _pending_question_text(pending_questions: tuple[str, ...]) -> str:
 
 def _tool_body(entry: AgentConversationEntry) -> str:
     payload = entry.payload or {}
-    result = payload.get("result")
-    if isinstance(result, str) and result.strip():
-        return result.strip()
+    result_text = _json_value_text(payload.get("result"))
+    if result_text:
+        return result_text
 
     text = entry.text.strip()
     title = _tool_name(entry)
     if text and text != title:
         return text
+
+    arguments_text = _json_value_text(payload.get("arguments"))
+    if arguments_text:
+        return arguments_text
     return ""
 
 
@@ -622,42 +631,57 @@ def _apply_stream_event(conversation: AgentConversationView, event: AgentStreamE
         return
 
     if event.type.endswith(".delta"):
-        target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
+        target = _find_open_entry(
+            entries,
+            role=role,
+            kind=kind,
+            turn_id=event.turn_id,
+            item_id=event.item_id,
+            sequence=event.sequence,
+        )
         if target is None:
             entries.append(
                 AgentConversationEntry(
                     role=role,
                     kind=kind,
                     turn_id=event.turn_id,
-                    text=event.text or "",
-                    payload=event.payload,
+                    text=_entry_text(event, kind=kind),
+                    payload=_merge_entry_payload(None, event=event, kind=kind),
                     started_at=event.created_at,
                     finished_at=None,
                 )
             )
             return
-        target.text = f"{target.text}{event.text or ''}"
-        target.payload = event.payload or target.payload
+        target.text = f"{target.text}{_entry_text(event, kind=kind)}"
+        target.payload = _merge_entry_payload(target.payload, event=event, kind=kind)
         return
 
-    target = _find_open_entry(entries, role=role, kind=kind, turn_id=event.turn_id)
+    target = _find_open_entry(
+        entries,
+        role=role,
+        kind=kind,
+        turn_id=event.turn_id,
+        item_id=event.item_id,
+        sequence=event.sequence,
+    )
     if target is None:
         entries.append(
             AgentConversationEntry(
                 role=role,
                 kind=kind,
                 turn_id=event.turn_id,
-                text=event.text or "",
-                payload=event.payload,
+                text=_entry_text(event, kind=kind),
+                payload=_merge_entry_payload(None, event=event, kind=kind),
                 started_at=event.created_at,
-                finished_at=event.created_at,
+                finished_at=_entry_finished_at(event, kind=kind),
             )
         )
         return
 
-    if event.text and not (target.text == event.text or target.text.endswith(event.text)):
-        target.text = f"{target.text}{event.text}"
-    target.payload = event.payload or target.payload
+    event_text = _entry_text(event, kind=kind)
+    if event_text and not (target.text == event_text or target.text.endswith(event_text)):
+        target.text = f"{target.text}{event_text}"
+    target.payload = _merge_entry_payload(target.payload, event=event, kind=kind)
     target.finished_at = event.created_at
 
 
@@ -697,6 +721,8 @@ def _find_open_entry(
     role: str,
     kind: str,
     turn_id: str | None,
+    item_id: str | None,
+    sequence: int,
 ) -> AgentConversationEntry | None:
     if not entries:
         return None
@@ -706,7 +732,153 @@ def _find_open_entry(
         return None
     if entry.turn_id != turn_id or entry.finished_at is not None:
         return None
+    if _entry_item_id(entry) != item_id:
+        return None
+    last_sequence = _entry_projection(entry.payload).get("last_sequence")
+    if not isinstance(last_sequence, int) or last_sequence != sequence - 1:
+        return None
     return entry
+
+
+def _entry_text(event: AgentStreamEvent, *, kind: str) -> str:
+    if kind == "tool_call" and event.type == "conversation.tool_call.started":
+        return ""
+    return event.text or ""
+
+
+def _entry_finished_at(event: AgentStreamEvent, *, kind: str) -> str | None:
+    if kind == "tool_call" and event.type == "conversation.tool_call.started":
+        return None
+    return event.created_at
+
+
+def _merge_entry_payload(
+    existing_payload: object | None,
+    *,
+    event: AgentStreamEvent,
+    kind: str,
+) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    if isinstance(existing_payload, Mapping):
+        payload.update(existing_payload)
+    if isinstance(event.payload, Mapping):
+        payload.update(event.payload)
+
+    projection = _entry_projection(payload)
+    projection["last_sequence"] = event.sequence
+    if event.item_id is not None:
+        projection["item_id"] = event.item_id
+    if event.source_event_id is not None:
+        projection["source_event_id"] = event.source_event_id
+    payload[ENTRY_PROJECTION_KEY] = projection
+
+    if kind == "tool_call":
+        mcp_usage = _merge_mcp_usage(payload, fallback_tool_name=_tool_name_from_payload(payload, fallback=event.text))
+        if mcp_usage is not None:
+            payload[MCP_USAGE_KEY] = mcp_usage
+
+    return payload
+
+
+def _entry_projection(payload: object | None) -> dict[str, object]:
+    if not isinstance(payload, Mapping):
+        return {}
+    metadata = payload.get(ENTRY_PROJECTION_KEY)
+    if isinstance(metadata, Mapping):
+        return dict(metadata)
+    return {}
+
+
+def _entry_item_id(entry: AgentConversationEntry) -> str | None:
+    metadata = _entry_projection(entry.payload)
+    item_id = metadata.get("item_id")
+    if isinstance(item_id, str) and item_id:
+        return item_id
+    payload = entry.payload
+    if not isinstance(payload, Mapping):
+        return None
+    raw_item_id = payload.get("item_id")
+    if isinstance(raw_item_id, str) and raw_item_id:
+        return raw_item_id
+    return None
+
+
+def _tool_name_from_payload(payload: object | None, *, fallback: str | None) -> str | None:
+    if isinstance(payload, Mapping):
+        tool_name = payload.get("tool_name") or payload.get("name")
+        if isinstance(tool_name, str) and tool_name.strip():
+            return tool_name.strip()
+    if isinstance(fallback, str) and fallback.strip():
+        return fallback.strip()
+    return None
+
+
+def _merge_mcp_usage(payload: Mapping[str, object], *, fallback_tool_name: str | None) -> dict[str, object] | None:
+    usage_value = payload.get(MCP_USAGE_KEY)
+    usage = dict(usage_value) if isinstance(usage_value, Mapping) else {}
+
+    tool_name = _tool_name_from_payload(payload, fallback=fallback_tool_name)
+    arguments = payload.get("arguments")
+    result = payload.get("result")
+    error = payload.get("error")
+
+    if tool_name is not None:
+        usage["tool_name"] = tool_name
+    if arguments not in (None, "", {}):
+        usage["arguments"] = arguments
+    if result not in (None, "", {}):
+        usage["result"] = result
+    if error not in (None, "", {}):
+        usage["error"] = error
+
+    if isinstance(arguments, Mapping):
+        kind = arguments.get("kind")
+        if isinstance(kind, str) and kind.strip():
+            usage["kind"] = kind.strip()
+        for source_key, target_key in (
+            ("binding_id", "binding_id"),
+            ("resource_name", "resource_name"),
+            ("resource_uri", "resource_uri"),
+            ("uri", "resource_uri"),
+        ):
+            value = arguments.get(source_key)
+            if isinstance(value, str) and value.strip():
+                usage[target_key] = value.strip()
+
+    if isinstance(result, Mapping):
+        for key in ("binding_id", "resource_name", "resource_uri"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                usage[key] = value.strip()
+
+    if not _looks_like_mcp_usage(tool_name=tool_name, arguments=arguments, result=result):
+        return dict(usage_value) if isinstance(usage_value, Mapping) else None
+
+    usage.setdefault("transport", "mcp")
+    return usage or None
+
+
+def _looks_like_mcp_usage(*, tool_name: str | None, arguments: object, result: object) -> bool:
+    if isinstance(tool_name, str) and tool_name.startswith("vibrant."):
+        return True
+    for candidate in (arguments, result):
+        if isinstance(candidate, Mapping):
+            marker = candidate.get("kind")
+            if isinstance(marker, str) and marker.startswith("mcp."):
+                return True
+            for key in ("binding_id", "resource_name", "resource_uri", "uri"):
+                value = candidate.get(key)
+                if isinstance(value, str) and value.strip():
+                    return True
+    return False
+
+
+def _json_value_text(value: object) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value in (None, "", {}):
+        return ""
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
 
 def indent(text: str) -> str:
