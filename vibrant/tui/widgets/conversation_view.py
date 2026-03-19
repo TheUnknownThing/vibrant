@@ -55,6 +55,7 @@ class ReasoningPart(Vertical):
     def __init__(self, status: ReasoningStatus, content: TextPart, **kwargs: object) -> None:
         super().__init__(classes="conversation-part reasoning-part", **kwargs)
         self.styles.height = "auto"
+        self.styles.opacity = 0.5
         self.status: ReasoningStatus = status
         self.content = content
         self.content.add_class("reasoning-content")
