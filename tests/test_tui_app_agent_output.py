@@ -208,6 +208,40 @@ def test_refresh_gatekeeper_state_uses_app_bar_and_chat_highlight_for_pending_qu
     assert notifications == []
 
 
+def test_refresh_gatekeeper_state_does_not_flash_existing_questions_on_first_sync(monkeypatch) -> None:
+    app = VibrantApp(cwd="/tmp/vibrant-active-dir")
+    chat_panel = _FakeChatPanel()
+    input_panel = _FakeInputPanel()
+    question = QuestionView(
+        question_id="question-1",
+        text="Should we keep the existing layout?",
+        priority=QuestionPriority.BLOCKING,
+        blocking_scope="workflow",
+        status=QuestionStatus.PENDING,
+    )
+
+    app.orchestrator_facade = SimpleNamespace(
+        get_workflow_status=lambda: WorkflowStatus.EXECUTING,
+        gatekeeper_busy=lambda: False,
+    )
+    monkeypatch.setattr(app, "_chat_panel", lambda: chat_panel)
+    monkeypatch.setattr(app, "_input_bar", lambda: input_panel)
+    monkeypatch.setattr(app, "_list_question_records", lambda: [question])
+    monkeypatch.setattr(app, "_set_status", lambda _: None)
+    monkeypatch.setattr(app, "_set_banner", lambda _: None)
+    monkeypatch.setattr(app, "_notification_bell_enabled", lambda: False)
+
+    app._refresh_gatekeeper_state()
+
+    assert chat_panel.calls == [
+        {
+            "status": WorkflowStatus.EXECUTING,
+            "question_records": [question],
+            "flash": False,
+        }
+    ]
+
+
 def test_handle_task_result_awaiting_user_updates_status_without_popup(monkeypatch) -> None:
     app = VibrantApp()
     statuses: list[str] = []

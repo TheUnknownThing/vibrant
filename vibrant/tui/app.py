@@ -177,6 +177,7 @@ class VibrantApp(App):
         self._roadmap_runner_task: asyncio.Task[None] | None = None
         self._gatekeeper_request_task: asyncio.Task[None] | None = None
         self._known_pending_questions: tuple[str, ...] = ()
+        self._gatekeeper_state_initialized = False
         self._paused_return_status: WorkflowStatus | None = None
         self._banner_text: str | None = None
         self._todo_exit_message: str | None = None
@@ -760,6 +761,8 @@ class VibrantApp(App):
 
     def _initialize_project_setup(self) -> None:
         self._close_orchestrator_subscriptions()
+        self._known_pending_questions = ()
+        self._gatekeeper_state_initialized = False
         project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._project_root = project_root
         vibrant_dir = project_root / DEFAULT_CONFIG_DIR
@@ -1305,7 +1308,7 @@ class VibrantApp(App):
             self._paused_return_status = normalized_status
 
         new_questions = [question for question in questions if question not in self._known_pending_questions]
-        flash = force_flash or bool(new_questions)
+        flash = force_flash or (self._gatekeeper_state_initialized and bool(new_questions))
         with suppress(Exception):
             chat_panel.set_gatekeeper_state(
                 status=normalized_status or status,
@@ -1343,6 +1346,7 @@ class VibrantApp(App):
             input_bar.set_placeholder(self._default_input_placeholder())
 
         self._known_pending_questions = tuple(questions)
+        self._gatekeeper_state_initialized = True
 
     def _default_input_placeholder(self) -> str:
         return (
