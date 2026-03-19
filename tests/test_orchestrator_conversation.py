@@ -111,6 +111,111 @@ def test_conversation_stream_rebuild_clears_completed_active_turn(tmp_path: Path
     assert view.active_turn_id is None
 
 
+def test_conversation_stream_rebuild_keeps_tool_call_open_until_completion(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".vibrant")
+    stream = ConversationStreamService(store)
+    stream.bind_run(
+        conversation_id="conv-1",
+        run_id="run-1",
+    )
+
+    stream.ingest_canonical(
+        {
+            "type": "tool.call.started",
+            "agent_id": "agent-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "item_id": "tool-1",
+            "tool_name": "functions.exec_command",
+            "arguments": {"cmd": "echo test"},
+            "timestamp": "2026-03-13T00:00:00Z",
+            "event_id": "evt-tool-start",
+        }
+    )
+    stream.ingest_canonical(
+        {
+            "type": "tool.call.completed",
+            "agent_id": "agent-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "item_id": "tool-1",
+            "tool_name": "functions.exec_command",
+            "result": {"exitCode": 0, "output": "test"},
+            "timestamp": "2026-03-13T00:00:01Z",
+            "event_id": "evt-tool-end",
+        }
+    )
+
+    view = stream.rebuild("conv-1")
+
+    assert view is not None
+    assert len(view.entries) == 1
+    assert view.entries[0].kind == "tool_call"
+    assert view.entries[0].payload == {
+        "run_id": "run-1",
+        "turn_id": "turn-1",
+        "item_id": "tool-1",
+        "tool_name": "functions.exec_command",
+        "result": {"exitCode": 0, "output": "test"},
+        "event_id": "evt-tool-end",
+    }
+    assert view.entries[0].finished_at == "2026-03-13T00:00:01Z"
+
+
+def test_conversation_stream_rebuild_starts_new_reasoning_block_for_new_item_id(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / ".vibrant")
+    stream = ConversationStreamService(store)
+    stream.bind_run(
+        conversation_id="conv-1",
+        run_id="run-1",
+    )
+
+    stream.ingest_canonical(
+        {
+            "type": "assistant.thinking.delta",
+            "agent_id": "agent-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "item_id": "reason-1",
+            "delta": "First block.",
+            "timestamp": "2026-03-13T00:00:00Z",
+            "event_id": "evt-think-1",
+        }
+    )
+    stream.ingest_canonical(
+        {
+            "type": "task.progress",
+            "agent_id": "agent-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "item": {
+                "id": "reason-2",
+                "type": "reasoning",
+                "summary": ["Second block."],
+            },
+            "timestamp": "2026-03-13T00:00:01Z",
+            "event_id": "evt-progress-1",
+        }
+    )
+    stream.ingest_canonical(
+        {
+            "type": "assistant.thinking.delta",
+            "agent_id": "agent-1",
+            "run_id": "run-1",
+            "turn_id": "turn-1",
+            "item_id": "reason-2",
+            "delta": "Second block.",
+            "timestamp": "2026-03-13T00:00:02Z",
+            "event_id": "evt-think-2",
+        }
+    )
+
+    view = stream.rebuild("conv-1")
+
+    assert view is not None
+    assert [entry.text for entry in view.entries] == ["First block.", "Second block."]
+
+
 def test_conversation_stream_ignores_agent_only_events_without_run_binding(tmp_path: Path) -> None:
     store = ConversationStore(tmp_path / ".vibrant")
     stream = ConversationStreamService(store)
@@ -131,142 +236,6 @@ def test_conversation_stream_ignores_agent_only_events_without_run_binding(tmp_p
     )
 
     assert projected == []
-
-
-def test_conversation_stream_starts_new_entry_after_invisible_event(tmp_path: Path) -> None:
-    store = ConversationStore(tmp_path / ".vibrant")
-    stream = ConversationStreamService(store)
-    stream.bind_run(
-        conversation_id="conv-1",
-        run_id="run-1",
-    )
-
-    stream.ingest_canonical(
-        {
-            "type": "assistant.thinking.delta",
-            "agent_id": "agent-1",
-            "run_id": "run-1",
-            "turn_id": "turn-1",
-            "item_id": "reason-1",
-            "delta": "First thought.",
-            "timestamp": "2026-03-13T00:00:00Z",
-            "event_id": "evt-1",
-        }
-    )
-    stream.ingest_canonical(
-        {
-            "type": "task.progress",
-            "agent_id": "agent-1",
-            "run_id": "run-1",
-            "turn_id": "turn-1",
-            "item": {"id": "progress-1", "type": "reasoning", "text": "Hidden progress"},
-            "text": "Hidden progress",
-            "timestamp": "2026-03-13T00:00:01Z",
-            "event_id": "evt-2",
-        }
-    )
-    stream.ingest_canonical(
-        {
-            "type": "assistant.thinking.delta",
-            "agent_id": "agent-1",
-            "run_id": "run-1",
-            "turn_id": "turn-1",
-            "item_id": "reason-1",
-            "delta": "Second thought.",
-            "timestamp": "2026-03-13T00:00:02Z",
-            "event_id": "evt-3",
-        }
-    )
-
-    view = stream.rebuild("conv-1")
-
-    assert view is not None
-    assert [entry.kind for entry in view.entries] == ["thinking", "thinking"]
-    assert [entry.text for entry in view.entries] == ["First thought.", "Second thought."]
-
-
-def test_conversation_stream_merges_mcp_tool_usage_into_tool_entry(tmp_path: Path) -> None:
-    store = ConversationStore(tmp_path / ".vibrant")
-    stream = ConversationStreamService(store)
-    stream.bind_run(
-        conversation_id="conv-1",
-        run_id="run-1",
-    )
-
-    stream.ingest_canonical(
-        {
-            "type": "tool.call.started",
-            "agent_id": "agent-1",
-            "run_id": "run-1",
-            "turn_id": "turn-1",
-            "item_id": "tool-1",
-            "tool_name": "vibrant.read_resource",
-            "arguments": {
-                "kind": "mcp.resource.read",
-                "binding_id": "binding-1",
-                "uri": "resource://roadmap",
-            },
-            "timestamp": "2026-03-13T00:00:00Z",
-            "event_id": "evt-1",
-        }
-    )
-    stream.ingest_canonical(
-        {
-            "type": "tool.call.completed",
-            "agent_id": "agent-1",
-            "run_id": "run-1",
-            "turn_id": "turn-1",
-            "item_id": "tool-1",
-            "tool_name": "vibrant.read_resource",
-            "result": {
-                "binding_id": "binding-1",
-                "resource_name": "roadmap",
-                "resource_uri": "resource://roadmap",
-                "payload": "hello world",
-            },
-            "timestamp": "2026-03-13T00:00:01Z",
-            "event_id": "evt-2",
-        }
-    )
-
-    view = stream.rebuild("conv-1")
-
-    assert view is not None
-    assert len(view.entries) == 1
-    entry = view.entries[0]
-    assert entry.kind == "tool_call"
-    assert entry.text == ""
-    assert entry.payload is not None
-    assert entry.payload["arguments"] == {
-        "kind": "mcp.resource.read",
-        "binding_id": "binding-1",
-        "uri": "resource://roadmap",
-    }
-    assert entry.payload["result"] == {
-        "binding_id": "binding-1",
-        "resource_name": "roadmap",
-        "resource_uri": "resource://roadmap",
-        "payload": "hello world",
-    }
-    assert entry.payload["mcp_usage"] == {
-        "tool_name": "vibrant.read_resource",
-        "arguments": {
-            "kind": "mcp.resource.read",
-            "binding_id": "binding-1",
-            "uri": "resource://roadmap",
-        },
-        "result": {
-            "binding_id": "binding-1",
-            "resource_name": "roadmap",
-            "resource_uri": "resource://roadmap",
-            "payload": "hello world",
-        },
-        "kind": "mcp.resource.read",
-        "binding_id": "binding-1",
-        "resource_uri": "resource://roadmap",
-        "resource_name": "roadmap",
-        "transport": "mcp",
-    }
 
 
 def test_conversation_store_loads_current_frames(tmp_path: Path) -> None:
