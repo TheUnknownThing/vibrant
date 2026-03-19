@@ -42,7 +42,7 @@ def _initialize_git_repo(project_root: Path) -> None:
     _git(project_root, "config", "user.name", "Vibrant Tests")
     _git(project_root, "config", "user.email", "vibrant-tests@example.com")
     (project_root / ".gitignore").write_text(".vibrant/state\n", encoding="utf-8")
-    _git(project_root, "add", ".gitignore")
+    _git(project_root, "add", ".")
     _git(project_root, "commit", "-m", "Initial commit")
 
 

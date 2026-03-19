@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from vibrant.config import RoadmapExecutionMode
+from vibrant.config import RoadmapExecutionMode, VibrantConfig, VibrantConfigPatch
 from vibrant.consensus.roadmap import RoadmapDocument
 from vibrant.models.agent import AgentRecord
 from vibrant.models.consensus import ConsensusDocument
 from vibrant.models.task import TaskInfo
+from vibrant.orchestrator.bootstrap import Orchestrator
 
 from .policy.gatekeeper_loop.questions import current_pending_question, select_pending_question_by_text
 from .policy.gatekeeper_loop.transitions import (
@@ -135,7 +136,7 @@ class _RunReadView:
 class OrchestratorFacade:
     """UI-facing facade backed by the layered interface adapter."""
 
-    def __init__(self, orchestrator) -> None:
+    def __init__(self, orchestrator: Orchestrator) -> None:
         self._orchestrator = orchestrator
         self._control_plane = orchestrator._control_plane
         self.roles = _RoleReadView(self)
@@ -191,6 +192,12 @@ class OrchestratorFacade:
         if isinstance(mode, RoadmapExecutionMode):
             return mode
         return RoadmapExecutionMode(str(mode).strip().lower())
+
+    def get_config(self) -> VibrantConfig:
+        return self._orchestrator.get_config()
+
+    def update_config(self, patch: VibrantConfigPatch) -> VibrantConfig:
+        return self._orchestrator.update_config(patch)
 
     def list_roles(self) -> list[RoleSnapshot]:
         return self._control_plane.list_roles()

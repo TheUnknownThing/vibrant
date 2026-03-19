@@ -113,6 +113,9 @@ def _render_default_config() -> str:
         f'conversation-directory = "{config.conversation_directory}"',
         f'execution-mode = "{config.execution_mode.value}"',
         "",
+        "[validation]",
+        "test-commands = []",
+        "",
     ]
     if config.model_provider is not None:
         lines.insert(4, f'model-provider = "{config.model_provider}"')

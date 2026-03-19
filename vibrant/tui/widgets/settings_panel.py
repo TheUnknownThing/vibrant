@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Select, Static
 
-from ...models import AppSettings, ApprovalMode
+from ...config import VibrantConfig, VibrantConfigPatch
+from ...providers.base import ProviderKind
 
 APPROVAL_OPTIONS = [
-    ("Suggest (ask for everything)", ApprovalMode.SUGGEST.value),
-    ("Auto Edit (auto-approve edits)", ApprovalMode.AUTO_EDIT.value),
-    ("Full Auto (approve all)", ApprovalMode.FULL_AUTO.value),
+    ("Never", "never"),
+    ("On Request", "on-request"),
 ]
 
 EFFORT_OPTIONS = [
@@ -23,7 +24,15 @@ EFFORT_OPTIONS = [
 ]
 
 
-class SettingsPanel(ModalScreen[AppSettings | None]):
+@dataclass(slots=True)
+class SettingsUpdate:
+    """Result payload emitted when the settings panel is saved."""
+
+    working_directory: str | None
+    config_patch: VibrantConfigPatch
+
+
+class SettingsPanel(ModalScreen[SettingsUpdate | None]):
     """Modal settings screen."""
 
     BINDINGS = [
@@ -62,9 +71,21 @@ class SettingsPanel(ModalScreen[AppSettings | None]):
     }
     """
 
-    def __init__(self, settings: AppSettings, **kwargs) -> None:
+    def __init__(
+        self,
+        config: VibrantConfig,
+        *,
+        working_directory: str | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self._settings = settings
+        self._config = config
+        self._working_directory = working_directory
+
+    def _approval_options(self) -> list[tuple[str, str]]:
+        if self._config.provider_kind is ProviderKind.CLAUDE:
+            return [APPROVAL_OPTIONS[0]]
+        return APPROVAL_OPTIONS
 
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-container"):
@@ -72,15 +93,15 @@ class SettingsPanel(ModalScreen[AppSettings | None]):
 
             yield Label("Model:", classes="setting-label")
             yield Input(
-                value=self._settings.default_model,
+                value=self._config.model,
                 placeholder="e.g. gpt-5.3-codex or claude-sonnet-4-5",
                 id="model-input",
             )
 
-            yield Label("Approval Mode:", classes="setting-label")
+            yield Label("Approval Policy:", classes="setting-label")
             yield Select(
-                APPROVAL_OPTIONS,
-                value=self._settings.default_approval_mode.value,
+                self._approval_options(),
+                value=self._config.approval_policy,
                 id="approval-select",
                 allow_blank=False,
             )
@@ -88,14 +109,14 @@ class SettingsPanel(ModalScreen[AppSettings | None]):
             yield Label("Effort:", classes="setting-label")
             yield Select(
                 EFFORT_OPTIONS,
-                value=self._settings.default_effort,
+                value=self._config.reasoning_effort,
                 id="effort-select",
                 allow_blank=False,
             )
 
             yield Label("Working Directory:", classes="setting-label")
             yield Input(
-                value=self._settings.default_cwd or "",
+                value=self._working_directory or "",
                 placeholder="Leave empty for current directory",
                 id="cwd-input",
             )
@@ -110,16 +131,27 @@ class SettingsPanel(ModalScreen[AppSettings | None]):
             approval = self.query_one("#approval-select", Select).value
             effort = self.query_one("#effort-select", Select).value
             cwd = self.query_one("#cwd-input", Input).value.strip()
+            resolved_cwd = cwd or None
 
-            new_settings = AppSettings(
-                default_model=model or self._settings.default_model,
-                default_approval_mode=ApprovalMode(approval) if approval else self._settings.default_approval_mode,
-                default_effort=str(effort) if effort else self._settings.default_effort,
-                default_cwd=cwd or None,
-                codex_binary=self._settings.codex_binary,
-                history_dir=self._settings.history_dir,
+            patch = VibrantConfigPatch(
+                model=model if model and model != self._config.model else None,
+                approval_policy=(
+                    str(approval)
+                    if approval and str(approval) != self._config.approval_policy
+                    else None
+                ),
+                reasoning_effort=(
+                    str(effort)
+                    if effort and str(effort) != self._config.reasoning_effort
+                    else None
+                ),
             )
-            self.dismiss(new_settings)
+            self.dismiss(
+                SettingsUpdate(
+                    working_directory=resolved_cwd,
+                    config_patch=patch,
+                )
+            )
         elif event.button.id == "cancel-btn":
             self.dismiss(None)
 

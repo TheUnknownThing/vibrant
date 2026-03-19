@@ -11,10 +11,12 @@ from vibrant.config import (
     DEFAULT_CONVERSATION_DIRECTORY,
     DEFAULT_WORKTREE_DIRECTORY,
     RoadmapExecutionMode,
+    VibrantConfigPatch,
     VibrantConfigError,
     find_project_root,
     load_config,
     resolve_config_path,
+    update_config,
 )
 from vibrant.providers.base import ProviderKind
 
@@ -150,6 +152,53 @@ class TestLoadConfig:
 
         with pytest.raises(VibrantConfigError, match=r"Invalid TOML in .*vibrant\.toml"):
             load_config(start_path=project_root)
+
+    def test_update_config_persists_typed_patch_and_preserves_other_fields(self, tmp_path):
+        project_root = tmp_path / "project"
+        config_dir = project_root / ".vibrant"
+        config_dir.mkdir(parents=True)
+        (project_root / ".git").mkdir()
+        config_path = config_dir / "vibrant.toml"
+        config_path.write_text(
+            textwrap.dedent(
+                """
+                [provider]
+                kind = "codex"
+                model = "gpt-5.3-codex"
+                approval-policy = "never"
+                reasoning-effort = "medium"
+                extra-config = { persistExtendedHistory = true }
+
+                [orchestrator]
+                execution-mode = "manual"
+
+                [validation]
+                test-commands = ["pytest -q"]
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+
+        updated = update_config(
+            start_path=project_root,
+            patch=VibrantConfigPatch(
+                model="gpt-5.4-codex",
+                approval_policy="on-request",
+                reasoning_effort="high",
+            ),
+        )
+        reloaded = load_config(start_path=project_root)
+
+        assert updated.model == "gpt-5.4-codex"
+        assert updated.approval_policy == "on-request"
+        assert updated.reasoning_effort == "high"
+        assert reloaded.model == "gpt-5.4-codex"
+        assert reloaded.approval_policy == "on-request"
+        assert reloaded.reasoning_effort == "high"
+        assert reloaded.execution_mode is RoadmapExecutionMode.MANUAL
+        assert reloaded.test_commands == ["pytest -q"]
+        assert reloaded.extra_config == {"persistExtendedHistory": True}
 
 
 class TestConfigPathResolution:

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from vibrant.config import VibrantConfigPatch
 from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.types import AttemptStatus
 from vibrant.orchestrator.types import (
@@ -17,6 +18,7 @@ from vibrant.orchestrator.types import (
 )
 from vibrant.tui.app import VibrantApp
 from vibrant.tui.widgets.input_bar import InputBar
+from vibrant.tui.widgets.settings_panel import SettingsUpdate
 
 
 class _FakeSubscription:
@@ -403,3 +405,53 @@ async def test_toggle_pause_pauses_and_resumes_live_policies(monkeypatch) -> Non
         ("Workflow paused.", "information"),
         ("Workflow resumed (executing).", "information"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_model_slash_command_updates_orchestrator_config(monkeypatch) -> None:
+    app = VibrantApp()
+    patches: list[VibrantConfigPatch] = []
+    statuses: list[str] = []
+    reloads: list[bool] = []
+
+    app.orchestrator_facade = SimpleNamespace(
+        update_config=lambda patch: patches.append(patch) or SimpleNamespace(model=patch.model),
+        get_config=lambda: SimpleNamespace(model="gpt-5.3-codex"),
+    )
+    monkeypatch.setattr(app, "_reload_active_project", lambda: reloads.append(True) or True)
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+
+    await app.on_input_bar_slash_command(InputBar.SlashCommand("model", "gpt-5.4-codex", "/model gpt-5.4-codex"))
+
+    assert [patch.model for patch in patches] == ["gpt-5.4-codex"]
+    assert reloads == [True]
+    assert statuses == ["Model set to gpt-5.4-codex"]
+
+
+def test_settings_dismissed_updates_config_via_orchestrator_facade(monkeypatch) -> None:
+    app = VibrantApp()
+    patches: list[VibrantConfigPatch] = []
+    statuses: list[str] = []
+    reloads: list[bool] = []
+
+    app.orchestrator_facade = SimpleNamespace(update_config=lambda patch: patches.append(patch))
+    monkeypatch.setattr(app, "_reload_active_project", lambda: reloads.append(True) or True)
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+
+    app._handle_settings_dismissed(
+        SettingsUpdate(
+            working_directory=None,
+            config_patch=VibrantConfigPatch(
+                model="gpt-5.4-codex",
+                approval_policy="on-request",
+                reasoning_effort="high",
+            ),
+        )
+    )
+
+    assert len(patches) == 1
+    assert patches[0].model == "gpt-5.4-codex"
+    assert patches[0].approval_policy == "on-request"
+    assert patches[0].reasoning_effort == "high"
+    assert reloads == [True]
+    assert statuses == ["Settings updated"]

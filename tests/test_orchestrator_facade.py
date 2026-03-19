@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from vibrant.config import VibrantConfigPatch, load_config
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
 from vibrant.orchestrator import OrchestratorFacade as ExportedFacade, create_orchestrator
 from vibrant.orchestrator.facade import OrchestratorFacade
@@ -88,3 +89,25 @@ def test_facade_restart_failed_task_routes_through_control_plane(tmp_path: Path)
 
     assert restarted.id == "task-1"
     assert calls == ["task-1"]
+
+
+def test_facade_updates_orchestrator_owned_config(tmp_path: Path) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    facade = OrchestratorFacade(orchestrator)
+
+    updated = facade.update_config(
+        VibrantConfigPatch(
+            model="gpt-5.4-codex",
+            approval_policy="on-request",
+            reasoning_effort="high",
+        )
+    )
+    reloaded = load_config(start_path=tmp_path)
+
+    assert facade.get_config().model == "gpt-5.4-codex"
+    assert updated.model == "gpt-5.4-codex"
+    assert updated.approval_policy == "on-request"
+    assert updated.reasoning_effort == "high"
+    assert reloaded.model == "gpt-5.4-codex"
+    assert reloaded.approval_policy == "on-request"
+    assert reloaded.reasoning_effort == "high"

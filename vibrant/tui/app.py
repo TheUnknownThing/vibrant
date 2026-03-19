@@ -21,7 +21,12 @@ from vibrant.orchestrator.types import AgentStreamEvent, AttemptStatus, Conversa
 from vibrant.providers.base import CanonicalEvent
 
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
-from ..config import DEFAULT_CONFIG_DIR, RoadmapExecutionMode, find_project_root
+from ..config import (
+    DEFAULT_CONFIG_DIR,
+    RoadmapExecutionMode,
+    VibrantConfigPatch,
+    find_project_root,
+)
 from ..models import AppSettings
 from ..models.consensus import DEFAULT_CONSENSUS_CONTEXT, ConsensusDocument
 from ..orchestrator import TaskResult, Orchestrator, OrchestratorFacade, OrchestratorSnapshot, create_orchestrator
@@ -31,7 +36,7 @@ from .screens import HelpScreen, InitializationScreen, PlanningScreen, VibingScr
 from .widgets.chat_panel import ChatPanel
 from .widgets.consensus_view import ConsensusView
 from .widgets.input_bar import InputBar
-from .widgets.settings_panel import SettingsPanel
+from .widgets.settings_panel import SettingsPanel, SettingsUpdate
 
 logger = logging.getLogger(__name__)
 OrchestratorFactory = Callable[..., Orchestrator]
@@ -230,26 +235,47 @@ class VibrantApp(App):
         self._close_orchestrator_subscriptions()
 
     def action_open_settings(self) -> None:
-        self.push_screen(SettingsPanel(self._settings), self._handle_settings_dismissed)
+        if self.orchestrator_facade is None:
+            self.notify(
+                f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
+                severity="warning",
+            )
+            return
+        self.push_screen(
+            SettingsPanel(
+                self.orchestrator_facade.get_config(),
+                working_directory=self._settings.default_cwd,
+            ),
+            self._handle_settings_dismissed,
+        )
 
-    def _handle_settings_dismissed(self, result: AppSettings | None) -> None:
+    def _handle_settings_dismissed(self, result: SettingsUpdate | None) -> None:
         if result is None:
             return
 
-        self._settings = result
-        self._refresh_app_bar()
-        self._project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
-        self._initialize_project_setup()
-        self._sync_workspace_screen()
-        self.call_after_refresh(self._refresh_project_views)
-        self._apply_mobile_chrome()
+        if result.working_directory != self._settings.default_cwd:
+            self._settings.default_cwd = result.working_directory
+            if not self._reload_active_project():
+                return
 
-        if not self._project_has_vibrant_state():
-            self._set_status("Project not initialized")
-            self.push_screen(InitializationScreen(self._project_root))
-            return
+        if result.config_patch.has_changes():
+            orchestrator = self.orchestrator_facade
+            if orchestrator is None:
+                self.notify(
+                    f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
+                    severity="warning",
+                )
+                return
+            try:
+                orchestrator.update_config(result.config_patch)
+            except Exception as exc:
+                logger.exception("Failed to update orchestrator config")
+                self.notify(f"Failed to update settings: {exc}", severity="error")
+                self._set_status(f"Settings update failed: {exc}")
+                return
+            if not self._reload_active_project():
+                return
 
-        self._focus_primary_input()
         self._set_status("Settings updated")
 
     async def initialize_project_at(self, target_path: Path) -> bool:
@@ -263,15 +289,26 @@ class VibrantApp(App):
 
         project_root = vibrant_dir.parent
         self._settings.default_cwd = str(project_root)
+        self._reload_active_project()
+        self._set_status(f"Initialized Vibrant project in {project_root}")
+        self.notify(f"Initialized Vibrant project in {project_root}")
+        self.call_after_refresh(self._focus_primary_input)
+        return True
+
+    def _reload_active_project(self) -> bool:
         self._refresh_app_bar()
-        self._project_root = project_root
+        self._project_root = find_project_root(Path(self._settings.default_cwd or os.getcwd()))
         self._initialize_project_setup()
         self._sync_workspace_screen()
         self.call_after_refresh(self._refresh_project_views)
         self._apply_mobile_chrome()
-        self._set_status(f"Initialized Vibrant project in {project_root}")
-        self.notify(f"Initialized Vibrant project in {project_root}")
-        self.call_after_refresh(self._focus_primary_input)
+
+        if not self._project_has_vibrant_state():
+            self._set_status("Project not initialized")
+            self.push_screen(InitializationScreen(self._project_root))
+            return False
+
+        self._focus_primary_input()
         return True
 
     def action_open_help(self) -> None:
@@ -517,7 +554,8 @@ class VibrantApp(App):
             return
 
         input_bar.set_enabled(False)
-        input_bar.set_context("gatekeeper", "sending…")
+        model_name = self.orchestrator_facade.get_config().model if self.orchestrator_facade else "N/A"
+        input_bar.set_context(model_name, "sending…")
         self._set_status("Sending message to Gatekeeper…")
         self._launch_gatekeeper_message(event.text)
         self._refresh_gatekeeper_state()
@@ -526,11 +564,25 @@ class VibrantApp(App):
         self._record_command_history_entry(event.text)
         cmd = event.command.lower()
         if cmd == "model":
+            orchestrator = self.orchestrator_facade
+            if orchestrator is None:
+                self.notify(
+                    f"No Vibrant project found under {self._project_root}. Run `vibrant init` first.",
+                    severity="warning",
+                )
+                return
             if event.args:
-                self._settings.default_model = event.args
+                try:
+                    orchestrator.update_config(VibrantConfigPatch(model=event.args))
+                except Exception as exc:
+                    logger.exception("Failed to update orchestrator model")
+                    self.notify(f"Failed to update model: {exc}", severity="error")
+                    self._set_status(f"Model update failed: {exc}")
+                    return
+                self._reload_active_project()
                 self._set_status(f"Model set to {event.args}")
             else:
-                self.notify(f"Current model: {self._settings.default_model}")
+                self.notify(f"Current model: {orchestrator.get_config().model}")
         elif cmd == "settings":
             self.action_open_settings()
         elif cmd == "vibe":
@@ -1343,10 +1395,12 @@ class VibrantApp(App):
                 question_records=question_records,
                 flash=flash,
             )
+        model_name = self.orchestrator_facade.get_config().model if self.orchestrator_facade else "N/A"
+        
         if questions and not self._gatekeeper_is_busy():
             self._set_banner(None)
             input_bar.set_enabled(True)
-            input_bar.set_context("gatekeeper", "awaiting user input")
+            input_bar.set_context(model_name, "awaiting user input")
             input_bar.set_placeholder(self._default_input_placeholder())
             self._set_status("awaiting user input")
             if flash and self._notification_bell_enabled():
@@ -1355,22 +1409,22 @@ class VibrantApp(App):
         elif self._gatekeeper_is_busy():
             self._set_banner("Gatekeeper is responding…")
             input_bar.set_enabled(False)
-            input_bar.set_context("gatekeeper", "running… · Esc to interrupt")
+            input_bar.set_context(model_name, "running… · Esc to interrupt")
             input_bar.set_placeholder("Gatekeeper is responding… Press Esc to interrupt.")
         else:
             self._set_banner(None)
             if normalized_status is WorkflowStatus.INIT:
                 input_bar.set_enabled(True)
-                input_bar.set_context("gatekeeper", "describe your goal")
+                input_bar.set_context(model_name, "describe your goal")
             elif normalized_status is WorkflowStatus.PLANNING:
                 input_bar.set_enabled(True)
-                input_bar.set_context("gatekeeper", "planning")
+                input_bar.set_context(model_name, "planning")
             elif normalized_status is WorkflowStatus.PAUSED:
                 input_bar.set_enabled(True)
-                input_bar.set_context("workflow", "paused")
+                input_bar.set_context(model_name, "paused")
             else:
                 input_bar.set_enabled(True)
-                input_bar.set_context("gatekeeper", "feedback")
+                input_bar.set_context(model_name, "feedback")
             input_bar.set_placeholder(self._default_input_placeholder())
 
         self._known_pending_questions = tuple(questions)
