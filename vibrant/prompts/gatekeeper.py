@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 
+def build_user_answer_trigger_description(*, question: str, answer: str) -> str:
+    """Render the trigger description for a user answer."""
+
+    return f"Question: {question}\nUser Answer: {answer}"
+
+
 def build_gatekeeper_system_prompt(
     *,
     project_name: str,
@@ -51,10 +57,31 @@ def build_gatekeeper_system_prompt(
     )
 
 
-def build_user_answer_trigger_description(*, question: str, answer: str) -> str:
-    """Render the trigger description for a user answer."""
+def build_gatekeeper_resume_prompt(
+    *,
+    project_name: str,
+    roadmap_text: str,
+    trigger_value: str,
+    trigger_description: str,
+    agent_summary: str | None,
+) -> str:
+    """Render incremental input for a resumed Gatekeeper thread."""
 
-    return f"Question: {question}\nUser Answer: {answer}"
+    summary_text = agent_summary.strip() if agent_summary else "N/A"
+    return "\n".join(
+        [
+            f"Resume the existing Gatekeeper conversation for Project {project_name}.",
+            "Prior thread context and instructions remain in effect.",
+            "Use this message as incremental input for the next turn, not as a new bootstrap prompt.",
+            "## Current Trigger",
+            f"{trigger_value}: {trigger_description}",
+            "## Current Roadmap",
+            roadmap_text,
+            "## Agent Summary (if applicable)",
+            summary_text,
+            "Continue from the existing conversation and make the next durable planning or review decision.",
+        ]
+    )
 
 
 def build_gatekeeper_turn_prompt(

@@ -16,7 +16,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Static
 
-from vibrant.models.task import TaskInfo
+from vibrant.models.task import TaskInfo, TaskStatus
 from vibrant.orchestrator.types import AgentStreamEvent, AttemptStatus, ConversationSummary, QuestionStatus, QuestionView, WorkflowStatus
 from vibrant.providers.base import CanonicalEvent
 
@@ -277,7 +277,7 @@ class VibrantApp(App):
     def action_open_help(self) -> None:
         self.push_screen(HelpScreen())
 
-    def action_toggle_pause(self) -> None:
+    async def action_toggle_pause(self) -> None:
         orchestrator = self.orchestrator_facade
         if orchestrator is None:
             self.notify(
@@ -299,7 +299,12 @@ class VibrantApp(App):
             return
 
         try:
-            self._transition_workflow_state(next_status)
+            if next_status is WorkflowStatus.PAUSED:
+                await orchestrator.pause_policies("user_paused")
+            else:
+                resume_result = await orchestrator.resume_policies()
+                if resume_result.get("attempt") is None:
+                    self._start_automatic_workflow_if_needed()
         except Exception as exc:
             logger.exception("Failed to toggle workflow pause state")
             self.notify(f"Failed to update workflow state: {exc}", severity="error")
@@ -315,8 +320,6 @@ class VibrantApp(App):
             self.notify(f"Workflow resumed ({next_status.value}).")
 
         self._refresh_project_views()
-        if next_status is not WorkflowStatus.PAUSED:
-            self._start_automatic_workflow_if_needed()
 
     def action_cycle_agent_output(self) -> None:
         vibing_screen = self.vibing_screen()

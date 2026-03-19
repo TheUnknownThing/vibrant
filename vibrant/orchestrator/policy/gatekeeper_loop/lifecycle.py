@@ -115,10 +115,14 @@ class GatekeeperLifecycleService:
     ):
         self._ensure_no_active_submission()
         session = await self.resume_or_start()
-        prompt = self.gatekeeper.render_prompt(request)
         provider_thread = None
         if resume:
             provider_thread = self._resolve_resume_handle(session=session)
+        prompt = (
+            self.gatekeeper.render_resume_prompt(request)
+            if provider_thread is not None
+            else self.gatekeeper.render_prompt(request)
+        )
         logical_run_id = session.run_id if resume and session.run_id else None
         previous_record = self.run_store.get(logical_run_id) if logical_run_id is not None else None
         agent_record = self.gatekeeper.build_run_record(

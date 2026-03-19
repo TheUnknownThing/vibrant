@@ -15,6 +15,9 @@ from vibrant.models.agent import AgentRecord, AgentStatus
 from vibrant.providers.base import CanonicalEvent, CanonicalEventHandler, ProviderAdapter, RuntimeMode
 from vibrant.type_defs import JSONMapping, JSONObject, JSONValue, is_json_mapping
 
+SUMMARY_OPEN_TAG = "<vibrant_summary>"
+SUMMARY_CLOSE_TAG = "</vibrant_summary>"
+
 
 async def stop_adapter_safely(adapter: ProviderAdapter) -> None:
     """Stop a provider adapter session, swallowing errors."""
@@ -144,6 +147,23 @@ def extract_exit_code(adapter: ProviderAdapter | None) -> int | None:
     process = getattr(client, "_process", None)
     returncode = getattr(process, "returncode", None)
     return returncode if isinstance(returncode, int) else None
+
+
+def extract_tagged_summary_from_transcript(transcript: str) -> str | None:
+    """Extract the last explicitly tagged summary block from a transcript."""
+    if not transcript:
+        return None
+
+    pattern = re.compile(
+        rf"{re.escape(SUMMARY_OPEN_TAG)}\s*(.*?)\s*{re.escape(SUMMARY_CLOSE_TAG)}",
+        re.DOTALL,
+    )
+    matches = pattern.findall(transcript)
+    for candidate in reversed(matches):
+        normalized = candidate.strip()
+        if normalized:
+            return normalized
+    return None
 
 
 def extract_summary_from_turn_result(turn_result: JSONValue) -> str | None:

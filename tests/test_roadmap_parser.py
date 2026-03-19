@@ -120,6 +120,8 @@ class TestRoadmapParser:
         assert "`vibrant/task-001`" in prompt
         assert "Do NOT modify orchestrator-owned `.vibrant` state" in prompt
         assert "describe the proposed change in your summary" in prompt
+        assert "<vibrant_summary>" in prompt
+        assert "Only the text inside `<vibrant_summary>`" in prompt
         assert "[vibrant:task-001]" in prompt
 
     def test_update_task_status_rewrites_roadmap(self, tmp_path):
