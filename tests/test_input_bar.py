@@ -39,8 +39,6 @@ async def test_ctrl_backspace_deletes_the_previous_word() -> None:
         await pilot.pause()
 
         assert field.value == "hello "
-
-
 @pytest.mark.asyncio
 async def test_slash_commands_autocomplete_with_tab() -> None:
     app = InputBarHarness()

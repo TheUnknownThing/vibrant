@@ -120,11 +120,13 @@ class MessageBlock:
     message_id: str
     role: MessageRole
     turn_id: str | None = None
+    title: str | None = None
+    variant_class: str | None = None
     parts: list[TextPart | ReasoningPart | ToolCallPart] = field(default_factory=list)
 
     def plain_text(self) -> str:
         body = self.body_text()
-        role_text = role_label(self.role)
+        role_text = self.title or role_label(self.role)
         return f"{role_text}\n{body}" if body else role_text
 
     def body_text(self) -> str:
@@ -140,6 +142,8 @@ class MessageBlockWidget(Vertical):
         self.styles.height = "auto"
         self.message_id = block.message_id
         self._role: MessageRole = block.role
+        self._title = block.title
+        self._variant_class = block.variant_class
         self._parts: list[TextPart | ReasoningPart | ToolCallPart] = [part.clone() for part in block.parts]
         self._role_header = Static("", markup=False, classes="conversation-role msg-role")
         self._parts_region = Vertical(classes="conversation-parts")
@@ -151,20 +155,24 @@ class MessageBlockWidget(Vertical):
 
     def on_mount(self) -> None:
         self._sync_role_classes()
-        self._role_header.update(role_label(self._role))
+        self._role_header.update(self._title or role_label(self._role))
         self._rebuild_parts()
 
     def set_block(self, block: MessageBlock) -> None:
-        if self._role != block.role:
+        if self._role != block.role or self._title != block.title or self._variant_class != block.variant_class:
             self._role = block.role
+            self._title = block.title
+            self._variant_class = block.variant_class
             self._sync_role_classes()
-            self._role_header.update(role_label(self._role))
+            self._role_header.update(self._title or role_label(self._role))
         self._sync_parts(block.parts)
 
     def _sync_role_classes(self) -> None:
-        for role_class in ("user-msg", "assistant-msg", "system-msg"):
+        for role_class in ("user-msg", "assistant-msg", "system-msg", "question-msg"):
             self.remove_class(role_class)
         self.add_class(f"{self._role}-msg")
+        if self._variant_class:
+            self.add_class(self._variant_class)
 
     def _sync_parts(self, updated_parts: list[TextPart | ReasoningPart | ToolCallPart]) -> None:
         if len(self._parts) != len(updated_parts):
@@ -249,12 +257,18 @@ class ConversationView(Static):
         border-left: tall $secondary;
     }
 
+    ConversationView .question-msg {
+        background: $warning 12%;
+        border-left: tall $warning;
+    }
+
     ConversationView .system-msg {
         background: $surface-lighten-1;
         border-left: tall $panel;
     }
 
     ConversationView .conversation-role {
+        text-style: bold;
         margin-bottom: 0;
     }
 
@@ -276,6 +290,7 @@ class ConversationView(Static):
         super().__init__(**kwargs)
         self._scroll: ConversationRegion | None = None
         self._conversation: AgentConversationView | None = None
+        self._pending_questions: tuple[str, ...] = ()
 
     def compose(self) -> ComposeResult:
         self._scroll = ConversationRegion(id="conversation-scroll", empty_message=EMPTY_CONVERSATION_MESSAGE)
@@ -303,6 +318,24 @@ class ConversationView(Static):
         self._conversation = _clone_conversation(conversation)
         self._render_once()
 
+    def sync_state(
+        self,
+        *,
+        conversation: AgentConversationView | None,
+        pending_questions: list[str] | tuple[str, ...],
+    ) -> None:
+        """Update conversation and pending question state in one render pass."""
+
+        self._conversation = _clone_conversation(conversation)
+        self._pending_questions = tuple(question for question in pending_questions if question)
+        self._render_once()
+
+    def set_pending_questions(self, pending_questions: list[str] | tuple[str, ...]) -> None:
+        """Render pending Gatekeeper questions inline after the conversation."""
+
+        self._pending_questions = tuple(question for question in pending_questions if question)
+        self._render_once()
+
     def ingest_stream_event(self, event: AgentStreamEvent) -> None:
         """Incrementally apply one stream frame to the local view model."""
 
@@ -326,7 +359,11 @@ class ConversationView(Static):
     def _render_once(self) -> None:
         if not self.is_mounted or self._scroll is None:
             return
-        self._scroll.set_messages(_render_blocks(self._conversation))
+        blocks = _render_blocks(self._conversation)
+        pending_block = _pending_question_block(self._pending_questions)
+        if pending_block is not None:
+            blocks.append(pending_block)
+        self._scroll.set_messages(blocks)
         self._scroll.scroll_end(animate=False)
 
 
@@ -336,6 +373,27 @@ def _reasoning_label(status: ReasoningStatus) -> str:
 
 def _tool_status_text(tool_name: str, status: ToolCallStatus) -> str:
     return f"Tool · {tool_name} · {TOOL_STATUS_LABELS[status]}"
+
+
+def _pending_question_block(pending_questions: tuple[str, ...]) -> MessageBlock | None:
+    if not pending_questions:
+        return None
+
+    body = _pending_question_text(pending_questions)
+    return MessageBlock(
+        message_id="pending-question",
+        role="assistant",
+        turn_id=None,
+        title="Gatekeeper Question",
+        variant_class="question-msg",
+        parts=[TextPart(body)],
+    )
+
+
+def _pending_question_text(pending_questions: tuple[str, ...]) -> str:
+    if len(pending_questions) == 1:
+        return pending_questions[0]
+    return "\n\n".join(f"{index}. {question}" for index, question in enumerate(pending_questions, start=1))
 
 
 def _tool_body(entry: AgentConversationEntry) -> str:

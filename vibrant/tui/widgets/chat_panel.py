@@ -46,21 +46,6 @@ class ChatPanel(Static):
         background: $primary-background;
     }
 
-    #chat-panel-notice {
-        height: auto;
-        padding: 1;
-        margin: 1;
-        background: $surface;
-        color: $text-muted;
-        display: none;
-    }
-
-    #chat-panel-notice.has-pending-question {
-        color: $warning;
-        background: $warning 12%;
-        border-left: tall $warning;
-    }
-
     #chat-panel-conversation {
         height: 1fr;
     }
@@ -72,26 +57,24 @@ class ChatPanel(Static):
         super().__init__(**widget_kwargs)
         self._header_text = "[b]Gatekeeper[/b]"
         self._subtitle_text = "Type in the input bar to engage in conversation."
-        self._question_summary_text = ""
         self._question_records: tuple[QuestionView, ...] = ()
         self._pending_questions: tuple[str, ...] = ()
         self._status: WorkflowStatus | str | None = None
         self._notification_token = 0
         self._conversation: ConversationView | None = None
         self._bound_conversation: AgentConversationView | None = None
+        self._conversation_refresh_scheduled = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-panel-layout"):
             yield Static(self._header_text, id="chat-panel-header", markup=True)
             yield Static(self._subtitle_text, id="chat-panel-subtitle")
-            yield Static(self._question_summary_text, id="chat-panel-notice", markup=False)
             self._conversation = ConversationView(id="chat-panel-conversation")
             yield self._conversation
 
     def on_mount(self) -> None:
         self._refresh_widgets()
-        if self._conversation is not None:
-            self._conversation.show_conversation(self._bound_conversation)
+        self._schedule_conversation_refresh()
 
     @property
     def current_conversation_id(self) -> str | None:
@@ -105,8 +88,7 @@ class ChatPanel(Static):
         """Render a conversation view from the orchestrator."""
 
         self._bound_conversation = conversation
-        if self._conversation is not None:
-            self._conversation.show_conversation(conversation)
+        self._schedule_conversation_refresh()
 
     def ingest_stream_event(self, event: AgentStreamEvent) -> None:
         """Append one streamed event from the orchestrator conversation bus."""
@@ -118,8 +100,7 @@ class ChatPanel(Static):
         """Clear the active conversation view."""
 
         self._bound_conversation = None
-        if self._conversation is not None:
-            self._conversation.clear()
+        self._schedule_conversation_refresh()
 
     def clear(self) -> None:
         """Compatibility alias for clearing the conversation view."""
@@ -133,9 +114,9 @@ class ChatPanel(Static):
         return self.has_class("question-notification")
 
     def get_question_summary_text(self) -> str:
-        """Return the rendered Gatekeeper Q and A summary text."""
+        """Return the deprecated standalone question notice text."""
 
-        return self._question_summary_text
+        return ""
 
     def set_gatekeeper_state(
         self,
@@ -152,7 +133,7 @@ class ChatPanel(Static):
             record.text for record in self._question_records if record.status is QuestionStatus.PENDING and record.text
         )
         self._subtitle_text = _format_subtitle(status, has_pending_questions=bool(self._pending_questions))
-        self._question_summary_text = _render_gatekeeper_summary(self._question_records)
+        self._schedule_conversation_refresh()
         self._refresh_widgets()
 
         if flash and self._pending_questions:
@@ -170,20 +151,26 @@ class ChatPanel(Static):
         if token == self._notification_token:
             self.remove_class("question-notification")
 
+    def _schedule_conversation_refresh(self) -> None:
+        if self._conversation is None or self._conversation_refresh_scheduled:
+            return
+        self._conversation_refresh_scheduled = True
+        self.call_after_refresh(self._sync_conversation_view)
+
+    def _sync_conversation_view(self) -> None:
+        self._conversation_refresh_scheduled = False
+        if self._conversation is None:
+            return
+        self._conversation.sync_state(
+            conversation=self._bound_conversation,
+            pending_questions=self._pending_questions,
+        )
+
     def _refresh_widgets(self) -> None:
         if not self.is_mounted:
             return
 
         self.query_one("#chat-panel-subtitle", Static).update(self._subtitle_text)
-
-        notice = self.query_one("#chat-panel-notice", Static)
-        if self._question_summary_text:
-            notice.update(self._question_summary_text)
-            notice.display = True
-        else:
-            notice.update("")
-            notice.display = False
-        notice.set_class(bool(self._pending_questions), "has-pending-question")
 
 
 def _format_subtitle(status: WorkflowStatus | str | None, *, has_pending_questions: bool) -> str:
@@ -200,29 +187,3 @@ def _format_subtitle(status: WorkflowStatus | str | None, *, has_pending_questio
     if normalized == WorkflowStatus.FAILED.value:
         return "Failed · Review history"
     return "Type in the input bar to engage in conversation."
-
-
-def _render_gatekeeper_summary(question_records: Sequence[QuestionView]) -> str:
-    if not question_records:
-        return ""
-
-    rendered_blocks: list[str] = []
-    for record in question_records[-3:]:
-        lines = [
-            "Gatekeeper -> User",
-            f"Q: {record.text}",
-        ]
-        if record.status is QuestionStatus.RESOLVED and record.answer:
-            lines.extend(
-                [
-                    "User -> Gatekeeper",
-                    f"A: {record.answer}",
-                ]
-            )
-        elif record.status is QuestionStatus.PENDING:
-            lines.append("Status: awaiting your answer")
-        elif record.status is QuestionStatus.WITHDRAWN:
-            lines.append("Status: no longer needed")
-        rendered_blocks.append("\n".join(lines))
-
-    return "\n\n".join(rendered_blocks)

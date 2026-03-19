@@ -77,6 +77,7 @@ class PlanningScreen(Static):
         padding: 0 1;
         background: $surface;
     }
+
     """
 
     def __init__(self, **kwargs) -> None:
