@@ -20,7 +20,7 @@ STATUS_ICONS = {
     TaskStatus.PENDING: "○",
     TaskStatus.QUEUED: "○",
     TaskStatus.IN_PROGRESS: "⟳",
-    TaskStatus.COMPLETED: "✓",
+    TaskStatus.COMPLETED: "?",
     TaskStatus.ACCEPTED: "✓",
     TaskStatus.FAILED: "✗",
     TaskStatus.ESCALATED: "✗",
