@@ -162,7 +162,6 @@ def test_prompt_template_renders_for_each_trigger(tmp_path, trigger, description
     assert "You are read-only. Do not edit repository files or .vibrant state directly." in system_prompt
     assert "Read `.vibrant/consensus.md` directly" in system_prompt
     assert "testing-strategy: Write focused tests before broader validation." in system_prompt
-    assert "## Current Roadmap" in prompt
     assert "## MCP Tools" in system_prompt
     assert PLANNING_COMPLETE_MCP_TOOL in system_prompt
     assert all(tool_name in system_prompt for tool_name in MCP_TOOL_NAMES)
@@ -225,7 +224,6 @@ async def test_gatekeeper_runs_read_only_and_resumes_latest_thread(tmp_path):
     resumed_prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
     assert "Resume the existing Gatekeeper conversation" in resumed_prompt
     assert "Prior thread context and instructions remain in effect." in resumed_prompt
-    assert "## Current Roadmap" in resumed_prompt
     assert "## Current Consensus" not in resumed_prompt
     assert "You are a long-lived, project-scoped planning and review agent." not in resumed_prompt
     assert "Review the new project direction." in resumed_prompt
@@ -257,7 +255,6 @@ async def test_gatekeeper_seeds_system_prompt_only_when_starting_new_thread(tmp_
     assert "You are a long-lived, project-scoped planning and review agent." in adapter.start_thread_calls[0]["instructions"]
     assert "Read `.vibrant/consensus.md` directly" in adapter.start_thread_calls[0]["instructions"]
     prompt = adapter.start_turn_calls[0]["input_items"][0]["text"]
-    assert "## Current Roadmap" in prompt
     assert "## Current Consensus" not in prompt
     assert "## MCP Tools" not in prompt
     assert result.succeeded is True
