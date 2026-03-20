@@ -257,7 +257,7 @@ class OrchestratorMCPServer:
             ),
             "vibrant.retry_review_ticket": MCPToolDefinition(
                 name="vibrant.retry_review_ticket",
-                description="Reject a review ticket and request a retry with explicit feedback.",
+                description="Reject a review ticket and request a retry with explicit feedback. The workflow will be inverted to the state before the rejected task attempt.",
                 required_scopes=(REVIEW_WRITE_SCOPE,),
                 handler=self.tools.retry_review_ticket,
             ),
