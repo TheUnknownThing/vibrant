@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from vibrant.agents.explore_agent import ExploreAgent
+from vibrant.agents.runtime import BaseAgentRuntime, RunState
 from vibrant.agents.test_agent import TestAgent
 from vibrant.config import VibrantConfig
 from vibrant.models.agent import AgentType
@@ -66,3 +69,73 @@ def test_build_test_prompt_does_not_require_ordered_validation_commands() -> Non
 
     assert "Run the validation commands in order" not in prompt
     assert "Select the validation steps that best verify the implementation" in prompt
+    assert "End your response with exactly one `<vibrant_summary>...</vibrant_summary>` block." in prompt
+    assert "captured as the validation summary sent to the gatekeeper" in prompt
+
+
+class _TaggedSummaryAdapter:
+    def __init__(self, **kwargs) -> None:
+        self._on_canonical_event = kwargs["on_canonical_event"]
+        self.client = None
+
+    async def start_session(self, **kwargs):
+        return dict(kwargs)
+
+    async def start_thread(self, **kwargs):
+        return {"thread": {"id": "thread-test-001"}, **kwargs}
+
+    async def start_turn(self, **kwargs):
+        del kwargs
+        await self._on_canonical_event(
+            {
+                "type": "content.delta",
+                "delta": (
+                    "Validation complete.\n"
+                    "<vibrant_summary>\n"
+                    "Validation passed after running uv run pytest.\n"
+                    "</vibrant_summary>\n"
+                    "Detailed notes that should not reach the gatekeeper."
+                ),
+            }
+        )
+        await self._on_canonical_event({"type": "turn.completed"})
+        return {}
+
+    async def stop_session(self) -> None:
+        return None
+
+    async def respond_to_request(self, request_id, **kwargs) -> None:
+        del request_id, kwargs
+        return None
+
+
+@pytest.mark.asyncio
+async def test_test_agent_summary_prefers_tagged_summary_block(tmp_path: Path) -> None:
+    runtime = BaseAgentRuntime(
+        TestAgent(
+            tmp_path,
+            VibrantConfig(),
+            adapter_factory=lambda **kwargs: _TaggedSummaryAdapter(**kwargs),
+        )
+    )
+
+    record = TestAgent(
+        tmp_path,
+        VibrantConfig(),
+        adapter_factory=lambda **kwargs: _TaggedSummaryAdapter(**kwargs),
+    ).build_run_record(
+        task_id="task-4",
+        branch="task/task-4",
+        workspace_path=str(tmp_path),
+        prompt="Run validation commands",
+        vibrant_dir=tmp_path / ".vibrant",
+    )
+
+    handle = await runtime.start(
+        agent_record=record,
+        prompt="Start",
+    )
+    result = await handle.wait()
+
+    assert result.state is RunState.COMPLETED
+    assert result.summary == "Validation passed after running uv run pytest."
