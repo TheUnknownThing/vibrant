@@ -346,7 +346,6 @@ class VibrantApp(App):
         try:
             if next_status is WorkflowStatus.PAUSED:
                 await orchestrator.pause_policies("user_paused")
-
             else:
                 resume_result = await orchestrator.resume_policies()
                 if resume_result.get("attempt") is None:

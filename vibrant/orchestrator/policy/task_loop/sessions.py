@@ -40,6 +40,7 @@ _MERGE_PHASE_STATUSES = {
 _RECOVERABLE_ATTEMPT_STATUSES = {
     AttemptStatus.LEASED,
     AttemptStatus.RUNNING,
+    AttemptStatus.VALIDATING,
 }
 
 _NON_RECOVERABLE_RUN_STATUSES = {"awaiting_input", "completed", "failed", "killed"}
