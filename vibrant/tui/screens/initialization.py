@@ -181,7 +181,9 @@ class GitInitializationScreen(ModalScreen[bool]):
         with Vertical(id="git-initialization-modal"):
             yield Static("Initialize Git Repository", id="git-initialization-title")
             yield Static(
-                "Vibrant uses Git worktrees for task execution. Initialize a repository in this directory first.",
+                "Vibrant uses Git worktrees for task execution and needs a valid HEAD for `git rev-parse`. "
+                "If you continue, initialization will create the repository here and make the first commit from "
+                "the current directory contents, falling back to an empty commit when nothing can be staged.",
                 id="git-initialization-body",
             )
             yield Static(str(self._target_path), id="git-initialization-path")
@@ -198,7 +200,10 @@ class GitInitializationScreen(ModalScreen[bool]):
         under_git = is_under_git_repository(self._target_path)
         if under_git:
             self.query_one("#git-initialization-body", Static).update(
-                "This directory is under another Git repository. Proceeding will lead to Git in Git! It is recommended to initialize the project in another directory. Do you want to proceed anyway?"
+                "This directory is under another Git repository. Proceeding will create a nested repository here, "
+                "and initialization will still create an initial commit so later workspace setup can use "
+                "`git rev-parse`. It is recommended to initialize the project in another directory. "
+                "Do you want to proceed anyway?"
             )
         self.query_one("#git-initialization-confirm", Button).focus()
 
