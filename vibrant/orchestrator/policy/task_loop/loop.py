@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,7 @@ class TaskLoop:
     gatekeeper_loop: GatekeeperUserLoop | None = None
     _leased_task_ids: set[str] = field(default_factory=set, repr=False)
     _snapshot: TaskLoopSnapshot = field(default_factory=TaskLoopSnapshot, repr=False)
+    _background_attempt_tasks: dict[str, asyncio.Task[TaskResult]] = field(default_factory=dict, repr=False)
 
     @property
     def state_store(self):
@@ -76,6 +78,30 @@ class TaskLoop:
 
     async def resume_active_execution(self):
         return await attempts.resume_active_attempt(self)
+
+    def track_background_attempt_task(
+        self,
+        attempt_id: str,
+        task: asyncio.Task[TaskResult],
+    ) -> None:
+        current = self._background_attempt_tasks.get(attempt_id)
+        if current is not None and not current.done():
+            return
+        self._background_attempt_tasks[attempt_id] = task
+
+        def _cleanup(completed: asyncio.Task[TaskResult]) -> None:
+            if self._background_attempt_tasks.get(attempt_id) is completed:
+                self._background_attempt_tasks.pop(attempt_id, None)
+
+        task.add_done_callback(_cleanup)
+
+    def next_background_attempt_task(self) -> asyncio.Task[TaskResult] | None:
+        for attempt_id, task in list(self._background_attempt_tasks.items()):
+            if task.done():
+                self._background_attempt_tasks.pop(attempt_id, None)
+                continue
+            return task
+        return None
 
     def get_review_ticket(self, ticket_id: str) -> ReviewTicket | None:
         return reviews.get_review_ticket(self, ticket_id)

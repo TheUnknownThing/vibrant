@@ -252,14 +252,8 @@ class ExecutionCoordinator:
             provider_events_ref=runtime_result.provider_events_ref,
         )
         if completion.status == "succeeded":
-            workspace = self.workspace_service.get_workspace(
-                task_id=attempt.task_id,
-                workspace_id=attempt.workspace_id,
-            )
-            self.workspace_service.capture_result_commit(workspace)
-            validation = await self._run_test_stage(
-                attempt=attempt,
-                workspace=workspace,
+            validation = await self.run_validation_for_attempt(
+                attempt_id=attempt.attempt_id,
                 code_summary=runtime_result.summary,
             )
             completion.validation = validation
@@ -267,6 +261,26 @@ class ExecutionCoordinator:
 
     def reconcile_active_sessions(self) -> list[AttemptExecutionSnapshot]:
         return self.execution_session.reconcile_active()
+
+    async def run_validation_for_attempt(
+        self,
+        *,
+        attempt_id: str,
+        code_summary: str | None,
+    ) -> ValidationOutcome:
+        attempt = self.attempt_store.get(attempt_id)
+        if attempt is None:
+            raise KeyError(f"Attempt not found: {attempt_id}")
+        workspace = self.workspace_service.get_workspace(
+            task_id=attempt.task_id,
+            workspace_id=attempt.workspace_id,
+        )
+        workspace = self.workspace_service.capture_result_commit(workspace)
+        return await self._run_test_stage(
+            attempt=attempt,
+            workspace=workspace,
+            code_summary=code_summary,
+        )
 
     async def pause_active_attempts(self) -> list[AttemptExecutionSnapshot]:
         paused: list[AttemptExecutionSnapshot] = []

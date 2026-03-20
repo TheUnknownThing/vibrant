@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -882,6 +883,94 @@ async def test_resume_attempt_command_recovers_without_waiting_for_dispatch_tick
 
 
 @pytest.mark.asyncio
+async def test_resume_attempt_consumes_completion_in_background(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    orchestrator._task_loop.gatekeeper_loop = None
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-paused",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator._agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-paused",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.KILLED, "stop_reason": "paused"},
+            context={
+                "worktree_path": workspace.path,
+                "prompt_used": "Resume after pause.",
+            },
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+    completion_started = asyncio.Event()
+
+    async def fake_resume_run(**kwargs):
+        del kwargs
+        return SimpleNamespace()
+
+    async def fake_await_attempt_completion(attempt_id: str):
+        completion_started.set()
+        active = orchestrator._attempt_store.get(attempt_id)
+        assert active is not None
+        return AttemptCompletion(
+            attempt_id=active.attempt_id,
+            task_id=active.task_id,
+            status="succeeded",
+            code_run_id=active.code_run_id or "run-paused",
+            workspace_ref=active.workspace_id,
+            diff_ref=None,
+            validation=ValidationOutcome(
+                status="passed",
+                run_ids=["test-run-1"],
+                summary="Recovered tests passed",
+            ),
+            summary="Recovered implementation",
+            error=None,
+            conversation_ref=active.conversation_id,
+            provider_events_ref=None,
+        )
+
+    monkeypatch.setattr(orchestrator._runtime_service, "resume_run", fake_resume_run)
+    monkeypatch.setattr(
+        type(orchestrator._execution_coordinator),
+        "await_attempt_completion",
+        lambda self, attempt_id: fake_await_attempt_completion(attempt_id),
+    )
+
+    recovered = await orchestrator._task_loop.resume_attempt(attempt.attempt_id)
+    await asyncio.wait_for(completion_started.wait(), timeout=1)
+
+    for _ in range(20):
+        persisted = orchestrator._attempt_store.get(attempt.attempt_id)
+        if persisted is not None and persisted.status is AttemptStatus.REVIEW_PENDING:
+            break
+        await asyncio.sleep(0)
+    else:
+        pytest.fail("Background resume completion did not advance to review pending")
+
+    tickets = orchestrator._task_loop.list_pending_review_tickets()
+
+    assert recovered.attempt_id == attempt.attempt_id
+    assert persisted is not None
+    assert persisted.validation_run_ids == ["test-run-1"]
+    assert orchestrator._task_loop.snapshot().stage is TaskLoopStage.REVIEW_PENDING
+    assert len(tickets) == 1
+    assert tickets[0].attempt_id == attempt.attempt_id
+
+
+@pytest.mark.asyncio
 async def test_resume_attempt_rejects_when_workflow_is_paused(tmp_path: Path) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
     workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
@@ -1030,3 +1119,69 @@ async def test_run_next_task_surfaces_recovery_failure_without_dispatching_new_w
     assert result.error == "resume failed"
     assert failed_attempt is not None and failed_attempt.status is AttemptStatus.FAILED
     assert calls == [f"recover:{attempt.attempt_id}"]
+
+
+@pytest.mark.asyncio
+async def test_run_next_task_recovered_completion_runs_validation_before_review(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    orchestrator._task_loop.gatekeeper_loop = None
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-completed",
+        conversation_id="attempt-conv-1",
+    )
+    task = orchestrator._roadmap_store.get_task("task-1")
+    assert task is not None
+    orchestrator._roadmap_store.replace_task(
+        task.model_copy(update={"status": TaskStatus.IN_PROGRESS}),
+        active_attempt_id=attempt.attempt_id,
+    )
+    orchestrator._agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-completed",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.COMPLETED},
+            context={"worktree_path": workspace.path},
+            outcome={"summary": "Recovered implementation"},
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+    validation_calls: list[tuple[str, str | None]] = []
+
+    async def fake_run_validation_for_attempt(*, attempt_id: str, code_summary: str | None):
+        validation_calls.append((attempt_id, code_summary))
+        return ValidationOutcome(
+            status="passed",
+            run_ids=["test-recovered"],
+            summary="Recovered tests passed",
+        )
+
+    monkeypatch.setattr(
+        type(orchestrator._execution_coordinator),
+        "run_validation_for_attempt",
+        lambda self, *, attempt_id, code_summary: fake_run_validation_for_attempt(
+            attempt_id=attempt_id,
+            code_summary=code_summary,
+        ),
+    )
+
+    result = await orchestrator._task_loop.run_next_task()
+    persisted = orchestrator._attempt_store.get(attempt.attempt_id)
+
+    assert validation_calls == [(attempt.attempt_id, "Recovered implementation")]
+    assert result is not None
+    assert result.outcome == "review_pending"
+    assert persisted is not None
+    assert persisted.status is AttemptStatus.REVIEW_PENDING
+    assert persisted.validation_run_ids == ["test-recovered"]
