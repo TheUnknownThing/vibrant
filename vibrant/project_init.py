@@ -116,6 +116,10 @@ def _render_default_config() -> str:
         "[validation]",
         "test-commands = []",
         "",
+        "[ui]",
+        "# Leave unset to show agent logs only when `vibrant --dev` is enabled.",
+        "# show-agent-logs = true",
+        "",
     ]
     if config.model_provider is not None:
         lines.insert(4, f'model-provider = "{config.model_provider}"')

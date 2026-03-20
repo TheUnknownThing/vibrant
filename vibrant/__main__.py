@@ -214,6 +214,8 @@ def _build_textual_client_command(args: CliArgs) -> str:
         command_parts.extend(["--cwd", str(args.cwd)])
     if args.model:
         command_parts.extend(["--model", args.model])
+    if args.dev:
+        command_parts.append("--dev")
     if args.debug:
         command_parts.append("--debug")
     return shlex.join(command_parts)
@@ -305,7 +307,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         history_dir=str(config.resolve_conversation_directory(project_root)),
     )
 
-    app = VibrantApp(settings=settings, cwd=default_cwd)
+    app = VibrantApp(settings=settings, cwd=default_cwd, dev_mode=args.dev)
     app.run()
 
 

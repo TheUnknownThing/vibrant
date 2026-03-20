@@ -53,6 +53,9 @@ class TestLoadConfig:
 
                 [validation]
                 test-commands = ["pytest -q", "ruff check ."]
+
+                [ui]
+                show-agent-logs = true
                 """
             ).strip()
             + "\n",
@@ -79,6 +82,8 @@ class TestLoadConfig:
         assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "session-history"
         assert config.execution_mode is RoadmapExecutionMode.MANUAL
         assert config.test_commands == ["pytest -q", "ruff check ."]
+        assert config.show_agent_logs is True
+        assert config.tui_agent_logs_visible(dev_mode=False) is True
         assert config.extra_config == {"persistExtendedHistory": True}
 
     def test_missing_file_uses_defaults(self, tmp_path):
@@ -103,6 +108,9 @@ class TestLoadConfig:
         assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "conversations"
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
         assert config.test_commands == []
+        assert config.show_agent_logs is None
+        assert config.tui_agent_logs_visible(dev_mode=False) is False
+        assert config.tui_agent_logs_visible(dev_mode=True) is True
 
     def test_parse_claude_provider_configuration(self, tmp_path):
         project_root = tmp_path / "project"

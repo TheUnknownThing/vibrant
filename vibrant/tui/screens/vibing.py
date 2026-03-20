@@ -109,11 +109,13 @@ class VibingScreen(Static):
 
     """
 
-    _VALID_TABS = {"task-status", "chat-history", "consensus", "agent-logs"}
-
-    def __init__(self, *, initial_tab: str = "task-status") -> None:
+    def __init__(self, *, initial_tab: str = "task-status", show_agent_logs: bool = True) -> None:
         super().__init__()
-        self._initial_tab = initial_tab if initial_tab in self._VALID_TABS else "task-status"
+        self._show_agent_logs = show_agent_logs
+        self._valid_tabs = {"task-status", "chat-history", "consensus"}
+        if show_agent_logs:
+            self._valid_tabs.add("agent-logs")
+        self._initial_tab = initial_tab if initial_tab in self._valid_tabs else "task-status"
         self._active_tab = self._initial_tab
         self._selected_task_id: str | None = None
         self._is_mobile_layout: bool | None = None
@@ -135,8 +137,9 @@ class VibingScreen(Static):
                             yield ChatPanel(id="conversation-panel")
                     with TabPane("Consensus", id="consensus"):
                         yield ConsensusView(id="consensus-panel")
-                    with TabPane("Agent Logs", id="agent-logs"):
-                        yield AgentOutput(id="agent-output-panel")
+                    if self._show_agent_logs:
+                        with TabPane("Agent Logs", id="agent-logs"):
+                            yield AgentOutput(id="agent-output-panel")
                 yield InputBar(id="input-panel")
 
     def on_mount(self) -> None:
@@ -158,10 +161,16 @@ class VibingScreen(Static):
         if event.control.id != "workspace-tabs":
             return
         tab_id = event.pane.id or ""
-        if tab_id in self._VALID_TABS:
+        if tab_id in self._valid_tabs:
             self._active_tab = tab_id
             if tab_id == "agent-logs":
                 self._request_agent_output_history()
+
+    @property
+    def agent_logs_visible(self) -> bool:
+        """Return whether the agent logs tab is mounted."""
+
+        return self._show_agent_logs
 
     @property
     def active_tab(self) -> str:
@@ -170,7 +179,7 @@ class VibingScreen(Static):
         return self._active_tab
 
     def set_active_tab(self, tab_id: str) -> None:
-        if tab_id not in self._VALID_TABS:
+        if tab_id not in self._valid_tabs:
             return
 
         if tab_id == "consensus":
@@ -238,6 +247,8 @@ class VibingScreen(Static):
     def agent_output(self) -> AgentOutput:
         """Return the agent output widget."""
 
+        if not self._show_agent_logs:
+            raise LookupError("Agent logs tab is disabled for this workspace.")
         return self.query_one(AgentOutput)
 
     @property
