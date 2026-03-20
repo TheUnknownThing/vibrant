@@ -92,6 +92,16 @@ class ConversationLogState:
         return self.summary.conversation_id
 
 
+@dataclass(slots=True)
+class _StreamEventUpdate:
+    """One retained-state mutation produced by a stream event."""
+
+    state: ConversationLogState
+    changed_index: int | None
+    new_block_created: bool
+    debug_line_added: bool
+
+
 class LogBlockWidget(Vertical):
     """Mutable widget for one rendered log block."""
 
@@ -441,6 +451,30 @@ class AgentOutput(Static):
     def ingest_stream_event(self, event: AgentStreamEvent) -> None:
         """Apply one projected conversation event to the retained log state."""
 
+        update = self._ingest_stream_event_state(event)
+        self._refresh_after_stream_event(update)
+
+    def ingest_stream_events(self, events: Iterable[AgentStreamEvent]) -> None:
+        """Apply multiple projected conversation events and refresh once at the end."""
+
+        updates = [self._ingest_stream_event_state(event) for event in events]
+        if not updates:
+            return
+
+        for update in updates:
+            self._sync_state_runtime_meta(update.state)
+
+        previous = self._active_conversation_id
+        self._conversation_order = self._sorted_conversation_ids()
+        self._active_conversation_id = self._resolve_active_conversation(previous)
+        self._update_meta()
+        self._update_tabs()
+        self._update_switcher()
+        self._show_active_conversation(reset_window=True)
+
+    def _ingest_stream_event_state(self, event: AgentStreamEvent) -> "_StreamEventUpdate":
+        """Mutate retained state for one event without performing any visible refresh."""
+
         state = self._ensure_conversation(event.conversation_id)
         _apply_event_to_summary(state.summary, event)
         if event.agent_id:
@@ -455,6 +489,17 @@ class AgentOutput(Static):
         changed_index = self._apply_stream_event_to_blocks(state, event)
         new_block_created = len(state.blocks) > before_count
 
+        return _StreamEventUpdate(
+            state=state,
+            changed_index=changed_index,
+            new_block_created=new_block_created,
+            debug_line_added=bool(debug_line),
+        )
+
+    def _refresh_after_stream_event(self, update: "_StreamEventUpdate") -> None:
+        """Refresh visible widget state after one live stream event."""
+
+        state = update.state
         self._sync_state_runtime_meta(state)
         previous = self._active_conversation_id
         self._conversation_order = self._sorted_conversation_ids()
@@ -470,9 +515,9 @@ class AgentOutput(Static):
             return
 
         if state.conversation_id != self._active_conversation_id:
-            if new_block_created:
+            if update.new_block_created:
                 state.unread_blocks += 1
-            if debug_line:
+            if update.debug_line_added:
                 state.unread_debug_lines += 1
             return
 
@@ -480,9 +525,9 @@ class AgentOutput(Static):
         state.unread_debug_lines = 0
         self._apply_active_stream_change(
             state,
-            changed_index=changed_index,
-            new_block_created=new_block_created,
-            debug_line_added=bool(debug_line),
+            changed_index=update.changed_index,
+            new_block_created=update.new_block_created,
+            debug_line_added=update.debug_line_added,
         )
 
     def action_cycle_agent(self) -> None:

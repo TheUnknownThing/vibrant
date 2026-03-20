@@ -50,6 +50,9 @@ class _FakeControlPlane:
 
     def subscribe_conversation(self, conversation_id: str, callback, *, replay: bool = False) -> _FakeSubscription:
         self.subscribe_calls.append((conversation_id, replay))
+        if replay:
+            for frame in self._frames_by_conversation_id.get(conversation_id, []):
+                callback(frame)
         return _FakeSubscription()
 
 
@@ -57,12 +60,16 @@ class _FakeAgentOutput:
     def __init__(self) -> None:
         self.synced_calls: list[tuple[list[str], list[object]]] = []
         self.ingested_events: list[AgentStreamEvent] = []
+        self.ingested_batches: list[list[AgentStreamEvent]] = []
 
     def sync_conversations(self, conversations, agents) -> None:
         self.synced_calls.append(([summary.conversation_id for summary in conversations], list(agents)))
 
     def ingest_stream_event(self, event: AgentStreamEvent) -> None:
         self.ingested_events.append(event)
+
+    def ingest_stream_events(self, events) -> None:
+        self.ingested_batches.append(list(events))
 
 
 class _FakeChatPanel:
@@ -154,6 +161,7 @@ def test_refresh_agent_output_registry_hydrates_and_subscribes_when_logs_are_vis
     assert agent_output.synced_calls == [(["conv-1"], []), (["conv-1"], [])]
     assert control_plane.frame_calls == []
     assert control_plane.subscribe_calls == [("conv-1", True)]
+    assert agent_output.ingested_batches == [[frame]]
     assert agent_output.ingested_events == []
 
 
@@ -190,6 +198,7 @@ def test_refresh_gatekeeper_state_uses_app_bar_and_chat_highlight_for_pending_qu
     app.orchestrator_facade = SimpleNamespace(
         get_workflow_status=lambda: WorkflowStatus.EXECUTING,
         gatekeeper_busy=lambda: False,
+        get_config=lambda: SimpleNamespace(model="gatekeeper"),
     )
     monkeypatch.setattr(app, "_chat_panel", lambda: chat_panel)
     monkeypatch.setattr(app, "_input_bar", lambda: input_panel)
@@ -232,6 +241,7 @@ def test_refresh_gatekeeper_state_does_not_flash_existing_questions_on_first_syn
     app.orchestrator_facade = SimpleNamespace(
         get_workflow_status=lambda: WorkflowStatus.EXECUTING,
         gatekeeper_busy=lambda: False,
+        get_config=lambda: SimpleNamespace(model="gatekeeper"),
     )
     monkeypatch.setattr(app, "_chat_panel", lambda: chat_panel)
     monkeypatch.setattr(app, "_input_bar", lambda: input_panel)

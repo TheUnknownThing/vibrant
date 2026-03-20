@@ -95,6 +95,101 @@ def _meta_text(widget: AgentOutput) -> str:
 
 
 @pytest.mark.asyncio
+async def test_agent_output_batch_ingest_refreshes_visible_state_once():
+    record = _agent_record(
+        run_id="run-batch-001",
+        agent_id="agent-batch-001",
+        task_id="task-batch-001",
+        status=AgentStatus.RUNNING,
+        started_at=datetime.now(timezone.utc),
+    )
+    summary = _conversation_summary(
+        "attempt-batch-001",
+        agent_ids=["agent-batch-001"],
+        task_ids=["task-batch-001"],
+        latest_run_id="run-batch-001",
+    )
+
+    app = AgentOutputHarness()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        widget = app.query_one(AgentOutput)
+        widget.sync_conversations([summary], [record])
+
+        meta_calls = 0
+        tabs_calls = 0
+        switcher_calls = 0
+        show_calls = 0
+
+        original_update_meta = widget._update_meta
+        original_update_tabs = widget._update_tabs
+        original_update_switcher = widget._update_switcher
+        original_show_active_conversation = widget._show_active_conversation
+
+        def wrapped_update_meta() -> None:
+            nonlocal meta_calls
+            meta_calls += 1
+            original_update_meta()
+
+        def wrapped_update_tabs() -> None:
+            nonlocal tabs_calls
+            tabs_calls += 1
+            original_update_tabs()
+
+        def wrapped_update_switcher() -> None:
+            nonlocal switcher_calls
+            switcher_calls += 1
+            original_update_switcher()
+
+        def wrapped_show_active_conversation(*, reset_window: bool) -> None:
+            nonlocal show_calls
+            show_calls += 1
+            original_show_active_conversation(reset_window=reset_window)
+
+        widget._update_meta = wrapped_update_meta  # type: ignore[method-assign]
+        widget._update_tabs = wrapped_update_tabs  # type: ignore[method-assign]
+        widget._update_switcher = wrapped_update_switcher  # type: ignore[method-assign]
+        widget._show_active_conversation = wrapped_show_active_conversation  # type: ignore[method-assign]
+
+        widget.ingest_stream_events(
+            [
+                _stream_event(
+                    conversation_id="attempt-batch-001",
+                    sequence=1,
+                    event_type="conversation.assistant.thinking.delta",
+                    created_at="2026-03-11T10:00:01Z",
+                    text="Thinking through",
+                    agent_id="agent-batch-001",
+                    run_id="run-batch-001",
+                    task_id="task-batch-001",
+                    turn_id="turn-1",
+                    item_id="reason-1",
+                ),
+                _stream_event(
+                    conversation_id="attempt-batch-001",
+                    sequence=2,
+                    event_type="conversation.assistant.thinking.delta",
+                    created_at="2026-03-11T10:00:02Z",
+                    text=" the replay path",
+                    agent_id="agent-batch-001",
+                    run_id="run-batch-001",
+                    task_id="task-batch-001",
+                    turn_id="turn-1",
+                    item_id="reason-1",
+                ),
+            ]
+        )
+        await pilot.pause()
+
+        assert meta_calls == 1
+        assert tabs_calls == 1
+        assert switcher_calls == 1
+        assert show_calls == 1
+        assert widget.get_buffer_line_count("attempt-batch-001") == 1
+        assert widget.get_thoughts_text("attempt-batch-001") == "Thinking through the replay path"
+
+
+@pytest.mark.asyncio
 async def test_agent_output_coalesces_reasoning_deltas_and_finalizes_in_place():
     record = _agent_record(
         run_id="run-001",

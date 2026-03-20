@@ -785,13 +785,30 @@ class VibrantApp(App):
             if conversation_id in self._agent_output_conversation_subscriptions:
                 continue
             replay = conversation_id not in self._agent_output_loaded_conversation_ids
+            replay_events: list[AgentStreamEvent] = []
+            replay_state = {"complete": not replay}
+
+            def callback(
+                event: AgentStreamEvent,
+                *,
+                _replay_events: list[AgentStreamEvent] = replay_events,
+                _replay_state: dict[str, bool] = replay_state,
+            ) -> None:
+                if not _replay_state["complete"]:
+                    _replay_events.append(event)
+                    return
+                self._on_agent_output_conversation_event(event)
+
             self._agent_output_conversation_subscriptions[conversation_id] = (
                 control_plane.subscribe_conversation(
                     conversation_id,
-                    self._on_agent_output_conversation_event,
+                    callback,
                     replay=replay,
                 )
             )
+            replay_state["complete"] = True
+            if replay_events:
+                agent_output.ingest_stream_events(replay_events)
             if replay:
                 self._agent_output_loaded_conversation_ids.add(conversation_id)
 
