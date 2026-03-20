@@ -48,6 +48,7 @@ class AttemptStatus(str, Enum):
     LEASED = "leased"
     RUNNING = "running"
     AWAITING_INPUT = "awaiting_input"
+    RECOVERY_PENDING = "recovery_pending"
     VALIDATION_PENDING = "validation_pending"
     VALIDATING = "validating"
     REVIEW_PENDING = "review_pending"

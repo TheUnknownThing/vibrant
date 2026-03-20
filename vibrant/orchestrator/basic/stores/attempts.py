@@ -13,6 +13,7 @@ ACTIVE_ATTEMPT_STATUSES = {
     AttemptStatus.LEASED,
     AttemptStatus.RUNNING,
     AttemptStatus.AWAITING_INPUT,
+    AttemptStatus.RECOVERY_PENDING,
     AttemptStatus.VALIDATION_PENDING,
     AttemptStatus.VALIDATING,
     AttemptStatus.REVIEW_PENDING,

@@ -138,7 +138,7 @@ class ExecutionCoordinator:
                 conversation_id=conversation_id,
             )
         except Exception:
-            self.execution_session.set_status(attempt.attempt_id, AttemptStatus.FAILED)
+            self.execution_session.set_status(attempt.attempt_id, AttemptStatus.RECOVERY_PENDING)
             raise
         persisted_attempt = self.attempt_store.get(attempt.attempt_id)
         if persisted_attempt is None:
@@ -369,9 +369,23 @@ class ExecutionCoordinator:
                     on_record_updated=self._persist_run,
                     invocation_plan=invocation_plan,
                 )
-            except Exception:
-                self._release_binding(agent_record.identity.run_id)
-                raise
+            except Exception as resume_exc:
+                try:
+                    handle = await self.runtime_service.start_run(
+                        agent_record=agent_record,
+                        prompt=prompt,
+                        cwd=workspace_path,
+                        runtime=runtime,
+                        on_record_updated=self._persist_run,
+                        invocation_plan=invocation_plan,
+                    )
+                except Exception as fresh_start_exc:
+                    self._release_binding(agent_record.identity.run_id)
+                    raise RuntimeError(
+                        "Automatic reconnect failed: "
+                        f"resume failed ({resume_exc}); "
+                        f"fresh start failed ({fresh_start_exc})"
+                    ) from fresh_start_exc
         else:
             try:
                 handle = await self.runtime_service.start_run(

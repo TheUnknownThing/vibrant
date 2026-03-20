@@ -31,6 +31,23 @@ def record_task_state(
     )
 
 
+def record_task_interrupted(
+    loop: TaskLoop,
+    task_id: str,
+    *,
+    active_attempt_id: str | None,
+    failure_reason: str,
+) -> TaskInfo:
+    task = require_task(loop, task_id)
+    updated = task.model_copy(deep=True)
+    updated.status = TaskStatus.IN_PROGRESS
+    updated.failure_reason = failure_reason
+    return loop.roadmap_store.replace_task(
+        updated,
+        active_attempt_id=active_attempt_id,
+    )
+
+
 def require_task(loop: TaskLoop, task_id: str) -> TaskInfo:
     task = loop.roadmap_store.get_task(task_id)
     if task is None:

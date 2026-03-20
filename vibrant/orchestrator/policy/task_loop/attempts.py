@@ -64,6 +64,15 @@ async def run_next_task(loop: TaskLoop) -> TaskResult | None:
     except Exception as exc:
         loop._leased_task_ids.discard(lease.task_id)
         reason = str(exc)
+        recoverable_attempt = loop.attempt_store.get_active_by_task(lease.task_id)
+        if recoverable_attempt is not None:
+            return _interrupt_attempt(
+                loop,
+                lease=lease,
+                attempt_id=recoverable_attempt.attempt_id,
+                task_id=lease.task_id,
+                reason=reason,
+            )
         task_projection.record_task_state(
             loop,
             lease.task_id,
@@ -90,31 +99,35 @@ async def run_next_task(loop: TaskLoop) -> TaskResult | None:
     return await await_attempt_result(loop, lease, attempt)
 
 
-async def await_attempt_result(loop: TaskLoop, lease: DispatchLease, attempt) -> TaskResult:
+async def await_attempt_result(
+    loop: TaskLoop,
+    lease: DispatchLease,
+    attempt,
+    *,
+    auto_resume: bool = True,
+) -> TaskResult:
     try:
         completion = await loop.execution.await_attempt_completion(attempt.attempt_id)
     except Exception as exc:
         reason = str(exc)
-        loop.attempt_store.update(attempt.attempt_id, status=AttemptStatus.FAILED)
-        task_projection.record_task_state(
+        return _interrupt_attempt(
             loop,
-            attempt.task_id,
-            TaskState.BLOCKED,
-            active_attempt_id=attempt.attempt_id,
-            failure_reason=reason,
+            lease=lease,
+            attempt_id=attempt.attempt_id,
+            task_id=attempt.task_id,
+            reason=reason,
         )
-        loop._set_snapshot(
-            stage=TaskLoopStage.BLOCKED,
-            active_lease=lease,
-            active_attempt_id=attempt.attempt_id,
-            blocking_reason=reason,
-        )
-        return TaskResult(task_id=attempt.task_id, outcome="failed", error=reason)
 
-    return await consume_attempt_completion(loop, lease, completion)
+    return await consume_attempt_completion(loop, lease, completion, auto_resume=auto_resume)
 
 
-async def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, completion: AttemptCompletion) -> TaskResult:
+async def consume_attempt_completion(
+    loop: TaskLoop,
+    lease: DispatchLease,
+    completion: AttemptCompletion,
+    *,
+    auto_resume: bool = True,
+) -> TaskResult:
     if completion.status == "awaiting_input":
         reason = completion.error or WORKER_INPUT_UNSUPPORTED_ERROR
         loop.attempt_store.update(completion.attempt_id, status=AttemptStatus.FAILED)
@@ -140,26 +153,78 @@ async def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, compl
 
     if completion.status in {"failed", "cancelled"}:
         reason = completion.error or "Attempt cancelled"
-        terminal_status = AttemptStatus.CANCELLED if completion.status == "cancelled" else AttemptStatus.FAILED
-        loop.attempt_store.update(completion.attempt_id, status=terminal_status)
-        task_projection.record_task_state(
+        if _is_terminal_worker_input_failure(reason):
+            terminal_status = AttemptStatus.CANCELLED if completion.status == "cancelled" else AttemptStatus.FAILED
+            loop.attempt_store.update(completion.attempt_id, status=terminal_status)
+            task_projection.record_task_state(
+                loop,
+                completion.task_id,
+                TaskState.BLOCKED,
+                active_attempt_id=completion.attempt_id,
+                failure_reason=reason,
+            )
+            loop._set_snapshot(
+                stage=TaskLoopStage.BLOCKED,
+                active_lease=lease,
+                active_attempt_id=completion.attempt_id,
+                blocking_reason=reason,
+            )
+            return TaskResult(
+                task_id=completion.task_id,
+                outcome="failed",
+                summary=completion.summary,
+                error=completion.error,
+            )
+        run_record = loop.agent_run_store.get(completion.code_run_id)
+        stop_reason = run_record.lifecycle.stop_reason if run_record is not None else None
+        if auto_resume and stop_reason != "paused":
+            recover = getattr(loop.execution, "recover_attempt", None)
+            if callable(recover):
+                attempt = loop.attempt_store.get(completion.attempt_id)
+                if attempt is not None:
+                    prepared = prepare_task_execution(
+                        lease=lease,
+                        roadmap_store=loop.roadmap_store,
+                        consensus_store=loop.consensus_store,
+                        project_name=loop.consensus_store.project_name,
+                    )
+                    try:
+                        recovered = await recover(
+                            completion.attempt_id,
+                            prepared=prepared,
+                        )
+                    except Exception as exc:
+                        reason = (
+                            f"{reason}. Automatic reconnect failed: {exc}"
+                            if reason
+                            else f"Automatic reconnect failed: {exc}"
+                        )
+                    else:
+                        task_projection.record_task_state(
+                            loop,
+                            recovered.task_id,
+                            TaskState.ACTIVE,
+                            active_attempt_id=recovered.attempt_id,
+                        )
+                        loop._set_snapshot(
+                            stage=TaskLoopStage.CODING,
+                            active_lease=lease,
+                            active_attempt_id=recovered.attempt_id,
+                            blocking_reason=None,
+                        )
+                        return await await_attempt_result(
+                            loop,
+                            lease,
+                            recovered,
+                            auto_resume=False,
+                        )
+
+        return _interrupt_attempt(
             loop,
-            completion.task_id,
-            TaskState.BLOCKED,
-            active_attempt_id=completion.attempt_id,
-            failure_reason=reason,
-        )
-        loop._set_snapshot(
-            stage=TaskLoopStage.BLOCKED,
-            active_lease=lease,
-            active_attempt_id=completion.attempt_id,
-            blocking_reason=reason,
-        )
-        return TaskResult(
+            lease=lease,
+            attempt_id=completion.attempt_id,
             task_id=completion.task_id,
-            outcome="failed",
-            summary=completion.summary,
-            error=completion.error,
+            reason=reason,
         )
 
     validation = completion.validation
@@ -304,25 +369,13 @@ async def recover_active_attempt(loop: TaskLoop) -> AttemptRecoveryResult:
         )
     except Exception as exc:
         reason = str(exc)
-        loop.attempt_store.update(attempt.attempt_id, status=AttemptStatus.FAILED)
-        task_projection.record_task_state(
-            loop,
-            attempt.task_id,
-            TaskState.BLOCKED,
-            active_attempt_id=attempt.attempt_id,
-            failure_reason=reason,
-        )
-        loop._set_snapshot(
-            stage=TaskLoopStage.BLOCKED,
-            active_lease=lease,
-            active_attempt_id=attempt.attempt_id,
-            blocking_reason=reason,
-        )
         return AttemptRecoveryResult(
-            task_result=TaskResult(
+            task_result=_interrupt_attempt(
+                loop,
+                lease=lease,
+                attempt_id=attempt.attempt_id,
                 task_id=attempt.task_id,
-                outcome="failed",
-                error=reason,
+                reason=reason,
             )
         )
     task_projection.record_task_state(
@@ -341,7 +394,7 @@ async def run_until_blocked(loop: TaskLoop) -> list[TaskResult]:
         if result is None:
             break
         results.append(result)
-        if result.outcome in {"awaiting_user", "review_pending", "failed"}:
+        if result.outcome in {"awaiting_user", "review_pending", "failed", "interrupted"}:
             break
     return results
 
@@ -534,3 +587,41 @@ def _start_background_attempt_completion(
         name=f"task-loop-resume-{attempt.attempt_id}",
     )
     loop.track_background_attempt_task(attempt.attempt_id, task)
+
+
+def _interrupt_attempt(
+    loop: TaskLoop,
+    *,
+    lease: DispatchLease,
+    attempt_id: str,
+    task_id: str,
+    reason: str,
+) -> TaskResult:
+    loop.attempt_store.update(attempt_id, status=AttemptStatus.RECOVERY_PENDING)
+    task_projection.record_task_interrupted(
+        loop,
+        task_id,
+        active_attempt_id=attempt_id,
+        failure_reason=reason,
+    )
+    loop._set_snapshot(
+        stage=TaskLoopStage.BLOCKED,
+        active_lease=lease,
+        active_attempt_id=attempt_id,
+        blocking_reason=reason,
+    )
+    return TaskResult(
+        task_id=task_id,
+        outcome="interrupted",
+        error=reason,
+    )
+
+
+def _is_terminal_worker_input_failure(reason: str | None) -> bool:
+    if not reason:
+        return False
+    normalized = reason.lower()
+    return (
+        "interactive provider requests are not supported during autonomous task execution" in normalized
+        or "worker runs must auto-reject interactive requests" in normalized
+    )

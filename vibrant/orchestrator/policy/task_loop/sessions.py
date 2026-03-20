@@ -26,6 +26,7 @@ _CODE_PHASE_STATUSES = {
     AttemptStatus.LEASED,
     AttemptStatus.RUNNING,
     AttemptStatus.AWAITING_INPUT,
+    AttemptStatus.RECOVERY_PENDING,
 }
 
 _VALIDATION_PHASE_STATUSES = {
@@ -40,6 +41,7 @@ _MERGE_PHASE_STATUSES = {
 _RECOVERABLE_ATTEMPT_STATUSES = {
     AttemptStatus.LEASED,
     AttemptStatus.RUNNING,
+    AttemptStatus.RECOVERY_PENDING,
     AttemptStatus.VALIDATING,
 }
 
@@ -176,7 +178,11 @@ class AttemptExecutionSessionResource:
         attempt = self.attempt_store.get(attempt_id)
         if attempt is None:
             return None
-        if attempt.status not in {AttemptStatus.LEASED, AttemptStatus.RUNNING}:
+        if attempt.status not in {
+            AttemptStatus.LEASED,
+            AttemptStatus.RUNNING,
+            AttemptStatus.RECOVERY_PENDING,
+        }:
             return None
         snapshot = self.get(attempt_id)
         if snapshot is None or snapshot.live or snapshot.run_id is None:
@@ -258,15 +264,20 @@ class AttemptExecutionSessionResource:
             return replace(snapshot, status=AttemptStatus.FAILED)
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_stop_reason == "paused":
             return snapshot
+        if snapshot.status is AttemptStatus.RECOVERY_PENDING:
+            return snapshot
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_status == "failed":
-            return replace(snapshot, status=AttemptStatus.FAILED)
+            return replace(snapshot, status=AttemptStatus.RECOVERY_PENDING)
         if snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES and snapshot.run_status == "killed":
-            return replace(snapshot, status=AttemptStatus.CANCELLED)
+            return replace(snapshot, status=AttemptStatus.RECOVERY_PENDING)
         return snapshot
 
 
 def attempt_needs_recovery(snapshot: AttemptRecoveryState | AttemptExecutionSnapshot) -> bool:
     """Return whether the attempt should be recovered on the next execution tick."""
+
+    if snapshot.status is AttemptStatus.RECOVERY_PENDING:
+        return not snapshot.live and snapshot.workspace_path is not None
 
     return (
         snapshot.status in _RECOVERABLE_ATTEMPT_STATUSES
