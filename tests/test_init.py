@@ -106,10 +106,8 @@ class TestVibrantInit:
         assert config.model_provider is None
         assert config.conversation_directory == str(DEFAULT_CONVERSATION_DIRECTORY)
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
-        assert config.test_commands == []
         assert 'kind = "codex"' in (tmp_path / ".vibrant" / "vibrant.toml").read_text(encoding="utf-8")
         assert 'execution-mode = "automatic"' in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
-        assert 'test-commands = []' in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")
         assert (
             'conversation-directory = ".vibrant/conversations"'
             in (tmp_path / ".vibrant/vibrant.toml").read_text(encoding="utf-8")

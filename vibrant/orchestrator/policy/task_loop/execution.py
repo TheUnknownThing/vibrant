@@ -464,13 +464,6 @@ class ExecutionCoordinator:
         workspace: WorkspaceHandle,
         code_summary: str | None,
     ) -> ValidationOutcome:
-        if not self.config.test_commands:
-            return ValidationOutcome(
-                status="skipped",
-                run_ids=[],
-                summary="Test stage skipped because no test commands are configured.",
-            )
-        
         cua_enabled = pycua_enabled(self.project_root, self.config)
 
         prompt = build_test_prompt(

@@ -182,11 +182,6 @@ class VibrantConfig(BaseModel):
         ),
         serialization_alias="execution-mode",
     )
-    test_commands: list[str] = Field(
-        default_factory=list,
-        validation_alias=AliasChoices("test_commands", "test-commands"),
-        serialization_alias="test-commands",
-    )
     show_agent_logs: bool | None = Field(
         default=None,
         validation_alias=AliasChoices("show_agent_logs", "show-agent-logs"),
@@ -285,7 +280,6 @@ _ORCHESTRATOR_SECTION_KEYS = (
     "conversation-directory",
     "execution-mode",
 )
-_VALIDATION_SECTION_KEYS = ("test-commands",)
 _BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -398,7 +392,6 @@ def _render_config_toml(config: VibrantConfig) -> str:
     rendered_sections = [
         _render_toml_section("provider", _PROVIDER_SECTION_KEYS, payload),
         _render_toml_section("orchestrator", _ORCHESTRATOR_SECTION_KEYS, payload),
-        _render_toml_section("validation", _VALIDATION_SECTION_KEYS, payload),
     ]
     return "\n\n".join(section for section in rendered_sections if section).rstrip() + "\n"
 

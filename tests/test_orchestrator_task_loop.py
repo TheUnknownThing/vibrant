@@ -367,8 +367,6 @@ async def test_failed_completion_marks_attempt_failed_and_inactive(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_execution_coordinator_converts_worker_awaiting_input_to_failed_completion(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
-    orchestrator._config.test_commands = ["pytest"]
-    orchestrator._execution_coordinator.config.test_commands = ["pytest"]
     workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
     attempt = orchestrator._attempt_store.create(
         task_id="task-1",
@@ -402,8 +400,6 @@ async def test_execution_coordinator_marks_attempt_validating_before_waiting_for
     monkeypatch,
 ) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)
-    orchestrator._config.test_commands = ["pytest"]
-    orchestrator._execution_coordinator.config.test_commands = ["pytest"]
     workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
     attempt = orchestrator._attempt_store.create(
         task_id="task-1",
@@ -590,8 +586,6 @@ def test_prepare_task_workspace_allows_repo_relative_worktree_roots(tmp_path: Pa
                 'conversation-directory = ".vibrant/conversations"',
                 'execution-mode = "automatic"',
                 "",
-                "[validation]",
-                "test-commands = []",
                 "",
             ]
         ),

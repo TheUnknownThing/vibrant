@@ -190,9 +190,6 @@ def _write_e2e_config(path: Path, *, worktree_root: Path) -> None:
             'conversation-directory = ".vibrant/conversations"',
             'execution-mode = "automatic"',
             "",
-            "[validation]",
-            "test-commands = []",
-            "",
         ]
     )
     path.write_text(content, encoding="utf-8")

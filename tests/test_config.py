@@ -51,9 +51,6 @@ class TestLoadConfig:
                 conversation-directory = ".vibrant/session-history"
                 execution-mode = "manual"
 
-                [validation]
-                test-commands = ["pytest -q", "ruff check ."]
-
                 [ui]
                 show-agent-logs = true
                 """
@@ -81,7 +78,6 @@ class TestLoadConfig:
         assert config.conversation_directory == ".vibrant/session-history"
         assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "session-history"
         assert config.execution_mode is RoadmapExecutionMode.MANUAL
-        assert config.test_commands == ["pytest -q", "ruff check ."]
         assert config.show_agent_logs is True
         assert config.tui_agent_logs_visible(dev_mode=False) is True
         assert config.extra_config == {"persistExtendedHistory": True}
@@ -107,7 +103,6 @@ class TestLoadConfig:
         assert config.conversation_directory == str(DEFAULT_CONVERSATION_DIRECTORY)
         assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "conversations"
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
-        assert config.test_commands == []
         assert config.show_agent_logs is None
         assert config.tui_agent_logs_visible(dev_mode=False) is False
         assert config.tui_agent_logs_visible(dev_mode=True) is True
@@ -179,9 +174,6 @@ class TestLoadConfig:
 
                 [orchestrator]
                 execution-mode = "manual"
-
-                [validation]
-                test-commands = ["pytest -q"]
                 """
             ).strip()
             + "\n",
@@ -205,7 +197,6 @@ class TestLoadConfig:
         assert reloaded.approval_policy == "on-request"
         assert reloaded.reasoning_effort == "high"
         assert reloaded.execution_mode is RoadmapExecutionMode.MANUAL
-        assert reloaded.test_commands == ["pytest -q"]
         assert reloaded.extra_config == {"persistExtendedHistory": True}
 
 
