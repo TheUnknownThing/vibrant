@@ -38,7 +38,7 @@ def test_test_agent_build_run_record_is_read_only(tmp_path: Path) -> None:
     )
 
     assert record.identity.type is AgentType.TEST
-    assert record.provider.runtime_mode == "read-only"
+    assert record.provider.runtime_mode == "workspace-write"
     assert record.identity.run_id.startswith("run-test-task-2-")
 
 
