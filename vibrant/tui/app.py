@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 import logging
+from operator import ne
 import os
 from pathlib import Path
 from collections.abc import Callable
@@ -345,6 +346,7 @@ class VibrantApp(App):
         try:
             if next_status is WorkflowStatus.PAUSED:
                 await orchestrator.pause_policies("user_paused")
+
             else:
                 resume_result = await orchestrator.resume_policies()
                 if resume_result.get("attempt") is None:
@@ -363,6 +365,7 @@ class VibrantApp(App):
             self._set_status(f"Workflow resumed ({next_status.value})")
             self.notify(f"Workflow resumed ({next_status.value}).")
 
+        self._transition_workflow_state(next_status)
         self._refresh_project_views()
 
     def action_cycle_agent_output(self) -> None:
