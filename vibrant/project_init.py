@@ -11,6 +11,7 @@ from .config import DEFAULT_CONFIG_DIR, VibrantConfig
 from .consensus.writer import ConsensusWriter
 from .models.consensus import ConsensusDocument, ConsensusStatus
 from .orchestrator.types import GatekeeperSessionSnapshot, WorkflowStatus, utc_now
+from .tui.utility.git import ensure_git_repository_commit
 
 GITIGNORE_ENTRIES = ["*"]
 
@@ -45,6 +46,7 @@ def initialize_project(target_path: Path = Path(".")) -> Path:
     _write_if_missing(vibrant_dir / "vibrant.toml", _render_default_config())
     _write_if_missing(vibrant_dir / "state.json", _render_initial_state())
     _ensure_gitignore(vibrant_dir / ".gitignore")
+    ensure_git_repository_commit(project_root)
 
     return vibrant_dir
 

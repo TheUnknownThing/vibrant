@@ -37,6 +37,17 @@ EXPECTED_GITIGNORE_ENTRIES = [
 ]
 
 
+def _git(project_root: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
 def _run_vibrant_init(cwd: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     existing_pythonpath = env.get("PYTHONPATH")
@@ -131,6 +142,26 @@ class TestVibrantInit:
         for entry in EXPECTED_GITIGNORE_ENTRIES:
             assert gitignore_lines.count(entry) == 1
 
+    def test_init_creates_initial_commit_for_repository_with_unborn_head(self, tmp_path: Path) -> None:
+        _git(tmp_path, "init", "-b", "main")
+        (tmp_path / "tracked.txt").write_text("hello\n", encoding="utf-8")
+
+        result = _run_vibrant_init(tmp_path)
+
+        assert result.returncode == 0, result.stderr
+        assert _git(tmp_path, "rev-parse", "HEAD")
+        assert _git(tmp_path, "ls-files", "tracked.txt") == "tracked.txt"
+        assert _git(tmp_path, "log", "-1", "--pretty=%s") == "Initialize repository for Vibrant"
+
+    def test_init_creates_empty_commit_for_empty_repository_with_unborn_head(self, tmp_path: Path) -> None:
+        _git(tmp_path, "init", "-b", "main")
+
+        result = _run_vibrant_init(tmp_path)
+
+        assert result.returncode == 0, result.stderr
+        assert _git(tmp_path, "rev-parse", "HEAD")
+        assert _git(tmp_path, "log", "-1", "--pretty=%s") == "Initialize repository for Vibrant"
+        assert _git(tmp_path, "status", "--short") == ""
 
     def test_ensure_project_files_backfills_missing_source_of_truth_files(self, tmp_path):
         project_root = tmp_path / "project"
