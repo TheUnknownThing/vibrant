@@ -587,7 +587,7 @@ class VibrantApp(App):
             self.action_open_settings()
         elif cmd == "vibe":
             self._transition_to_vibing(prefer_chat_history=True)
-        elif cmd in {"run", "next", "task"}:
+        elif cmd in {"run", "next"}:
             await self.action_run_next_task()
         elif cmd == "restart":
             self._restart_failed_task(event.args or None)
@@ -612,7 +612,7 @@ class VibrantApp(App):
             self.notify(
                 "/model <name> - Set model\n"
                 "/vibe - Enter vibing phase\n"
-                "/run - Execute the next roadmap task\n"
+                "/run, /next - Execute the next roadmap task\n"
                 "/restart [task-id] - Requeue a failed task\n"
                 "/refresh - Reload project state\n"
                 "/settings - Open settings\n"

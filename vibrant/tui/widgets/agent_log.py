@@ -707,7 +707,7 @@ class AgentOutput(Static):
         unread_text = f" · unread {unread}" if unread else ""
         meta.update(
             "Conversation: "
-            f"{summary.conversation_id} · Task: {task_text} · Agent: {agent_text} · "
+            f"{summary.conversation_id} · Agent: {agent_text} · "
             f"Run: {run_text} · Thread: {thread_text} · Status: {status} · "
             f"View: {mode} · {follow}{unread_text} · Tab next · S lock · D debug"
         )
@@ -724,11 +724,10 @@ class AgentOutput(Static):
         for conversation_id in self._conversation_order:
             state = self._conversations[conversation_id]
             status_icon = _STATUS_ICONS.get(state.latest_status or "", "•")
-            task_fragment = state.summary.task_ids[-1] if state.summary.task_ids else "n/a"
             unread = state.unread_debug_lines if self._debug_view_enabled else state.unread_blocks
             unread_fragment = f" +{unread}" if unread else ""
             prefix = "▶" if conversation_id == self._active_conversation_id else "•"
-            parts.append(f"{prefix} {status_icon} {conversation_id}/{task_fragment}{unread_fragment}")
+            parts.append(f"{prefix} {status_icon} {conversation_id}/{unread_fragment}")
         tabs.update("  |  ".join(parts))
 
     def _update_switcher(self) -> None:

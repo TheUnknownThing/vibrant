@@ -117,7 +117,6 @@ class InputBar(Static):
         "/refresh",
         "/run",
         "/settings",
-        "/task",
         "/vibe",
     )
 
