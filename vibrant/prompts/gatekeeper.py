@@ -75,8 +75,6 @@ def build_gatekeeper_resume_prompt(
             "Use this message as incremental input for the next turn, not as a new bootstrap prompt.",
             "## Current Trigger",
             f"{trigger_value}: {trigger_description}",
-            "## Current Roadmap",
-            roadmap_text,
             "## Agent Summary (if applicable)",
             summary_text,
             "Continue from the existing conversation and make the next durable planning or review decision.",
