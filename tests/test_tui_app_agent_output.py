@@ -14,6 +14,7 @@ from vibrant.orchestrator.types import (
     QuestionPriority,
     QuestionStatus,
     QuestionView,
+    TaskResult,
     WorkflowStatus,
 )
 from vibrant.tui.app import VibrantApp
@@ -390,6 +391,24 @@ async def test_restart_slash_command_prefers_failed_task_over_selected_pending_t
     assert calls == ["task-1"]
     assert notifications == [("Task task-1 queued for retry.", "information")]
     assert statuses == ["Task task-1 queued for retry"]
+
+
+def test_handle_task_result_reports_interrupted_attempt(monkeypatch) -> None:
+    app = VibrantApp()
+    statuses: list[str] = []
+    notifications: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+    monkeypatch.setattr(
+        app,
+        "notify",
+        lambda message, *, severity="information", **kwargs: notifications.append((message, severity)),
+    )
+
+    app._handle_task_result(TaskResult(task_id="task-1", outcome="interrupted", error="connection dropped"))
+
+    assert notifications == [("connection dropped", "warning")]
+    assert statuses == ["Task task-1 interrupted"]
 
 
 @pytest.mark.asyncio

@@ -629,7 +629,7 @@ class VibrantApp(App):
             self.notify(
                 "/model <name> - Set model\n"
                 "/vibe - Enter vibing phase\n"
-                "/run, /next - Execute the next roadmap task\n"
+                "/run, /next - Execute the next roadmap task or resume an interrupted attempt\n"
                 "/restart [task-id] - Requeue a failed task\n"
                 "/refresh - Reload project state\n"
                 "/settings - Open settings\n"
@@ -1280,6 +1280,10 @@ class VibrantApp(App):
             self._set_status(f"Task {task_label} awaiting review")
         elif result.outcome == "awaiting_user":
             self._set_status("awaiting user input")
+        elif result.outcome == "interrupted":
+            error = result.error or "Task interrupted. Resume is available."
+            self.notify(str(error), severity="warning")
+            self._set_status(f"Task {task_label} interrupted")
         elif result.outcome == "failed":
             error = result.error or "Task failed."
             self.notify(str(error), severity="error")

@@ -361,9 +361,9 @@ async def test_failed_completion_marks_attempt_failed_and_inactive(tmp_path: Pat
     assert attempt_id is not None
     attempt = orchestrator._attempt_store.get(attempt_id)
 
-    assert result is not None and result.outcome == "failed"
-    assert attempt is not None and attempt.status is AttemptStatus.FAILED
-    assert orchestrator._attempt_store.list_active() == []
+    assert result is not None and result.outcome == "interrupted"
+    assert attempt is not None and attempt.status is AttemptStatus.RECOVERY_PENDING
+    assert orchestrator._attempt_store.list_active() == [attempt]
 
 
 @pytest.mark.asyncio
@@ -716,10 +716,18 @@ async def test_execution_coordinator_failed_resume_preserves_previous_provider_h
         )
     )
 
+    captured: dict[str, object] = {}
+
     async def fake_resume_run(**kwargs):
+        captured["resume"] = kwargs
         raise RuntimeError("resume failed")
 
+    async def fake_start_run(**kwargs):
+        captured["start"] = kwargs
+        return SimpleNamespace()
+
     monkeypatch.setattr(orchestrator._runtime_service, "resume_run", fake_resume_run)
+    monkeypatch.setattr(orchestrator._runtime_service, "start_run", fake_start_run)
 
     task = orchestrator._roadmap_store.get_task("task-1")
     assert task is not None
@@ -729,11 +737,14 @@ async def test_execution_coordinator_failed_resume_preserves_previous_provider_h
         prompt="Fresh prompt should be ignored in favor of persisted prompt.",
     )
 
-    with pytest.raises(RuntimeError, match="resume failed"):
-        await orchestrator._execution_coordinator.recover_attempt(attempt.attempt_id, prepared=prepared)
+    recovered = await orchestrator._execution_coordinator.recover_attempt(attempt.attempt_id, prepared=prepared)
 
     persisted = orchestrator._agent_run_store.get("run-old")
 
+    assert recovered is not None
+    assert "resume" in captured
+    assert "start" in captured
+    assert captured["start"]["prompt"] == "Resume the coding task."
     assert persisted is not None
     assert persisted.provider.provider_thread_id == "thread-existing"
     assert persisted.provider.resume_cursor == {"threadId": "thread-existing"}
@@ -1184,8 +1195,16 @@ async def test_run_next_task_recovers_active_attempt_before_dispatching_new_work
 
     result = await orchestrator._task_loop.run_next_task()
 
-    assert result is not None and result.outcome == "failed"
-    assert calls == [f"recover:{attempt.attempt_id}", f"await:{attempt.attempt_id}"]
+    reloaded = orchestrator._attempt_store.get(attempt.attempt_id)
+
+    assert result is not None and result.outcome == "interrupted"
+    assert reloaded is not None and reloaded.status is AttemptStatus.RECOVERY_PENDING
+    assert calls == [
+        f"recover:{attempt.attempt_id}",
+        f"await:{attempt.attempt_id}",
+        f"recover:{attempt.attempt_id}",
+        f"await:{attempt.attempt_id}",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1229,9 +1248,9 @@ async def test_run_next_task_surfaces_recovery_failure_without_dispatching_new_w
     result = await orchestrator._task_loop.run_next_task()
     failed_attempt = orchestrator._attempt_store.get(attempt.attempt_id)
 
-    assert result is not None and result.outcome == "failed"
+    assert result is not None and result.outcome == "interrupted"
     assert result.error == "resume failed"
-    assert failed_attempt is not None and failed_attempt.status is AttemptStatus.FAILED
+    assert failed_attempt is not None and failed_attempt.status is AttemptStatus.RECOVERY_PENDING
     assert calls == [f"recover:{attempt.attempt_id}"]
 
 
