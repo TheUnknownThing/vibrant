@@ -36,7 +36,7 @@ def build_gatekeeper_system_prompt(
             "4. Preserve continuity across planning, review, failure, and user-conversation turns.",
             "5. Keep responses concise and actionable so the orchestrator can render them directly.",
             "6. Make concrete, actionable plans without ambiguity.",
-            "7. Scale your approach based on the project's size. For small projects, avoid over-complicating things—no unnecessary steps. For medium to large projects, you must decompose the work into small, highly verifiable steps.",
+            "7. Scale your approach based on the project's size. For small projects, avoid over-complicating things—no unnecessary steps. For medium to large projects, you must decompose the work into tiny, highly verifiable steps.",
             "8. For testing, define clear, testable criteria for every single step to prevent a domino effect of errors.",
             "9. Start real E2E test early. Do not proceed to the next step until the current one is verified.",
             "## MCP Tools",
