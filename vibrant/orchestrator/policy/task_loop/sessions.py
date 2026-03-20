@@ -44,6 +44,7 @@ _RECOVERABLE_ATTEMPT_STATUSES = {
 }
 
 _NON_RECOVERABLE_RUN_STATUSES = {"awaiting_input", "completed", "failed", "killed"}
+_LIVE_RUNTIME_STATES = {"starting", "running", "awaiting_input"}
 
 
 def active_run_id_for_attempt(attempt: AttemptRecord) -> str | None:
@@ -307,9 +308,9 @@ def _project_snapshot(
         except Exception:
             runtime_snapshot = None
     if runtime_snapshot is not None:
-        live = True
-        awaiting_input = runtime_snapshot.awaiting_input
-        input_requests = list(runtime_snapshot.input_requests)
+        live = runtime_snapshot.state in _LIVE_RUNTIME_STATES
+        awaiting_input = runtime_snapshot.awaiting_input if live else False
+        input_requests = list(runtime_snapshot.input_requests) if live else []
 
     return AttemptExecutionSnapshot(
         attempt_id=attempt.attempt_id,

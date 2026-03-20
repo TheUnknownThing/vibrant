@@ -434,6 +434,37 @@ async def test_toggle_pause_pauses_and_resumes_live_policies(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_toggle_pause_restarts_automatic_workflow_after_resuming_attempt(monkeypatch) -> None:
+    app = VibrantApp()
+    statuses: list[str] = []
+    notifications: list[tuple[str, str]] = []
+    facade_calls: list[tuple[str, str | None]] = []
+    workflow_status = WorkflowStatus.PAUSED
+    app._paused_return_status = WorkflowStatus.EXECUTING
+
+    async def fake_resume_policies():
+        nonlocal workflow_status
+        facade_calls.append(("resume", None))
+        workflow_status = WorkflowStatus.EXECUTING
+        return {"workflow": workflow_status, "gatekeeper": None, "attempt": SimpleNamespace(attempt_id="attempt-1")}
+
+    app.orchestrator_facade = SimpleNamespace(
+        get_workflow_status=lambda: workflow_status,
+        resume_policies=fake_resume_policies,
+    )
+    monkeypatch.setattr(app, "_refresh_project_views", lambda: None)
+    monkeypatch.setattr(app, "_start_automatic_workflow_if_needed", lambda: facade_calls.append(("auto", None)))
+    monkeypatch.setattr(app, "_set_status", statuses.append)
+    monkeypatch.setattr(app, "notify", lambda message, *, severity="information", **kwargs: notifications.append((message, severity)))
+
+    await app.action_toggle_pause()
+
+    assert facade_calls == [("resume", None), ("auto", None)]
+    assert statuses == ["Workflow resumed (executing)"]
+    assert notifications == [("Workflow resumed (executing).", "information")]
+
+
+@pytest.mark.asyncio
 async def test_model_slash_command_updates_orchestrator_config(monkeypatch) -> None:
     app = VibrantApp()
     patches: list[VibrantConfigPatch] = []

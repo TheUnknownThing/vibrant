@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -161,6 +162,37 @@ async def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, compl
             error=completion.error,
         )
 
+    validation = completion.validation
+    if validation is None:
+        try:
+            validation = await loop.execution.run_validation_for_attempt(
+                attempt_id=completion.attempt_id,
+                code_summary=completion.summary,
+            )
+        except Exception as exc:
+            reason = str(exc)
+            loop.attempt_store.update(completion.attempt_id, status=AttemptStatus.FAILED)
+            task_projection.record_task_state(
+                loop,
+                completion.task_id,
+                TaskState.BLOCKED,
+                active_attempt_id=completion.attempt_id,
+                failure_reason=reason,
+            )
+            loop._set_snapshot(
+                stage=TaskLoopStage.BLOCKED,
+                active_lease=lease,
+                active_attempt_id=completion.attempt_id,
+                blocking_reason=reason,
+            )
+            return TaskResult(
+                task_id=completion.task_id,
+                outcome="failed",
+                summary=completion.summary,
+                error=reason,
+            )
+        completion.validation = validation
+
     loop._set_snapshot(
         stage=TaskLoopStage.VALIDATING,
         active_lease=lease,
@@ -168,11 +200,6 @@ async def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, compl
         blocking_reason=None,
     )
     loop.attempt_store.update(completion.attempt_id, status=AttemptStatus.VALIDATING)
-    validation = completion.validation or ValidationOutcome(
-        status="skipped",
-        run_ids=[],
-        summary="Test stage did not run.",
-    )
     loop.attempt_store.update(
         completion.attempt_id,
         status=AttemptStatus.REVIEW_PENDING,
@@ -221,6 +248,10 @@ async def consume_attempt_completion(loop: TaskLoop, lease: DispatchLease, compl
 
 
 async def recover_active_attempt(loop: TaskLoop) -> AttemptRecoveryResult:
+    background_task = loop.next_background_attempt_task()
+    if background_task is not None:
+        return AttemptRecoveryResult(task_result=await background_task)
+
     workflow = loop.workflow_snapshot()
     reason = dispatch.task_execution_block_reason(loop, workflow)
     if reason is not None:
@@ -340,6 +371,7 @@ async def resume_attempt(loop: TaskLoop, attempt_id: str) -> AttemptRecord:
         active_attempt_id=recovered.attempt_id,
         blocking_reason=None,
     )
+    _start_background_attempt_completion(loop, lease=lease, attempt=recovered)
     return recovered
 
 
@@ -483,3 +515,22 @@ def _require_attempt_resume_allowed(loop: TaskLoop) -> None:
         raise RuntimeError(reason)
     if workflow.status is not WorkflowStatus.EXECUTING:
         raise RuntimeError(f"Workflow is not executing: {workflow.status.value}")
+
+
+def _start_background_attempt_completion(
+    loop: TaskLoop,
+    *,
+    lease: DispatchLease,
+    attempt: AttemptRecord,
+) -> None:
+    if loop.background_attempt_task(attempt.attempt_id) is not None:
+        return
+
+    async def _consume() -> TaskResult:
+        return await await_attempt_result(loop, lease, attempt)
+
+    task = asyncio.create_task(
+        _consume(),
+        name=f"task-loop-resume-{attempt.attempt_id}",
+    )
+    loop.track_background_attempt_task(attempt.attempt_id, task)

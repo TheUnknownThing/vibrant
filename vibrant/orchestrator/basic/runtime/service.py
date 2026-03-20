@@ -169,7 +169,7 @@ class AgentRuntimeService:
     def snapshot_handle(self, run_id: str) -> RuntimeHandleSnapshot:
         live_run = self._resolve_live_run(run_id)
         provider_thread = live_run.handle.provider_thread
-        return RuntimeHandleSnapshot(
+        snapshot = RuntimeHandleSnapshot(
             agent_id=live_run.agent_record.identity.agent_id,
             run_id=run_id,
             state=live_run.handle.state.value,
@@ -177,6 +177,9 @@ class AgentRuntimeService:
             awaiting_input=live_run.handle.awaiting_input,
             input_requests=live_run.handle.input_requests,
         )
+        if live_run.handle.done:
+            self._forget_live_run(run_id, live_run.agent_record.identity.agent_id)
+        return snapshot
 
     def annotate_run(self, run_id: str, *, stop_reason: str | None = None) -> None:
         live_run = self._resolve_live_run(run_id)

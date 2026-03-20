@@ -53,6 +53,7 @@ def test_snapshot_handle_reports_completed_run_state_and_thread() -> None:
             sequence=0,
             events=[],
         )
+        runtime_service._active_runs_by_agent_id[record.identity.agent_id] = record.identity.run_id
 
         snapshot = runtime_service.snapshot_handle(record.identity.run_id)
 
@@ -62,6 +63,8 @@ def test_snapshot_handle_reports_completed_run_state_and_thread() -> None:
         assert snapshot.provider_thread_id == "thread-1"
         assert snapshot.awaiting_input is False
         assert snapshot.input_requests == []
+        assert record.identity.run_id not in runtime_service._runs
+        assert record.identity.agent_id not in runtime_service._active_runs_by_agent_id
     finally:
         asyncio.set_event_loop(None)
         loop.close()

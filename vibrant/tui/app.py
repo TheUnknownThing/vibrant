@@ -347,9 +347,8 @@ class VibrantApp(App):
             if next_status is WorkflowStatus.PAUSED:
                 await orchestrator.pause_policies("user_paused")
             else:
-                resume_result = await orchestrator.resume_policies()
-                if resume_result.get("attempt") is None:
-                    self._start_automatic_workflow_if_needed()
+                await orchestrator.resume_policies()
+                self._start_automatic_workflow_if_needed()
         except Exception as exc:
             logger.exception("Failed to toggle workflow pause state")
             self.notify(f"Failed to update workflow state: {exc}", severity="error")
