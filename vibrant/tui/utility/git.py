@@ -41,19 +41,29 @@ def ensure_git_repository_commit(path: pathlib.Path) -> None:
     _run_git(
         path,
         "commit",
+        "--no-verify",
+        "--no-gpg-sign",
         "--allow-empty",
         "-m",
         INITIAL_COMMIT_MESSAGE,
-        env=_initial_commit_environment(),
+        env=_initial_commit_environment(path),
     )
 
 
-def _initial_commit_environment() -> dict[str, str]:
+def _initial_commit_environment(path: pathlib.Path) -> dict[str, str]:
     env = os.environ.copy()
-    env.setdefault("GIT_AUTHOR_NAME", INITIAL_COMMIT_AUTHOR_NAME)
-    env.setdefault("GIT_AUTHOR_EMAIL", INITIAL_COMMIT_AUTHOR_EMAIL)
-    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
-    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+    identity = {
+        "GIT_AUTHOR_NAME": env.get("GIT_AUTHOR_NAME") or _git_config(path, "user.name"),
+        "GIT_AUTHOR_EMAIL": env.get("GIT_AUTHOR_EMAIL") or _git_config(path, "user.email"),
+        "GIT_COMMITTER_NAME": env.get("GIT_COMMITTER_NAME"),
+        "GIT_COMMITTER_EMAIL": env.get("GIT_COMMITTER_EMAIL"),
+    }
+
+    identity["GIT_AUTHOR_NAME"] = identity["GIT_AUTHOR_NAME"] or INITIAL_COMMIT_AUTHOR_NAME
+    identity["GIT_AUTHOR_EMAIL"] = identity["GIT_AUTHOR_EMAIL"] or INITIAL_COMMIT_AUTHOR_EMAIL
+    identity["GIT_COMMITTER_NAME"] = identity["GIT_COMMITTER_NAME"] or identity["GIT_AUTHOR_NAME"]
+    identity["GIT_COMMITTER_EMAIL"] = identity["GIT_COMMITTER_EMAIL"] or identity["GIT_AUTHOR_EMAIL"]
+    env.update(identity)
     return env
 
 
@@ -66,6 +76,20 @@ def _git_success(path: pathlib.Path, *args: str) -> bool:
         text=True,
     )
     return completed.returncode == 0
+
+
+def _git_config(path: pathlib.Path, key: str) -> str | None:
+    completed = subprocess.run(
+        ["git", "config", "--get", key],
+        cwd=path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return None
+    value = completed.stdout.strip()
+    return value or None
 
 
 def _run_git(path: pathlib.Path, *args: str, env: dict[str, str] | None = None) -> None:

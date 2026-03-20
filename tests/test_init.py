@@ -153,6 +153,32 @@ class TestVibrantInit:
         assert _git(tmp_path, "ls-files", "tracked.txt") == "tracked.txt"
         assert _git(tmp_path, "log", "-1", "--pretty=%s") == "Initialize repository for Vibrant"
 
+    def test_init_preserves_repository_identity_for_initial_commit(self, tmp_path: Path) -> None:
+        _git(tmp_path, "init", "-b", "main")
+        _git(tmp_path, "config", "user.name", "Configured User")
+        _git(tmp_path, "config", "user.email", "configured@example.com")
+
+        result = _run_vibrant_init(tmp_path)
+
+        assert result.returncode == 0, result.stderr
+        assert _git(tmp_path, "log", "-1", "--pretty=%an <%ae>") == "Configured User <configured@example.com>"
+
+    def test_init_bypasses_hooks_and_commit_signing_for_initial_commit(self, tmp_path: Path) -> None:
+        _git(tmp_path, "init", "-b", "main")
+        _git(tmp_path, "config", "user.name", "Configured User")
+        _git(tmp_path, "config", "user.email", "configured@example.com")
+        _git(tmp_path, "config", "commit.gpgsign", "true")
+
+        hooks_dir = tmp_path / ".git" / "hooks"
+        hooks_dir.mkdir(exist_ok=True)
+        (hooks_dir / "pre-commit").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (hooks_dir / "pre-commit").chmod(0o755)
+
+        result = _run_vibrant_init(tmp_path)
+
+        assert result.returncode == 0, result.stderr
+        assert _git(tmp_path, "log", "-1", "--pretty=%s") == "Initialize repository for Vibrant"
+
     def test_init_creates_empty_commit_for_empty_repository_with_unborn_head(self, tmp_path: Path) -> None:
         _git(tmp_path, "init", "-b", "main")
 
