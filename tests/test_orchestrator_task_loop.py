@@ -21,6 +21,7 @@ from vibrant.orchestrator.types import (
     AttemptStatus,
     MergeOutcome,
     QuestionPriority,
+    TaskResult,
     ValidationOutcome,
     WorkflowStatus,
 )
@@ -968,6 +969,119 @@ async def test_resume_attempt_consumes_completion_in_background(tmp_path: Path, 
     assert orchestrator._task_loop.snapshot().stage is TaskLoopStage.REVIEW_PENDING
     assert len(tickets) == 1
     assert tickets[0].attempt_id == attempt.attempt_id
+
+
+@pytest.mark.asyncio
+async def test_run_next_task_returns_completed_background_result_before_dispatch(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    completed_task = asyncio.create_task(
+        asyncio.sleep(
+            0,
+            result=TaskResult(
+                task_id="task-1",
+                outcome="review_pending",
+                summary="Recovered implementation",
+            ),
+        )
+    )
+    await asyncio.sleep(0)
+    orchestrator._task_loop.track_background_attempt_task("attempt-1", completed_task)
+
+    def fail_select_next(loop, *, limit: int):
+        del loop, limit
+        raise AssertionError("dispatch.select_next should not run before returning completed background work")
+
+    monkeypatch.setattr("vibrant.orchestrator.policy.task_loop.attempts.dispatch.select_next", fail_select_next)
+
+    result = await orchestrator._task_loop.run_next_task()
+
+    assert result is not None
+    assert result.outcome == "review_pending"
+
+
+@pytest.mark.asyncio
+async def test_resume_attempt_reuses_existing_background_consumer_for_live_session(tmp_path: Path, monkeypatch) -> None:
+    orchestrator = _prepare_orchestrator(tmp_path)
+    workspace = orchestrator._workspace_service.prepare_task_workspace("task-1")
+    attempt = orchestrator._attempt_store.create(
+        task_id="task-1",
+        task_definition_version=1,
+        workspace_id=workspace.workspace_id,
+        status=AttemptStatus.RUNNING,
+        code_run_id="run-live",
+        conversation_id="attempt-conv-1",
+    )
+    orchestrator._agent_run_store.upsert(
+        AgentRecord(
+            identity={
+                "run_id": "run-live",
+                "agent_id": "agent-task-1",
+                "role": AgentType.CODE.value,
+                "type": AgentType.CODE,
+            },
+            lifecycle={"status": RunStatus.RUNNING},
+            context={
+                "worktree_path": workspace.path,
+                "prompt_used": "Resume while live.",
+            },
+            provider=AgentProviderMetadata(
+                provider_thread_id="thread-existing",
+                resume_cursor={"threadId": "thread-existing"},
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        orchestrator._runtime_service,
+        "snapshot_handle",
+        lambda run_id: SimpleNamespace(
+            state="running",
+            awaiting_input=False,
+            input_requests=[],
+            provider_thread_id="thread-existing",
+        ),
+    )
+    await_calls: list[str] = []
+    completion_released = asyncio.Event()
+
+    async def fake_await_attempt_completion(attempt_id: str):
+        await_calls.append(attempt_id)
+        await completion_released.wait()
+        active = orchestrator._attempt_store.get(attempt_id)
+        assert active is not None
+        return AttemptCompletion(
+            attempt_id=active.attempt_id,
+            task_id=active.task_id,
+            status="succeeded",
+            code_run_id=active.code_run_id or "run-live",
+            workspace_ref=active.workspace_id,
+            diff_ref=None,
+            validation=ValidationOutcome(
+                status="passed",
+                run_ids=["test-run-1"],
+                summary="Recovered tests passed",
+            ),
+            summary="Recovered implementation",
+            error=None,
+            conversation_ref=active.conversation_id,
+            provider_events_ref=None,
+        )
+
+    monkeypatch.setattr(
+        type(orchestrator._execution_coordinator),
+        "await_attempt_completion",
+        lambda self, attempt_id: fake_await_attempt_completion(attempt_id),
+    )
+
+    first = await orchestrator._task_loop.resume_attempt(attempt.attempt_id)
+    second = await orchestrator._task_loop.resume_attempt(attempt.attempt_id)
+    completion_released.set()
+    background_task = orchestrator._task_loop.background_attempt_task(attempt.attempt_id)
+    assert background_task is not None
+    await background_task
+
+    assert first.attempt_id == attempt.attempt_id
+    assert second.attempt_id == attempt.attempt_id
+    assert await_calls == [attempt.attempt_id]
 
 
 @pytest.mark.asyncio

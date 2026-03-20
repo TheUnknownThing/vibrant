@@ -84,22 +84,17 @@ class TaskLoop:
         attempt_id: str,
         task: asyncio.Task[TaskResult],
     ) -> None:
-        current = self._background_attempt_tasks.get(attempt_id)
-        if current is not None and not current.done():
-            return
         self._background_attempt_tasks[attempt_id] = task
 
-        def _cleanup(completed: asyncio.Task[TaskResult]) -> None:
-            if self._background_attempt_tasks.get(attempt_id) is completed:
-                self._background_attempt_tasks.pop(attempt_id, None)
-
-        task.add_done_callback(_cleanup)
+    def background_attempt_task(self, attempt_id: str) -> asyncio.Task[TaskResult] | None:
+        return self._background_attempt_tasks.get(attempt_id)
 
     def next_background_attempt_task(self) -> asyncio.Task[TaskResult] | None:
         for attempt_id, task in list(self._background_attempt_tasks.items()):
             if task.done():
                 self._background_attempt_tasks.pop(attempt_id, None)
-                continue
+                return task
+        for attempt_id, task in list(self._background_attempt_tasks.items()):
             return task
         return None
 

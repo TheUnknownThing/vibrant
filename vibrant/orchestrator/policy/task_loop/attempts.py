@@ -523,6 +523,9 @@ def _start_background_attempt_completion(
     lease: DispatchLease,
     attempt: AttemptRecord,
 ) -> None:
+    if loop.background_attempt_task(attempt.attempt_id) is not None:
+        return
+
     async def _consume() -> TaskResult:
         return await await_attempt_result(loop, lease, attempt)
 
