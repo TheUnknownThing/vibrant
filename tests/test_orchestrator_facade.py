@@ -21,6 +21,25 @@ def test_facade_import_path_is_stable() -> None:
     assert ExportedFacade is OrchestratorFacade
 
 
+def test_facade_detects_non_trivial_workspace(tmp_path: Path) -> None:
+    initialize_project(tmp_path)
+    _ = OrchestratorFacade(create_orchestrator(tmp_path))
+
+    assert OrchestratorFacade.is_non_trivial_workspace(tmp_path) is False
+
+    (tmp_path / "README.md").write_text("# demo\n", encoding="utf-8")
+    assert OrchestratorFacade.is_non_trivial_workspace(tmp_path) is True
+
+
+def test_facade_non_trivial_workspace_path_ignores_hidden_entries(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("X=1\n", encoding="utf-8")
+
+    assert OrchestratorFacade.is_non_trivial_workspace(tmp_path) is False
+
+    (tmp_path / "src").mkdir()
+    assert OrchestratorFacade.is_non_trivial_workspace(tmp_path) is True
+
+
 @pytest.mark.asyncio
 async def test_facade_submit_gatekeeper_input_routes_through_control_plane(tmp_path: Path, monkeypatch) -> None:
     orchestrator = _prepare_orchestrator(tmp_path)

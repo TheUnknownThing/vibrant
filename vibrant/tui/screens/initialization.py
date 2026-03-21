@@ -11,6 +11,8 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Label, Static
 
+from ...config import GatekeeperRole
+from ...orchestrator.facade import OrchestratorFacade
 from ..utility import initialize_git_repository, is_git_repository, is_under_git_repository
 from ..widgets.multiselect import Multiselect
 from ..widgets.path_autocomplete import PathAutocomplete
@@ -220,15 +222,115 @@ class GitInitializationScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class GatekeeperRoleSelectionScreen(ModalScreen[GatekeeperRole | None]):
+    """Prompt for selecting the Gatekeeper role during project initialization."""
+
+    CSS = """
+    GatekeeperRoleSelectionScreen {
+        align: center middle;
+        background: $surface 92%;
+    }
+
+    #gatekeeper-role-modal {
+        width: 72;
+        height: auto;
+        border: heavy $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #gatekeeper-role-title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #gatekeeper-role-body {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+
+    #gatekeeper-role-options {
+        width: 1fr;
+        margin-top: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("up", "cursor_up", "Up", show=True),
+        Binding("down", "cursor_down", "Down", show=True),
+        Binding("enter", "confirm", "Confirm", show=True),
+    ]
+
+    def __init__(self, *, non_trivial_workspace: bool) -> None:
+        super().__init__(id="gatekeeper-role-selection-screen")
+        self._non_trivial_workspace = non_trivial_workspace
+
+    def compose(self) -> ComposeResult:
+        accent_color = self.app.theme_variables.get("accent", "yellow")
+        with Vertical(id="gatekeeper-role-modal"):
+            yield Static("Select Gatekeeper Role", id="gatekeeper-role-title")
+            recommendation = (
+                "Detected visible files or folders in this workspace. "
+                "You may want `maintainer` to evolve an existing codebase."
+                if self._non_trivial_workspace
+                else "No visible files or folders detected yet. `builder` is often a good default for greenfield work."
+            )
+            yield Static(recommendation, id="gatekeeper-role-body")
+            yield Multiselect(
+                entries=[
+                    "Maintainer",
+                    "Builder",
+                    # "Cancel",
+                ],
+                show_frame=True,
+                active_style=f"bold {accent_color}",
+                inactive_style="dim bold",
+                active_prefix="> ",
+                inactive_prefix="  ",
+                id="gatekeeper-role-options",
+                padding=1,
+            )
+
+    def on_mount(self) -> None:
+        options = self.query_one("#gatekeeper-role-options", Multiselect)
+        options.focus()
+        if not self._non_trivial_workspace:
+            options.action_move_cursor(1)
+
+    async def on_multiselect_selected(self, event: Multiselect.Selected) -> None:
+        if event.index == 0:
+            self.dismiss(GatekeeperRole.MAINTAINER)
+            return
+        if event.index == 1:
+            self.dismiss(GatekeeperRole.BUILDER)
+            return
+        self.action_cancel()
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#gatekeeper-role-options", Multiselect).action_move_cursor(-1)
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#gatekeeper-role-options", Multiselect).action_move_cursor(1)
+
+    def action_confirm(self) -> None:
+        self.query_one("#gatekeeper-role-options", Multiselect).action_select()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class InitializationScreen(ModalScreen[None]):
     """Full-screen entry flow for uninitialized workspaces."""
 
     class InitializeRequested(Message):
         """Request project initialization for a target directory."""
 
-        def __init__(self, target_path: Path) -> None:
+        def __init__(self, target_path: Path, gatekeeper_role: GatekeeperRole) -> None:
             super().__init__()
             self.target_path = target_path
+            self.gatekeeper_role = gatekeeper_role
 
     class ExitRequested(Message):
         """Request the app to exit from the initialization screen."""
@@ -298,6 +400,7 @@ class InitializationScreen(ModalScreen[None]):
         super().__init__(id="initialization-screen")
         self._current_directory = Path(current_directory).expanduser().resolve()
         self._pending_initialization_path: Path | None = None
+        self._pending_non_trivial_workspace: bool = False
 
     def compose(self) -> ComposeResult:
         accent_color = self.app.theme_variables.get("accent", "yellow")
@@ -356,14 +459,16 @@ class InitializationScreen(ModalScreen[None]):
     def _on_directory_selected(self, selected_path: Path | None) -> None:
         if selected_path is None:
             return
+        self._pending_non_trivial_workspace = OrchestratorFacade.is_non_trivial_workspace(selected_path)
         self._request_initialization(selected_path)
 
     def _request_initialization(self, target_path: Path) -> None:
+        self._pending_non_trivial_workspace = OrchestratorFacade.is_non_trivial_workspace(target_path)
+        self._pending_initialization_path = target_path
         if is_git_repository(target_path):
-            self.post_message(self.InitializeRequested(target_path))
+            self._prompt_for_gatekeeper_role()
             return
 
-        self._pending_initialization_path = target_path
         self.app.push_screen(
             GitInitializationScreen(target_path),
             callback=self._on_git_initialization_selected,
@@ -371,8 +476,8 @@ class InitializationScreen(ModalScreen[None]):
 
     def _on_git_initialization_selected(self, confirmed: bool) -> None:
         target_path = self._pending_initialization_path
-        self._pending_initialization_path = None
         if not confirmed or target_path is None:
+            self._pending_initialization_path = None
             return
 
         try:
@@ -381,7 +486,20 @@ class InitializationScreen(ModalScreen[None]):
             self.notify(f"Failed to initialize Git repository: {exc}", severity="error")
             return
 
-        self.post_message(self.InitializeRequested(target_path))
+        self._prompt_for_gatekeeper_role()
+
+    def _prompt_for_gatekeeper_role(self) -> None:
+        self.app.push_screen(
+            GatekeeperRoleSelectionScreen(non_trivial_workspace=self._pending_non_trivial_workspace),
+            callback=self._on_gatekeeper_role_selected,
+        )
+
+    def _on_gatekeeper_role_selected(self, selected_role: GatekeeperRole | None) -> None:
+        target_path = self._pending_initialization_path
+        self._pending_initialization_path = None
+        if target_path is None or selected_role is None:
+            return
+        self.post_message(self.InitializeRequested(target_path, selected_role))
 
     def action_exit_app(self) -> None:
         self.post_message(self.ExitRequested())

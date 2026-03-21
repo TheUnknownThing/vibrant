@@ -193,6 +193,7 @@ class GatekeeperAgent(ReadOnlyAgentBase):
             project_name=self.project_root.name,
             skills_text=skills_text,
             mcp_tool_names=MCP_TOOL_NAMES,
+            gatekeeper_role=self.config.gatekeeper_role.value,
         )
 
     def render_prompt(self, request: GatekeeperRequest) -> str:
