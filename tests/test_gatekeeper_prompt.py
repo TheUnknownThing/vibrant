@@ -1,4 +1,5 @@
 from vibrant.agents.gatekeeper import Gatekeeper, GatekeeperRequest, GatekeeperTrigger, MCP_TOOL_NAMES
+from vibrant.config import GatekeeperRole
 from vibrant.project_init import initialize_project
 
 
@@ -54,3 +55,13 @@ def test_user_conversation_prompt_omits_agent_summary(tmp_path):
 
     assert f"## Trigger\nuser_conversation: {user_text}" in prompt
     assert "## Agent Summary (if applicable)" not in prompt
+
+
+def test_gatekeeper_prompt_switches_for_maintainer_role(tmp_path):
+    initialize_project(tmp_path, gatekeeper_role=GatekeeperRole.MAINTAINER)
+
+    gatekeeper = Gatekeeper(tmp_path, adapter_factory=_NoopAdapter)
+    system_prompt = gatekeeper.render_system_prompt()
+
+    assert "TODO: Maintainer role system prompt placeholder." in system_prompt
+    assert "You are a long-lived, project-scoped planning and review agent." not in system_prompt

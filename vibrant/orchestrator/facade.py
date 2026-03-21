@@ -143,6 +143,15 @@ class OrchestratorFacade:
         self.instances = _InstanceReadView(self)
         self.runs = _RunReadView(self)
 
+    @staticmethod
+    def is_non_trivial_workspace(workspace_root: Path) -> bool:
+        """Return ``True`` when the workspace root has at least one non-hidden entry."""
+
+        for child in workspace_root.iterdir():
+            if child.name and not child.name.startswith("."):
+                return True
+        return False
+
     def snapshot(self) -> OrchestratorSnapshot:
         pending = self.list_pending_question_records()
         return OrchestratorSnapshot(
