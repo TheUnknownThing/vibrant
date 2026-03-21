@@ -78,6 +78,7 @@ class WorkspaceService:
             kind=WorkspaceKind.TASK,
             target_ref=target_ref,
             base_commit=base_commit,
+            result_commit=base_commit if base_ref is not None else None,
             status=WorkspaceStatus.ACTIVE,
         )
         persisted = self.workspace_store.create(handle)
@@ -136,7 +137,7 @@ class WorkspaceService:
                 )
                 head_commit = self._git_stdout(workspace_root, "rev-parse", "HEAD")
 
-        result_commit = None if head_commit == current.base_commit else head_commit
+        result_commit = current.result_commit if head_commit == current.base_commit else head_commit
         status = WorkspaceStatus.NO_CHANGES if result_commit is None else WorkspaceStatus.RESULT_CAPTURED
         updated = self.workspace_store.update(
             current.workspace_id,
