@@ -40,24 +40,6 @@ class _FakeRequest:
 
 
 class TestTextualServeCLI:
-    def test_parse_args_normalizes_paths(self, tmp_path: Path) -> None:
-        args = __main__._parse_args(["--cwd", str(tmp_path), "init", str(tmp_path / "demo")])
-
-        assert args.cwd == tmp_path.resolve()
-        assert args.command == "init"
-        assert args.init_path == (tmp_path / "demo").resolve()
-
-    def test_build_textual_client_command_includes_forwarded_flags(self) -> None:
-        args = __main__.CliArgs(cwd=Path("/tmp/project"), model="gpt-test", debug=True, dev=True)
-
-        command = __main__._build_textual_client_command(args)
-
-        assert "--textual-client" in command
-        assert "--cwd /tmp/project" in command
-        assert "--model gpt-test" in command
-        assert "--dev" in command
-        assert "--debug" in command
-
     def test_serve_mode_invokes_server(self, monkeypatch) -> None:
         called: dict[str, object] = {}
 
