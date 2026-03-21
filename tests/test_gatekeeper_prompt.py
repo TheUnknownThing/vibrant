@@ -63,5 +63,7 @@ def test_gatekeeper_prompt_switches_for_maintainer_role(tmp_path):
     gatekeeper = Gatekeeper(tmp_path, adapter_factory=_NoopAdapter)
     system_prompt = gatekeeper.render_system_prompt()
 
-    assert "TODO: Maintainer role system prompt placeholder." in system_prompt
+    assert "You are a long-lived, project-scoped maintenance and review agent." in system_prompt
+    assert "Use the same durable workflow model as the Builder role" in system_prompt
+    assert "Keep roadmap changes focused on reliability, bug fixes, security, and maintainability improvements." in system_prompt
     assert "You are a long-lived, project-scoped planning and review agent." not in system_prompt
