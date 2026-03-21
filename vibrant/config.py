@@ -40,6 +40,13 @@ class RoadmapExecutionMode(str, enum.Enum):
     AUTOMATIC = "automatic"
 
 
+class GatekeeperRole(str, enum.Enum):
+    """Role persona for Gatekeeper system-prompt behavior."""
+
+    BUILDER = "builder"
+    MAINTAINER = "maintainer"
+
+
 class VibrantConfig(BaseModel):
     """Project-level runtime configuration loaded from ``vibrant.toml``."""
 
@@ -182,6 +189,11 @@ class VibrantConfig(BaseModel):
         ),
         serialization_alias="execution-mode",
     )
+    gatekeeper_role: GatekeeperRole = Field(
+        default=GatekeeperRole.BUILDER,
+        validation_alias=AliasChoices("gatekeeper_role", "gatekeeper-role"),
+        serialization_alias="gatekeeper-role",
+    )
     show_agent_logs: bool | None = Field(
         default=None,
         validation_alias=AliasChoices("show_agent_logs", "show-agent-logs"),
@@ -279,6 +291,7 @@ _ORCHESTRATOR_SECTION_KEYS = (
     "worktree-directory",
     "conversation-directory",
     "execution-mode",
+    "gatekeeper-role",
 )
 _BARE_TOML_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -439,6 +452,7 @@ __all__ = [
     "DEFAULT_CONVERSATION_DIRECTORY",
     "DEFAULT_CONFIG_RELATIVE_PATH",
     "DEFAULT_WORKTREE_DIRECTORY",
+    "GatekeeperRole",
     "RoadmapExecutionMode",
     "VibrantConfig",
     "VibrantConfigPatch",

@@ -24,6 +24,7 @@ from vibrant.providers.base import CanonicalEvent
 from ..agents import PLANNING_COMPLETE_MCP_TOOL
 from ..config import (
     DEFAULT_CONFIG_DIR,
+    GatekeeperRole,
     RoadmapExecutionMode,
     VibrantConfig,
     VibrantConfigPatch,
@@ -286,9 +287,14 @@ class VibrantApp(App):
 
         self._set_status("Settings updated")
 
-    async def initialize_project_at(self, target_path: Path) -> bool:
+    async def initialize_project_at(
+        self,
+        target_path: Path,
+        *,
+        gatekeeper_role: GatekeeperRole = GatekeeperRole.BUILDER,
+    ) -> bool:
         try:
-            vibrant_dir = initialize_project(target_path)
+            vibrant_dir = initialize_project(target_path, gatekeeper_role=gatekeeper_role)
         except Exception as exc:
             logger.exception("Failed to initialize Vibrant project")
             self.notify(f"Failed to initialize project: {exc}", severity="error")
@@ -664,7 +670,10 @@ class VibrantApp(App):
         self,
         event: InitializationScreen.InitializeRequested,
     ) -> None:
-        if await self.initialize_project_at(event.target_path) and isinstance(self.screen, InitializationScreen):
+        if await self.initialize_project_at(
+            event.target_path,
+            gatekeeper_role=event.gatekeeper_role,
+        ) and isinstance(self.screen, InitializationScreen):
             self.screen.dismiss(None)
 
     def on_initialization_screen_exit_requested(self, _: InitializationScreen.ExitRequested) -> None:

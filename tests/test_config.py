@@ -10,6 +10,7 @@ import pytest
 from vibrant.config import (
     DEFAULT_CONVERSATION_DIRECTORY,
     DEFAULT_WORKTREE_DIRECTORY,
+    GatekeeperRole,
     RoadmapExecutionMode,
     VibrantConfigPatch,
     VibrantConfigError,
@@ -50,6 +51,7 @@ class TestLoadConfig:
                 worktree-directory = "/var/tmp/vibrant-worktrees"
                 conversation-directory = ".vibrant/session-history"
                 execution-mode = "manual"
+                gatekeeper-role = "maintainer"
 
                 [ui]
                 show-agent-logs = true
@@ -78,6 +80,7 @@ class TestLoadConfig:
         assert config.conversation_directory == ".vibrant/session-history"
         assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "session-history"
         assert config.execution_mode is RoadmapExecutionMode.MANUAL
+        assert config.gatekeeper_role is GatekeeperRole.MAINTAINER
         assert config.show_agent_logs is True
         assert config.tui_agent_logs_visible(dev_mode=False) is True
         assert config.extra_config == {"persistExtendedHistory": True}
@@ -103,6 +106,7 @@ class TestLoadConfig:
         assert config.conversation_directory == str(DEFAULT_CONVERSATION_DIRECTORY)
         assert config.resolve_conversation_directory(project_root) == project_root / ".vibrant" / "conversations"
         assert config.execution_mode is RoadmapExecutionMode.AUTOMATIC
+        assert config.gatekeeper_role is GatekeeperRole.BUILDER
         assert config.show_agent_logs is None
         assert config.tui_agent_logs_visible(dev_mode=False) is False
         assert config.tui_agent_logs_visible(dev_mode=True) is True

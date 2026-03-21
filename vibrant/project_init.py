@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from .config import DEFAULT_CONFIG_DIR, VibrantConfig
+from .config import DEFAULT_CONFIG_DIR, GatekeeperRole, VibrantConfig
 from .consensus.writer import ConsensusWriter
 from .models.consensus import ConsensusDocument, ConsensusStatus
 from .orchestrator.types import GatekeeperSessionSnapshot, WorkflowStatus, utc_now
@@ -27,7 +27,11 @@ DIRECTORIES = [
 ]
 
 
-def initialize_project(target_path: Path = Path(".")) -> Path:
+def initialize_project(
+    target_path: Path = Path("."),
+    *,
+    gatekeeper_role: GatekeeperRole = GatekeeperRole.BUILDER,
+) -> Path:
     """Create the ``.vibrant`` project structure if it does not already exist."""
 
     project_root = _normalize_project_root(target_path)
@@ -43,7 +47,7 @@ def initialize_project(target_path: Path = Path(".")) -> Path:
     _write_if_missing(
         vibrant_dir / "roadmap.md", _render_roadmap_markdown(project_root.name)
     )
-    _write_if_missing(vibrant_dir / "vibrant.toml", _render_default_config())
+    _write_if_missing(vibrant_dir / "vibrant.toml", _render_default_config(gatekeeper_role=gatekeeper_role))
     _write_if_missing(vibrant_dir / "state.json", _render_initial_state())
     _ensure_gitignore(vibrant_dir / ".gitignore")
     ensure_git_repository_commit(project_root)
@@ -95,8 +99,8 @@ def _render_roadmap_markdown(project_name: str) -> str:
     )
 
 
-def _render_default_config() -> str:
-    config = VibrantConfig()
+def _render_default_config(*, gatekeeper_role: GatekeeperRole = GatekeeperRole.BUILDER) -> str:
+    config = VibrantConfig(gatekeeper_role=gatekeeper_role)
     lines = [
         "[provider]",
         f'kind = "{config.provider_kind.value}"',
@@ -114,6 +118,7 @@ def _render_default_config() -> str:
         f'worktree-directory = "{config.worktree_directory}"',
         f'conversation-directory = "{config.conversation_directory}"',
         f'execution-mode = "{config.execution_mode.value}"',
+        f'gatekeeper-role = "{config.gatekeeper_role.value}"',
         "",
         "[ui]",
         "# Leave unset to show agent logs only when `vibrant --dev` is enabled.",
