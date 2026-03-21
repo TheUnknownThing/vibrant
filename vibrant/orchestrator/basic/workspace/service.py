@@ -55,13 +55,15 @@ class WorkspaceService:
         attempt_id: str | None = None,
         branch_hint: str | None = None,
         prompt: str | None = None,
+        base_ref: str | None = None,
     ) -> WorkspaceHandle:
         self._ensure_git_repo()
         self._ensure_clean_target_repo(prompt=prompt)
 
         workspace_id = uuid4().hex[:12]
         target_ref = self._resolve_target_ref()
-        base_commit = self._git_stdout(self.project_root, "rev-parse", target_ref)
+        workspace_base_ref = base_ref or target_ref
+        base_commit = self._git_stdout(self.project_root, "rev-parse", workspace_base_ref)
         branch = self._resolve_task_branch(task_id=task_id, workspace_id=workspace_id, branch_hint=branch_hint)
         workspace_path = self.worktree_root / f"{task_id}-{workspace_id}"
 

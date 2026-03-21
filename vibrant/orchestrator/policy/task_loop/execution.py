@@ -88,10 +88,12 @@ class ExecutionCoordinator:
 
     async def start_attempt(self, prepared: PreparedTaskExecution) -> AttemptRecord:
         lease = prepared.lease
+        retry_source = self.attempt_store.latest_retry_pending_for_task(lease.task_id)
         workspace = self.workspace_service.prepare_task_workspace(
             lease.task_id,
             branch_hint=lease.branch_hint,
             prompt=prepared.prompt,
+            base_ref=retry_source.retry_base_ref if retry_source is not None else None,
         )
         attempt = self.attempt_store.create(
             task_id=lease.task_id,

@@ -136,6 +136,7 @@ class AttemptRecord:
     conversation_id: str | None
     created_at: str
     updated_at: str
+    retry_base_ref: str | None = None
 
 
 @dataclass(slots=True)

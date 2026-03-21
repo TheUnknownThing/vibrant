@@ -558,13 +558,83 @@ async def test_task_loop_retry_cycle_e2e(e2e_project: E2EProjectContext, e2e_orc
     assert first_ticket.status is ReviewTicketStatus.PENDING
     assert first_ticket_state is not None and first_ticket_state.status is ReviewTicketStatus.RETRY
     assert task is not None and task.retry_count == 1
+    assert second_ticket.base_commit != first_ticket.result_commit
     assert first_attempt.attempt_id != second_attempt.attempt_id
     assert first_ticket.ticket_id != second_ticket.ticket_id
     assert first_ticket.run_id != second_ticket.run_id
     assert len(review_history) == 2
 
+
+@pytest.mark.asyncio
+async def test_retry_review_ticket_can_continue_from_rejected_workspace(e2e_project: E2EProjectContext, e2e_orchestrator) -> None:
+    facade = _facade(e2e_orchestrator)
+    _, first_ticket, _ = await _run_single_task_to_review_pending(
+        e2e_orchestrator,
+        task_id="task-retry-modify-mode",
+        prompt=(
+            "Update demo.txt so it contains first-change.\n"
+            "[mock:write demo.txt]\n"
+            "[mock:content first-change]"
+        ),
+    )
+
+    facade.retry_review_ticket(
+        first_ticket.ticket_id,
+        failure_reason="Keep iterating from the current workspace result.",
+        prompt_patch=(
+            "Append second-change to demo.txt.\n"
+            "[mock:append demo.txt]\n"
+            "[mock:content second-change]"
+        ),
+        revert_workflow=False,
+    )
+
+    second_results = await facade.run_until_blocked()
+    second_ticket = facade.list_pending_review_tickets()[0]
+    second_attempt = facade.get_attempt_execution(second_ticket.attempt_id)
+    assert second_attempt is not None
+    second_workspace = e2e_orchestrator._workspace_service.get_workspace(
+        task_id=second_ticket.task_id,
+        workspace_id=second_attempt.workspace_id,
+    )
+
+    assert len(second_results) == 1
+    assert second_results[0].outcome == "review_pending"
+    assert first_ticket.result_commit is not None
+    assert second_ticket.base_commit == first_ticket.result_commit
+    assert Path(second_workspace.path, "demo.txt").read_text(encoding="utf-8") == "first-change\nsecond-change\n"
+
+
+@pytest.mark.asyncio
+async def test_task_loop_retry_cycle_accepts_follow_up_attempt_e2e(
+    e2e_project: E2EProjectContext,
+    e2e_orchestrator,
+) -> None:
+    facade = _facade(e2e_orchestrator)
+    _, first_ticket, _ = await _run_single_task_to_review_pending(
+        e2e_orchestrator,
+        task_id="task-retry-cycle-accept",
+        prompt=(
+            "Update demo.txt so it contains first-change.\n"
+            "[mock:write demo.txt]\n"
+            "[mock:content first-change]"
+        ),
+    )
+
+    facade.retry_review_ticket(
+        first_ticket.ticket_id,
+        failure_reason="Need a different deterministic result.",
+        prompt_patch=(
+            "Update demo.txt so it contains second-change.\n"
+            "[mock:write demo.txt]\n"
+            "[mock:content second-change]"
+        ),
+    )
+    await facade.run_until_blocked()
+    second_ticket = facade.list_pending_review_tickets()[0]
+
     resolution = facade.accept_review_ticket(second_ticket.ticket_id)
-    accepted_task = facade.get_task("task-retry-cycle")
+    accepted_task = facade.get_task("task-retry-cycle-accept")
     accepted_attempt = facade.get_attempt_execution(second_ticket.attempt_id)
     snapshot = e2e_project.snapshot_orchestrator(e2e_orchestrator)
 
