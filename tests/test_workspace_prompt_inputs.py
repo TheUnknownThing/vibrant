@@ -7,6 +7,7 @@ import pytest
 
 from vibrant.orchestrator.basic.stores import WorkspaceStore
 from vibrant.orchestrator.basic.workspace import WorkspaceService
+from vibrant.orchestrator.types import WorkspaceStatus
 
 
 def _git(project_root: Path, *args: str) -> str:
@@ -71,3 +72,52 @@ def test_prepare_task_workspace_rejects_dirty_tracked_prompt_reference(tmp_path:
         match="Project repository has uncommitted changes outside orchestrator-owned paths.",
     ):
         workspace_service.prepare_task_workspace("task-1", prompt=prompt)
+
+
+def test_capture_result_commit_preserves_carried_forward_base_commit(tmp_path: Path) -> None:
+    _initialize_git_repo(tmp_path)
+    workspace_service = WorkspaceService(
+        project_root=tmp_path,
+        worktree_root=tmp_path / ".vibrant" / "worktrees",
+        workspace_store=WorkspaceStore(tmp_path / ".vibrant" / "workspaces.json"),
+        artifacts_root=tmp_path / ".vibrant" / "review-diffs",
+    )
+    feature_branch = "retry-source"
+    _git(tmp_path, "checkout", "-b", feature_branch)
+    (tmp_path / "tracked.txt").write_text("carried-forward\n", encoding="utf-8")
+    _git(tmp_path, "add", "tracked.txt")
+    _git(tmp_path, "commit", "-m", "Create carried-forward result")
+    carried_forward_commit = _git(tmp_path, "rev-parse", "HEAD")
+    _git(tmp_path, "checkout", "main")
+
+    workspace = workspace_service.prepare_task_workspace("task-1", base_ref=carried_forward_commit)
+
+    captured = workspace_service.capture_result_commit(workspace)
+
+    assert captured.result_commit == carried_forward_commit
+    assert captured.status is WorkspaceStatus.RESULT_CAPTURED
+
+
+def test_merge_task_result_merges_carried_forward_base_commit_on_no_op_follow_up(tmp_path: Path) -> None:
+    _initialize_git_repo(tmp_path)
+    workspace_service = WorkspaceService(
+        project_root=tmp_path,
+        worktree_root=tmp_path / ".vibrant" / "worktrees",
+        workspace_store=WorkspaceStore(tmp_path / ".vibrant" / "workspaces.json"),
+        artifacts_root=tmp_path / ".vibrant" / "review-diffs",
+    )
+    feature_branch = "retry-source"
+    _git(tmp_path, "checkout", "-b", feature_branch)
+    (tmp_path / "tracked.txt").write_text("carried-forward\n", encoding="utf-8")
+    _git(tmp_path, "add", "tracked.txt")
+    _git(tmp_path, "commit", "-m", "Create carried-forward result")
+    carried_forward_commit = _git(tmp_path, "rev-parse", "HEAD")
+    _git(tmp_path, "checkout", "main")
+
+    workspace = workspace_service.prepare_task_workspace("task-1", base_ref=carried_forward_commit)
+
+    merge_outcome = workspace_service.merge_task_result(workspace)
+
+    assert merge_outcome.status == "merged"
+    assert merge_outcome.integration_commit is not None
+    assert (tmp_path / "tracked.txt").read_text(encoding="utf-8") == "carried-forward\n"

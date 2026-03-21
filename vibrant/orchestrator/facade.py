@@ -566,12 +566,14 @@ class OrchestratorFacade:
         failure_reason: str,
         prompt_patch: str | None = None,
         acceptance_patch: list[str] | None = None,
+        revert_workflow: bool = True,
     ):
         return self._control_plane.retry_review_ticket(
             ticket_id,
             failure_reason=failure_reason,
             prompt_patch=prompt_patch,
             acceptance_patch=acceptance_patch,
+            revert_workflow=revert_workflow,
         )
 
     def escalate_review_ticket(self, ticket_id: str, *, reason: str):

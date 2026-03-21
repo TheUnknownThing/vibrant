@@ -48,10 +48,11 @@ def retry_review_ticket(
     failure_reason: str,
     prompt_patch: str | None = None,
     acceptance_patch: list[str] | None = None,
+    revert_workflow: bool = True,
 ) -> ReviewResolutionRecord:
     patch = retry_definition_patch(prompt_patch=prompt_patch, acceptance_patch=acceptance_patch)
+    ticket = require_ticket(loop, ticket_id)
     if patch:
-        ticket = require_ticket(loop, ticket_id)
         loop.roadmap_store.update_task_definition(ticket.task_id, patch)
     return resolve_review_ticket(
         loop,
@@ -62,6 +63,7 @@ def retry_review_ticket(
             prompt_patch=prompt_patch,
             acceptance_patch=acceptance_patch,
         ),
+        retry_base_ref=None if revert_workflow else ticket.result_commit,
     )
 
 
@@ -77,6 +79,8 @@ def resolve_review_ticket(
     loop: TaskLoop,
     ticket_id: str,
     command: ReviewResolutionCommand,
+    *,
+    retry_base_ref: str | None = None,
 ) -> ReviewResolutionRecord:
     ticket = require_ticket(loop, ticket_id)
     merge_outcome: MergeOutcome | None = None
@@ -132,7 +136,11 @@ def resolve_review_ticket(
             next_stage = TaskLoopStage.REVIEW_PENDING
             next_active_attempt_id = ticket.attempt_id
     elif command.decision == "retry":
-        loop.attempt_store.update(ticket.attempt_id, status=AttemptStatus.RETRY_PENDING)
+        loop.attempt_store.update(
+            ticket.attempt_id,
+            status=AttemptStatus.RETRY_PENDING,
+            retry_base_ref=retry_base_ref,
+        )
         task_projection.requeue_task_for_retry(loop, ticket.task_id)
         next_active_lease = None
     else:

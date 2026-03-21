@@ -192,7 +192,7 @@ All user-message submission flows use the same stable pattern:
 | `list_review_tickets(task_id=None, status=None)` | Lists review tickets. |
 | `list_pending_review_tickets()` | Lists pending review tickets. |
 | `accept_review_ticket(ticket_id)` | Accepts a review ticket. |
-| `retry_review_ticket(ticket_id, failure_reason, prompt_patch=None, acceptance_patch=None)` | Retries a review ticket. |
+| `retry_review_ticket(ticket_id, failure_reason, prompt_patch=None, acceptance_patch=None, revert_workflow=True)` | Retries a review ticket. Set `revert_workflow=False` to continue from the rejected attempt's workspace result instead of restarting from the pre-attempt project state. |
 | `escalate_review_ticket(ticket_id, reason)` | Escalates a review ticket. |
 
 ## Stable Read Helper Views

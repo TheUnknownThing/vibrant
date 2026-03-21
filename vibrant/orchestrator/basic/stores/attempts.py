@@ -46,6 +46,7 @@ class AttemptStore:
         validation_run_ids: list[str] | None = None,
         merge_run_id: str | None = None,
         conversation_id: str | None = None,
+        retry_base_ref: str | None = None,
     ) -> AttemptRecord:
         records = self._load_records()
         now = utc_now()
@@ -59,6 +60,7 @@ class AttemptStore:
             merge_run_id=merge_run_id,
             task_definition_version=task_definition_version,
             conversation_id=conversation_id,
+            retry_base_ref=retry_base_ref,
             created_at=now,
             updated_at=now,
         )
@@ -77,6 +79,16 @@ class AttemptStore:
 
     def list_by_task(self, task_id: str) -> list[AttemptRecord]:
         return [record for record in self._load_records().values() if record.task_id == task_id]
+
+    def latest_retry_pending_for_task(self, task_id: str) -> AttemptRecord | None:
+        retry_pending_attempts = [
+            record
+            for record in self._load_records().values()
+            if record.task_id == task_id and record.status is AttemptStatus.RETRY_PENDING
+        ]
+        if not retry_pending_attempts:
+            return None
+        return max(retry_pending_attempts, key=lambda record: (record.updated_at, record.created_at, record.attempt_id))
 
     def task_id_for_run(self, run_id: str) -> str | None:
         for record in self._load_records().values():
@@ -114,6 +126,7 @@ class AttemptStore:
         merge_run_id: str | None = None,
         task_definition_version: int | None = None,
         conversation_id: str | None = None,
+        retry_base_ref: str | None = None,
     ) -> AttemptRecord:
         records = self._load_records()
         try:
@@ -135,6 +148,8 @@ class AttemptStore:
             record.task_definition_version = task_definition_version
         if conversation_id is not None:
             record.conversation_id = conversation_id
+        if retry_base_ref is not None:
+            record.retry_base_ref = retry_base_ref
         record.updated_at = utc_now()
 
         records[attempt_id] = record
@@ -170,6 +185,7 @@ def _normalize_attempt_payload(payload: dict[str, object]) -> dict[str, object] 
             "merge_run_id": _optional_string(payload.get("merge_run_id")),
             "task_definition_version": int(payload["task_definition_version"]),
             "conversation_id": _optional_string(payload.get("conversation_id")),
+            "retry_base_ref": _optional_string(payload.get("retry_base_ref")),
             "created_at": str(payload.get("created_at") or utc_now()),
             "updated_at": str(payload.get("updated_at") or payload.get("created_at") or utc_now()),
         }
