@@ -7,7 +7,7 @@ import pytest
 
 from vibrant.config import VibrantConfigPatch, load_config
 from vibrant.models.agent import AgentRecord, AgentStatus, AgentType
-from vibrant.orchestrator import OrchestratorFacade as ExportedFacade, create_orchestrator
+from vibrant.orchestrator import create_orchestrator
 from vibrant.orchestrator.facade import OrchestratorFacade
 from vibrant.project_init import initialize_project
 
@@ -15,10 +15,6 @@ from vibrant.project_init import initialize_project
 def _prepare_orchestrator(tmp_path: Path):
     initialize_project(tmp_path)
     return create_orchestrator(tmp_path)
-
-
-def test_facade_import_path_is_stable() -> None:
-    assert ExportedFacade is OrchestratorFacade
 
 
 def test_facade_detects_non_trivial_workspace(tmp_path: Path) -> None:
